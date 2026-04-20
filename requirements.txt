@@ -1,0 +1,8 @@
+streamlit
+google-genai
+firebase-admin
+python-dotenv
+opencv-python-headless
+numpy==1.26.4
+fpdf2
+pillow
