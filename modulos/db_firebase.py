@@ -1,15 +1,46 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import streamlit as st
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import uuid
 
+# Cargar variables locales
 load_dotenv()
-if not firebase_admin._apps:
-    cred = credentials.Certificate(os.getenv("FIREBASE_CREDENTIALS_PATH"))
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
+
+def inicializar_firebase():
+    if not firebase_admin._apps:
+        # Lógica HÍBRIDA: Detecta si está en Streamlit Cloud o Local
+        if "firebase_key" in st.secrets:
+            # Configuración para NUBE (Streamlit Secrets)
+            f_key = st.secrets["firebase_key"]
+            creds_dict = {
+                "type": f_key["type"],
+                "project_id": f_key["project_id"],
+                "private_key_id": f_key["private_key_id"],
+                "private_key": f_key["private_key"].replace("\\n", "\n"),
+                "client_email": f_key["client_email"],
+                "client_id": f_key["client_id"],
+                "auth_uri": f_key["auth_uri"],
+                "token_uri": f_key["token_uri"],
+                "auth_provider_x509_cert_url": f_key["auth_provider_x509_cert_url"],
+                "client_x509_cert_url": f_key["client_x509_cert_url"]
+            }
+            cred = credentials.Certificate(creds_dict)
+        else:
+            # Configuración para LOCAL (.env)
+            ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH")
+            if ruta_json and os.path.exists(ruta_json):
+                cred = credentials.Certificate(ruta_json)
+            else:
+                raise Exception("No se encontró configuración de Firebase (JSON o Secrets).")
+        
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
+
+# Instancia de base de datos
+db = inicializar_firebase()
 
 def guardar_descuento_proveedor(nombre_proveedor, descuento):
     db.collection("configuracion").document("descuentos").set({
@@ -42,7 +73,7 @@ def registrar_ingreso_mercaderia(proveedor, lista_articulos):
     ahora = datetime.now(timezone.utc)
     for art in lista_articulos:
         codigo = str(art.get('codigo', '')).strip()
-        if not codigo or codigo.lower() in ["null", "none"]:
+        if not codigo or codigo.lower() in ["null", "none", ""]:
             desc = art.get('descripcion', '').strip()
             codigo = desc.replace(' ', '_').upper() if desc else f"ID_{str(uuid.uuid4())[:6]}"
         
@@ -70,27 +101,20 @@ def registrar_ingreso_mercaderia(proveedor, lista_articulos):
                 "ultima_actualizacion": ahora
             })
 
-# ==========================================
-# NUEVAS FUNCIONES PARA MOSTRADOR Y CARRITO
-# ==========================================
-
 def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
-    # Limpiamos el código por si escanean el QR completo ("COD: 12345\nDESC...")
+    # Limpiamos el código por si viene con prefijos de etiqueta
     codigo = codigo_bruto.split("\n")[0].replace("COD:", "").strip()
-    
     ref_prod = db.collection("productos").document(codigo)
     doc_prod = ref_prod.get()
     
     if not doc_prod.exists:
-        return False, f"El código {codigo} no existe en la base de datos."
+        return False, f"El código {codigo} no existe."
     
     datos = doc_prod.to_dict() or {}
     stock_actual = int(datos.get("stock", 0))
-    
     if stock_actual < cantidad:
-        return False, f"Stock insuficiente. Solo quedan {stock_actual} unidades de {codigo}."
+        return False, f"Stock insuficiente ({stock_actual})."
 
-    # Buscamos el precio máximo de venta
     precios = datos.get("precios_por_proveedor", {}).values()
     precio_venta = max(precios) if precios else 0.0
 
@@ -101,11 +125,8 @@ def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
         item_data = doc_item.to_dict() or {}
         nueva_cant = item_data.get("cantidad", 0) + cantidad
         if nueva_cant > stock_actual:
-            return False, f"No podés agregar más. Stock límite: {stock_actual}."
-        ref_item.update({
-            "cantidad": nueva_cant,
-            "subtotal": nueva_cant * precio_venta
-        })
+            return False, f"Límite alcanzado ({stock_actual})."
+        ref_item.update({"cantidad": nueva_cant, "subtotal": nueva_cant * precio_venta})
     else:
         ref_item.set({
             "descripcion": datos.get("descripcion", "Repuesto"),
@@ -134,13 +155,13 @@ def confirmar_venta(vendedor):
         codigo = item['codigo']
         cantidad = item['cantidad']
         
-        # 1. Descontamos el stock (Silenciamos el falso positivo de Pylance)
+        # Descontamos el stock
         ref_prod = db.collection("productos").document(codigo)
         batch.update(ref_prod, {"stock": firestore.Increment(-cantidad)}) # type: ignore
         
-        # 2. Borramos del carrito
+        # Borramos del carrito
         ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
         batch.delete(ref_item)
         
     batch.commit()
-    return True, "Venta cerrada y stock descontado exitosamente."
+    return True, "Venta realizada con éxito."

@@ -2,6 +2,7 @@ import os
 import json
 import cv2
 import numpy as np
+import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -9,13 +10,13 @@ from google.genai import types
 # Cargamos las variables del archivo .env
 load_dotenv()
 
-# Inicializamos el cliente de la NUEVA librería.
-cliente = genai.Client()
+# Inicialización Híbrida de API Key
+key_ai = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else os.getenv("GEMINI_API_KEY")
+cliente = genai.Client(api_key=key_ai)
 
 def procesar_factura_con_ia(imagen_pil):
     """
-    Recibe una imagen, la envía a Gemini forzando 
-    la salida nativa en formato JSON usando el nuevo SDK.
+    Recibe una imagen y extrae datos usando las reglas de negocio originales del cliente.
     """
     prompt = """
     Extrae los datos de esta factura.
@@ -30,24 +31,17 @@ def procesar_factura_con_ia(imagen_pil):
 
     Estructura la salida exactamente con estas claves:
     {
-      "proveedor": "NOMBRE DEL PROVEEDOR (EN MAYUSCULAS)",
+      "proveedor": "NOMBRE DEL PROVEEDOR (EN MAYÚSCULAS)",
       "articulos": [
-        {
-          "codigo": "código",
-          "descripcion": "descripción",
-          "cantidad": numero entero,
-          "precio_unitario": numero decimal
-        }
+        {"codigo": "string", "descripcion": "string", "cantidad": int, "precio_unitario": float}
       ]
     }
     """
     
-    respuesta = None 
-    
+    respuesta = None
     try:
-        # Usamos el modelo más moderno y activo de Google
         respuesta = cliente.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=[prompt, imagen_pil],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -61,8 +55,7 @@ def procesar_factura_con_ia(imagen_pil):
             return None
             
         # Convertimos el texto JSON a diccionario
-        diccionario_datos = json.loads(texto_ia)
-        return diccionario_datos
+        return json.loads(texto_ia)
             
     except Exception as e:
         print("\n--- ERROR INTERNO ---")
@@ -74,8 +67,7 @@ def procesar_factura_con_ia(imagen_pil):
 
 def decodificar_qr_desde_imagen(imagen_pil):
     """
-    Convierte la imagen de la cámara enviada por Streamlit 
-    y extrae el texto del QR usando OpenCV.
+    Extrae el texto del QR usando OpenCV.
     """
     try:
         # Convertir imagen PIL a formato compatible con OpenCV (numpy array)
@@ -89,7 +81,5 @@ def decodificar_qr_desde_imagen(imagen_pil):
         
         return datos
     except Exception as e:
-        print(f"\n--- ERROR LECTURA QR ---")
-        print(f"Detalle del error OpenCV: {e}")
-        print("------------------------\n")
+        print(f"Error al decodificar QR: {e}")
         return None
