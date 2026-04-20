@@ -48,6 +48,7 @@ def generar_pdf_presupuesto(vendedor, items, total):
     pdf.ln(5)
     pdf.set_font("Helvetica", "B", 12)
     pdf.cell(190, 10, f"TOTAL: ${total:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+    # FIX: Se requiere retornar bytes para evitar error de bytearray en la nube
     return bytes(pdf.output())
 
 st.set_page_config(page_title="Hafid IA", layout="wide")
@@ -215,21 +216,20 @@ with tab_mostrador:
         
         # COLUMNAS PARA COBRAR, PDF Y VACIAR
         col_cobrar, col_pdf, col_vaciar = st.columns(3)
-        with col_cobrar:
-            if st.button("✅ Confirmar Venta (Descontar Stock)", type="primary", use_container_width=True):
-                exito, msj = confirmar_venta(vendedor)
-                if exito:
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
-        with col_pdf:
-            pdf_bytes = generar_pdf_presupuesto(vendedor, carrito, total)
-            st.download_button(label="📄 Imprimir PDF", data=pdf_bytes, file_name=f"Presupuesto_{vendedor}.pdf", mime="application/pdf", use_container_width=True)
-        with col_vaciar:
-            if st.button("🗑️ Vaciar Presupuesto", use_container_width=True):
-                vaciar_carrito(vendedor)
+        if col_cobrar.button("✅ Confirmar Venta (Descontar Stock)", type="primary", use_container_width=True):
+            exito, msj = confirmar_venta(vendedor)
+            if exito:
+                st.success(msj)
                 st.rerun()
+            else:
+                st.error(msj)
+        
+        pdf_bytes = generar_pdf_presupuesto(vendedor, carrito, total)
+        col_pdf.download_button(label="📄 Imprimir PDF", data=pdf_bytes, file_name=f"Presupuesto_{vendedor}.pdf", mime="application/pdf", use_container_width=True)
+        
+        if col_vaciar.button("🗑️ Vaciar Presupuesto", use_container_width=True):
+            vaciar_carrito(vendedor)
+            st.rerun()
     else:
         st.write("El carrito está vacío.")
 

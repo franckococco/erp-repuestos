@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.31.0
 google-genai
 firebase-admin
 python-dotenv
