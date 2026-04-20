@@ -12,6 +12,8 @@ load_dotenv()
 
 # Inicialización Híbrida de API Key
 key_ai = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else os.getenv("GEMINI_API_KEY")
+
+# Inicializamos el cliente de la NUEVA librería.
 cliente = genai.Client(api_key=key_ai)
 
 def procesar_factura_con_ia(imagen_pil):
@@ -31,14 +33,20 @@ def procesar_factura_con_ia(imagen_pil):
 
     Estructura la salida exactamente con estas claves:
     {
-      "proveedor": "NOMBRE DEL PROVEEDOR (EN MAYÚSCULAS)",
+      "proveedor": "NOMBRE DEL PROVEEDOR (EN MAYUSCULAS)",
       "articulos": [
-        {"codigo": "string", "descripcion": "string", "cantidad": int, "precio_unitario": float}
+        {
+          "codigo": "código",
+          "descripcion": "descripción",
+          "cantidad": numero entero,
+          "precio_unitario": numero decimal
+        }
       ]
     }
     """
     
-    respuesta = None
+    respuesta = None 
+    
     try:
         respuesta = cliente.models.generate_content(
             model='gemini-2.0-flash',
@@ -48,13 +56,11 @@ def procesar_factura_con_ia(imagen_pil):
             )
         )
         
-        # Guardamos el texto y verificamos que no esté vacío
         texto_ia = respuesta.text
         if not texto_ia:
             print("Error: Gemini devolvió una respuesta vacía.")
             return None
             
-        # Convertimos el texto JSON a diccionario
         return json.loads(texto_ia)
             
     except Exception as e:
@@ -67,19 +73,14 @@ def procesar_factura_con_ia(imagen_pil):
 
 def decodificar_qr_desde_imagen(imagen_pil):
     """
-    Extrae el texto del QR usando OpenCV.
+    Convierte la imagen de la cámara enviada por Streamlit 
+    y extrae el texto del QR usando OpenCV.
     """
     try:
-        # Convertir imagen PIL a formato compatible con OpenCV (numpy array)
         opencv_img = cv2.cvtColor(np.array(imagen_pil), cv2.COLOR_RGB2BGR)
-        
-        # Inicializar el detector de QR
         detector = cv2.QRCodeDetector()
-        
-        # Detectar y decodificar
         datos, _, _ = detector.detectAndDecode(opencv_img)
-        
         return datos
     except Exception as e:
-        print(f"Error al decodificar QR: {e}")
+        print(f"Error QR: {e}")
         return None

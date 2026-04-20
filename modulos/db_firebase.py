@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone
 import uuid
 
-# Cargar variables locales
+# Cargamos las variables del archivo .env para trabajo local
 load_dotenv()
 
 def inicializar_firebase():
@@ -34,7 +34,8 @@ def inicializar_firebase():
             if ruta_json and os.path.exists(ruta_json):
                 cred = credentials.Certificate(ruta_json)
             else:
-                raise Exception("No se encontró configuración de Firebase (JSON o Secrets).")
+                # Si llega acá y no hay secretos, lanzamos un error claro
+                raise ValueError("No se encontró configuración de Firebase. Revisá tus Secrets o el archivo .env")
         
         firebase_admin.initialize_app(cred)
     return firestore.client()
@@ -73,7 +74,7 @@ def registrar_ingreso_mercaderia(proveedor, lista_articulos):
     ahora = datetime.now(timezone.utc)
     for art in lista_articulos:
         codigo = str(art.get('codigo', '')).strip()
-        if not codigo or codigo.lower() in ["null", "none", ""]:
+        if not codigo or codigo.lower() in ["null", "none"]:
             desc = art.get('descripcion', '').strip()
             codigo = desc.replace(' ', '_').upper() if desc else f"ID_{str(uuid.uuid4())[:6]}"
         
@@ -102,18 +103,18 @@ def registrar_ingreso_mercaderia(proveedor, lista_articulos):
             })
 
 def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
-    # Limpiamos el código por si viene con prefijos de etiqueta
+    # Extraemos el ID limpio saltando la palabra "COD:" y los saltos de línea
     codigo = codigo_bruto.split("\n")[0].replace("COD:", "").strip()
     ref_prod = db.collection("productos").document(codigo)
     doc_prod = ref_prod.get()
     
     if not doc_prod.exists:
-        return False, f"El código {codigo} no existe."
+        return False, f"El código {codigo} no existe en la base de datos."
     
     datos = doc_prod.to_dict() or {}
     stock_actual = int(datos.get("stock", 0))
     if stock_actual < cantidad:
-        return False, f"Stock insuficiente ({stock_actual})."
+        return False, f"Stock insuficiente. Disponible: {stock_actual}"
 
     precios = datos.get("precios_por_proveedor", {}).values()
     precio_venta = max(precios) if precios else 0.0
@@ -125,8 +126,11 @@ def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
         item_data = doc_item.to_dict() or {}
         nueva_cant = item_data.get("cantidad", 0) + cantidad
         if nueva_cant > stock_actual:
-            return False, f"Límite alcanzado ({stock_actual})."
-        ref_item.update({"cantidad": nueva_cant, "subtotal": nueva_cant * precio_venta})
+            return False, f"No puedes agregar más. Stock límite: {stock_actual}"
+        ref_item.update({
+            "cantidad": nueva_cant,
+            "subtotal": nueva_cant * precio_venta
+        })
     else:
         ref_item.set({
             "descripcion": datos.get("descripcion", "Repuesto"),
@@ -155,13 +159,13 @@ def confirmar_venta(vendedor):
         codigo = item['codigo']
         cantidad = item['cantidad']
         
-        # Descontamos el stock
+        # 1. Descontamos el stock
         ref_prod = db.collection("productos").document(codigo)
         batch.update(ref_prod, {"stock": firestore.Increment(-cantidad)}) # type: ignore
         
-        # Borramos del carrito
+        # 2. Borramos del carrito
         ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
         batch.delete(ref_item)
         
     batch.commit()
-    return True, "Venta realizada con éxito."
+    return True, "Venta realizada con éxito y stock actualizado."
