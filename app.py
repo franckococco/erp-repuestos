@@ -70,10 +70,14 @@ with tab_carga:
     if img:
         if st.button("Procesar Factura"):
             with st.spinner("Leyendo factura con IA..."):
-                datos = procesar_factura_con_ia(Image.open(img))
-                if datos:
-                    st.session_state.temp_datos = datos
-                    st.rerun()
+                try:
+                    datos = procesar_factura_con_ia(Image.open(img))
+                    if datos:
+                        st.session_state.temp_datos = datos
+                        st.rerun()
+                except Exception as e:
+                    # Ahora si hay un error, se mostrará claramente en la interfaz
+                    st.error(f"❌ Error al procesar la factura: {e}")
 
     if st.session_state.temp_datos:
         d = st.session_state.temp_datos

@@ -1,8 +1,8 @@
-streamlit>=1.31.0
-google-genai
-firebase-admin
+streamlit
 python-dotenv
+google-genai
+anthropic
 opencv-python-headless
-numpy==1.26.4
-fpdf2
+numpy
 pillow
+firebase-admin
