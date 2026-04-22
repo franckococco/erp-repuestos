@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from anthropic.types import TextBlock
 
-# Cargamos variables del .env
+# Forzamos la recarga de la clave
 load_dotenv(override=True)
 
 key_ai = os.getenv("ANTHROPIC_API_KEY")
@@ -27,25 +27,27 @@ def pil_a_base64(imagen_pil):
 
 def procesar_factura_con_ia(imagen_pil):
     if not cliente:
-        raise Exception("Falta la API Key de Anthropic en el .env")
+        raise Exception("Falta la API Key de Anthropic.")
 
     prompt = """
-    Eres un experto en visión artificial. Extrae la tabla de esta factura. 
-    REGLAS DE ORO:
-    1. CANTIDAD: Es el primer número a la izquierda. ¡No asumas que es 1! Lee el número real.
-    2. CÓDIGO: El código alfanumérico a la derecha de la cantidad.
-    3. PRECIO: El monto con decimales (usa punto para decimales).
+    Eres un experto en facturación argentina. Extrae:
+    1. CUIT del emisor (11 dígitos).
+    2. Punto de Venta (los dígitos antes del guion).
+    3. Número de factura (los dígitos después del guion).
+    4. Nombre del Proveedor.
+    5. Tabla de artículos (Cantidad, Código, Precio Unitario Neto).
 
-    Devuelve ÚNICAMENTE un JSON con esta estructura:
+    Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
     {
       "proveedor": "NOMBRE",
+      "cuit_proveedor": "str",
+      "punto_venta": "str",
+      "numero_comprobante": "str",
       "articulos": [{"codigo": "str", "descripcion": "str", "cantidad": int, "precio_unitario": float}]
     }
     """
     try:
         imagen_b64 = pil_a_base64(imagen_pil)
-
-        # Usamos el modelo Sonnet 4.6 que figura en tu lista (Equilibrio perfecto velocidad/precisión)
         respuesta = cliente.messages.create(
             model="claude-sonnet-4-6", 
             max_tokens=2048,
@@ -74,7 +76,6 @@ def procesar_factura_con_ia(imagen_pil):
                 texto_limpio = bloque.text.strip()
                 break
         
-        # Limpieza de formato markdown si la IA lo agrega
         if "```json" in texto_limpio:
             texto_limpio = texto_limpio.split("```json")[1].split("```")[0]
         elif "```" in texto_limpio:
@@ -83,13 +84,15 @@ def procesar_factura_con_ia(imagen_pil):
         return json.loads(texto_limpio.strip())
         
     except Exception as e:
-        raise Exception(f"Error en Claude 4: {str(e)}")
+        raise Exception(f"Error en lectura de IA: {str(e)}")
 
 def decodificar_qr_desde_imagen(imagen_pil):
+    """Función restaurada para la lectura de códigos QR si es necesario"""
     try:
         opencv_img = cv2.cvtColor(np.array(imagen_pil), cv2.COLOR_RGB2BGR)
         detector = cv2.QRCodeDetector()
         datos, _, _ = detector.detectAndDecode(opencv_img)
         return datos
-    except:
+    except Exception as e:
+        print(f"Error QR: {e}")
         return None
