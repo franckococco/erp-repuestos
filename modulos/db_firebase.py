@@ -1,19 +1,21 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
-import streamlit as st
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import uuid
+import streamlit as st
 
-# Cargamos las variables del archivo .env para trabajo local
 load_dotenv()
 
 def inicializar_firebase():
     if not firebase_admin._apps:
-        # Lógica HÍBRIDA: Detecta si está en Streamlit Cloud o Local
-        if "firebase_key" in st.secrets:
-            # Configuración para NUBE (Streamlit Secrets)
+        # Intentamos primero con la ruta local que ya tenés configurada
+        ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH")
+        if ruta_json and os.path.exists(ruta_json):
+            cred = credentials.Certificate(ruta_json)
+        # Si estamos en la nube, usamos los secretos
+        elif "firebase_key" in st.secrets:
             f_key = st.secrets["firebase_key"]
             creds_dict = {
                 "type": f_key["type"],
@@ -29,18 +31,11 @@ def inicializar_firebase():
             }
             cred = credentials.Certificate(creds_dict)
         else:
-            # Configuración para LOCAL (.env)
-            ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH")
-            if ruta_json and os.path.exists(ruta_json):
-                cred = credentials.Certificate(ruta_json)
-            else:
-                # Si llega acá y no hay secretos, lanzamos un error claro
-                raise ValueError("No se encontró configuración de Firebase. Revisá tus Secrets o el archivo .env")
+            raise FileNotFoundError("No se encontró el JSON de Firebase en la ruta local ni en los secretos.")
         
         firebase_admin.initialize_app(cred)
     return firestore.client()
 
-# Instancia de base de datos
 db = inicializar_firebase()
 
 def guardar_descuento_proveedor(nombre_proveedor, descuento):
@@ -103,18 +98,17 @@ def registrar_ingreso_mercaderia(proveedor, lista_articulos):
             })
 
 def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
-    # Extraemos el ID limpio saltando la palabra "COD:" y los saltos de línea
     codigo = codigo_bruto.split("\n")[0].replace("COD:", "").strip()
     ref_prod = db.collection("productos").document(codigo)
     doc_prod = ref_prod.get()
     
     if not doc_prod.exists:
-        return False, f"El código {codigo} no existe en la base de datos."
+        return False, f"El código {codigo} no existe."
     
     datos = doc_prod.to_dict() or {}
     stock_actual = int(datos.get("stock", 0))
     if stock_actual < cantidad:
-        return False, f"Stock insuficiente. Disponible: {stock_actual}"
+        return False, f"Stock insuficiente ({stock_actual})."
 
     precios = datos.get("precios_por_proveedor", {}).values()
     precio_venta = max(precios) if precios else 0.0
@@ -126,11 +120,8 @@ def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
         item_data = doc_item.to_dict() or {}
         nueva_cant = item_data.get("cantidad", 0) + cantidad
         if nueva_cant > stock_actual:
-            return False, f"No puedes agregar más. Stock límite: {stock_actual}"
-        ref_item.update({
-            "cantidad": nueva_cant,
-            "subtotal": nueva_cant * precio_venta
-        })
+            return False, f"No podés agregar más. Límite: {stock_actual}."
+        ref_item.update({"cantidad": nueva_cant, "subtotal": nueva_cant * precio_venta})
     else:
         ref_item.set({
             "descripcion": datos.get("descripcion", "Repuesto"),
@@ -138,7 +129,7 @@ def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
             "cantidad": cantidad,
             "subtotal": precio_venta * cantidad
         })
-    return True, "Artículo agregado al presupuesto."
+    return True, "Agregado."
 
 def obtener_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
@@ -151,21 +142,14 @@ def vaciar_carrito(vendedor):
 
 def confirmar_venta(vendedor):
     items = obtener_carrito(vendedor)
-    if not items: 
-        return False, "No hay artículos para cobrar."
-    
+    if not items: return False, "Vacío."
     batch = db.batch()
     for item in items:
         codigo = item['codigo']
         cantidad = item['cantidad']
-        
-        # 1. Descontamos el stock
         ref_prod = db.collection("productos").document(codigo)
         batch.update(ref_prod, {"stock": firestore.Increment(-cantidad)}) # type: ignore
-        
-        # 2. Borramos del carrito
         ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
         batch.delete(ref_item)
-        
     batch.commit()
-    return True, "Venta realizada con éxito y stock actualizado."
+    return True, "Venta realizada."

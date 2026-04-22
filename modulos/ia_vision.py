@@ -3,84 +3,93 @@ import json
 import cv2
 import numpy as np
 import streamlit as st
+import base64
+from io import BytesIO
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from anthropic import Anthropic
+from anthropic.types import TextBlock
 
-# Cargamos las variables del archivo .env
-load_dotenv()
+# Cargamos variables del .env
+load_dotenv(override=True)
 
-# Inicialización Híbrida de API Key
-key_ai = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else os.getenv("GEMINI_API_KEY")
+key_ai = os.getenv("ANTHROPIC_API_KEY")
+if not key_ai and "ANTHROPIC_API_KEY" in st.secrets:
+    key_ai = st.secrets["ANTHROPIC_API_KEY"]
 
-# Inicializamos el cliente de la NUEVA librería.
-cliente = genai.Client(api_key=key_ai)
+cliente = Anthropic(api_key=key_ai) if key_ai else None
+
+def pil_a_base64(imagen_pil):
+    buffered = BytesIO()
+    if imagen_pil.mode != 'RGB':
+        imagen_pil = imagen_pil.convert('RGB')
+    imagen_pil.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def procesar_factura_con_ia(imagen_pil):
-    """
-    Recibe una imagen y extrae datos usando las reglas de negocio originales del cliente.
-    """
-    prompt = """
-    Extrae los datos de esta factura.
-    
-    REGLAS ESTRICTAS PARA LA EXTRACCIÓN:
-    1. PRECIO UNITARIO: Toma el valor exacto de la columna 'Neto' o 'Precio'. PROHIBIDO hacer cálculos matemáticos. NO dividas el Neto por la Cantidad. El Neto ya es el precio por unidad.
-    2. FORMATO NUMÉRICO: Para el 'precio_unitario', devuelve un número decimal usando ÚNICAMENTE punto para los decimales y NINGÚN separador de miles. 
-       - Correcto: 69650.08
-       - Incorrecto: 69.650,08
-       - Incorrecto: 69650,08
-    3. DESCRIPCIÓN: Usa la columna 'Fabrica', 'Descripción' o 'Marca'.
+    if not cliente:
+        raise Exception("Falta la API Key de Anthropic en el .env")
 
-    Estructura la salida exactamente con estas claves:
+    prompt = """
+    Eres un experto en visión artificial. Extrae la tabla de esta factura. 
+    REGLAS DE ORO:
+    1. CANTIDAD: Es el primer número a la izquierda. ¡No asumas que es 1! Lee el número real.
+    2. CÓDIGO: El código alfanumérico a la derecha de la cantidad.
+    3. PRECIO: El monto con decimales (usa punto para decimales).
+
+    Devuelve ÚNICAMENTE un JSON con esta estructura:
     {
-      "proveedor": "NOMBRE DEL PROVEEDOR (EN MAYUSCULAS)",
-      "articulos": [
-        {
-          "codigo": "código",
-          "descripcion": "descripción",
-          "cantidad": numero entero,
-          "precio_unitario": numero decimal
-        }
-      ]
+      "proveedor": "NOMBRE",
+      "articulos": [{"codigo": "str", "descripcion": "str", "cantidad": int, "precio_unitario": float}]
     }
     """
-    
-    respuesta = None 
-    
     try:
-        respuesta = cliente.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[prompt, imagen_pil],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            )
+        imagen_b64 = pil_a_base64(imagen_pil)
+
+        # Usamos el modelo Sonnet 4.6 que figura en tu lista (Equilibrio perfecto velocidad/precisión)
+        respuesta = cliente.messages.create(
+            model="claude-sonnet-4-6", 
+            max_tokens=2048,
+            temperature=0.0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": imagen_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt}
+                    ],
+                }
+            ],
         )
         
-        texto_ia = respuesta.text
-        if not texto_ia:
-            print("Error: Gemini devolvió una respuesta vacía.")
-            return None
-            
-        return json.loads(texto_ia)
-            
+        texto_limpio = ""
+        for bloque in respuesta.content:
+            if isinstance(bloque, TextBlock):
+                texto_limpio = bloque.text.strip()
+                break
+        
+        # Limpieza de formato markdown si la IA lo agrega
+        if "```json" in texto_limpio:
+            texto_limpio = texto_limpio.split("```json")[1].split("```")[0]
+        elif "```" in texto_limpio:
+            texto_limpio = texto_limpio.split("```")[1].split("```")[0]
+        
+        return json.loads(texto_limpio.strip())
+        
     except Exception as e:
-        print("\n--- ERROR INTERNO ---")
-        print(f"Detalle del error: {e}")
-        if respuesta is not None:
-            print(f"Lo que intentó responder Gemini: {getattr(respuesta, 'text', 'Sin texto')}")
-        print("---------------------\n")
-        return None
+        raise Exception(f"Error en Claude 4: {str(e)}")
 
 def decodificar_qr_desde_imagen(imagen_pil):
-    """
-    Convierte la imagen de la cámara enviada por Streamlit 
-    y extrae el texto del QR usando OpenCV.
-    """
     try:
         opencv_img = cv2.cvtColor(np.array(imagen_pil), cv2.COLOR_RGB2BGR)
         detector = cv2.QRCodeDetector()
         datos, _, _ = detector.detectAndDecode(opencv_img)
         return datos
-    except Exception as e:
-        print(f"Error QR: {e}")
+    except:
         return None
