@@ -11,7 +11,6 @@ load_dotenv(override=True)
 def inicializar_firebase():
     """Maneja la conexión tanto en local como en la nube de Streamlit"""
     if not firebase_admin._apps:
-        # 1. Intentamos con los Secrets de Streamlit (NUBE)
         if "firebase_key" in st.secrets:
             f_key = st.secrets["firebase_key"]
             creds_dict = {
@@ -27,7 +26,6 @@ def inicializar_firebase():
                 "client_x509_cert_url": f_key["client_x509_cert_url"]
             }
             cred = credentials.Certificate(creds_dict)
-        # 2. Si no hay secretos, usamos el JSON local (PC)
         else:
             ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase_claves.json")
             cred = credentials.Certificate(ruta_json)
@@ -36,6 +34,34 @@ def inicializar_firebase():
     return firestore.client()
 
 db = inicializar_firebase()
+
+# --- FUNCIONES DE CONFIGURACIÓN Y CONSULTA ---
+
+def guardar_descuento_proveedor(nombre_proveedor, descuento):
+    db.collection("configuracion").document("descuentos").set({
+        nombre_proveedor.upper().strip(): float(descuento)
+    }, merge=True)
+
+def obtener_todos_los_descuentos():
+    doc = db.collection("configuracion").document("descuentos").get()
+    return doc.to_dict() or {} if doc.exists else {}
+
+def obtener_reglas_proveedor(nombre_proveedor):
+    descuentos = obtener_todos_los_descuentos()
+    for prov_clave, desc in descuentos.items():
+        if prov_clave in nombre_proveedor.upper(): return desc
+    return 0.0
+
+def obtener_inventario_completo():
+    docs = db.collection("productos").get()
+    inventario = []
+    for d in docs:
+        item = d.to_dict() or {}
+        item['codigo'] = d.id
+        precios = item.get("precios_por_proveedor", {}).values()
+        item['precio_max'] = max(precios) if precios else 0
+        inventario.append(item)
+    return inventario
 
 # --- LÓGICA DE CONTROL Y SEGURIDAD ---
 
@@ -105,26 +131,6 @@ def registrar_ingreso_mercaderia(datos_ia):
     batch.commit()
     return True, "Ingreso registrado correctamente."
 
-# --- FUNCIONES DE CONFIGURACIÓN Y CONSULTA ---
-
-def obtener_reglas_proveedor(nombre_proveedor):
-    doc = db.collection("configuracion").document("descuentos").get()
-    descuentos = doc.to_dict() or {} if doc.exists else {}
-    for prov_clave, desc in descuentos.items():
-        if prov_clave in nombre_proveedor.upper(): return desc
-    return 0.0
-
-def obtener_inventario_completo():
-    docs = db.collection("productos").get()
-    inventario = []
-    for d in docs:
-        item = d.to_dict() or {}
-        item['codigo'] = d.id
-        precios = item.get("precios_por_proveedor", {}).values()
-        item['precio_max'] = max(precios) if precios else 0
-        inventario.append(item)
-    return inventario
-
 # --- LÓGICA DE VENTAS Y CARRITO ---
 
 def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
@@ -161,6 +167,10 @@ def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
         })
     return True, "Agregado."
 
+def obtener_carrito(vendedor):
+    docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
+    return [{"codigo": d.id, **(d.to_dict() or {})} for d in docs]
+
 def vaciar_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
     for d in docs:
@@ -174,7 +184,6 @@ def confirmar_venta(vendedor):
     for d in items:
         item = d.to_dict()
         ref_prod = db.collection("productos").document(d.id)
-        # Agregamos el type ignore para que VS Code no marque error
         batch.update(ref_prod, {"stock": firestore.Increment(-item['cantidad'])}) # type: ignore
         batch.delete(d.reference)
     
