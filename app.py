@@ -24,7 +24,7 @@ from modulos.db_firebase import (
     borrar_toda_la_base_de_datos,
     calcular_cascada_precios,
     registrar_merma,
-    registrar_aumento_stock # <-- NUEVA FUNCIÓN AGREGADA AQUÍ
+    registrar_aumento_stock
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -272,52 +272,61 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Tocá el micrófono en el teclado de tu celular para dictar, o escribí directo abajo.")
+    st.info("Escribí o dictá tu orden. (La pantalla se limpia en cada consulta nueva para que no te confundas).")
     
-    if "historial_chat" not in st.session_state:
-        st.session_state.historial_chat = []
+    # Iniciamos variables para guardar SOLO la última interacción
+    if "ultima_orden" not in st.session_state:
+        st.session_state.ultima_orden = None
+    if "ultima_respuesta" not in st.session_state:
+        st.session_state.ultima_respuesta = None
+    if "ultimo_estado" not in st.session_state:
+        st.session_state.ultimo_estado = None # Para saber si poner en verde (success) o rojo (error)
 
-    for msg in st.session_state.historial_chat:
-        with st.chat_message(msg["rol"]):
-            st.markdown(msg["texto"])
-
-    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Sumale 2 correas al stock'")
+    # Caja de texto para que el usuario escriba
+    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Sumale 2 bujías al stock'")
     
+    # SI EL USUARIO ENVÍA ALGO NUEVO
     if orden_usuario:
-        st.session_state.historial_chat.append({"rol": "user", "texto": orden_usuario})
+        st.session_state.ultima_orden = orden_usuario
+        
+        with st.spinner("Procesando en el depósito..."):
+            inventario = obtener_inventario_completo()
+            respuesta_json = procesar_orden_voz(orden_usuario, inventario)
+            
+            accion = respuesta_json.get("accion")
+            texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
+            
+            # Procesar la acción devuelta
+            if accion == "baja":
+                id_producto = respuesta_json.get("id_producto")
+                cant = int(respuesta_json.get("cantidad", 1))
+                exito, msj_db = registrar_merma(id_producto, cant)
+                st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                st.session_state.ultimo_estado = "success" if exito else "error"
+            
+            elif accion == "alta":
+                id_producto = respuesta_json.get("id_producto")
+                cant = int(respuesta_json.get("cantidad", 1))
+                exito, msj_db = registrar_aumento_stock(id_producto, cant)
+                st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                st.session_state.ultimo_estado = "success" if exito else "error"
+
+            else: # Es solo una consulta
+                st.session_state.ultima_respuesta = texto_ia
+                st.session_state.ultimo_estado = "normal"
+
+    # MOSTRAR SOLO LA ÚLTIMA INTERACCIÓN GUARDADA
+    if st.session_state.ultima_orden:
         with st.chat_message("user"):
-            st.markdown(orden_usuario)
+            st.markdown(st.session_state.ultima_orden)
             
         with st.chat_message("assistant"):
-            with st.spinner("Procesando en el depósito..."):
-                inventario = obtener_inventario_completo()
-                respuesta_json = procesar_orden_voz(orden_usuario, inventario)
-                
-                accion = respuesta_json.get("accion")
-                texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
-                
-                # Accion 2: Baja
-                if accion == "baja":
-                    id_producto = respuesta_json.get("id_producto")
-                    cant = int(respuesta_json.get("cantidad", 1))
-                    exito, msj_db = registrar_merma(id_producto, cant)
-                    respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
-                    (st.success if exito else st.error)(respuesta_final)
-                
-                # Accion 3: Alta
-                elif accion == "alta":
-                    id_producto = respuesta_json.get("id_producto")
-                    cant = int(respuesta_json.get("cantidad", 1))
-                    exito, msj_db = registrar_aumento_stock(id_producto, cant)
-                    respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
-                    (st.success if exito else st.error)(respuesta_final)
-
-                # Accion 1: Consulta / Todo lo demás
-                else:
-                    respuesta_final = texto_ia
-                    st.markdown(respuesta_final)
-                
-                st.session_state.historial_chat.append({"rol": "assistant", "texto": respuesta_final})
+            if st.session_state.ultimo_estado == "success":
+                st.success(st.session_state.ultima_respuesta)
+            elif st.session_state.ultimo_estado == "error":
+                st.error(st.session_state.ultima_respuesta)
+            else:
+                st.markdown(st.session_state.ultima_respuesta)
 
 
 # --- PESTAÑA 5: CONFIGURACIÓN ---
