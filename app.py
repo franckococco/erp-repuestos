@@ -7,7 +7,7 @@ from fpdf import FPDF
 from datetime import datetime
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
-from modulos.ia_asistente import procesar_orden_voz # <-- NUEVA IMPORTACIÓN
+from modulos.ia_asistente import procesar_orden_voz
 from modulos.db_firebase import (
     registrar_ingreso_inteligente, 
     obtener_inventario_completo, 
@@ -23,7 +23,8 @@ from modulos.db_firebase import (
     confirmar_venta,
     borrar_toda_la_base_de_datos,
     calcular_cascada_precios,
-    registrar_merma # <-- NUEVA FUNCIÓN
+    registrar_merma,
+    registrar_aumento_stock # <-- NUEVA FUNCIÓN AGREGADA AQUÍ
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -270,53 +271,52 @@ with tab_mostrador:
 
 # --- PESTAÑA 4: ASISTENTE DE VOZ ---
 with tab_asistente:
-    st.header("🤖 Asistente de Depósito (Gemini AI)")
+    st.header("🤖 Asistente de Depósito")
     st.info("Tocá el micrófono en el teclado de tu celular para dictar, o escribí directo abajo.")
     
-    # Inicializamos el historial del chat
     if "historial_chat" not in st.session_state:
         st.session_state.historial_chat = []
 
-    # Mostramos los mensajes viejos
     for msg in st.session_state.historial_chat:
         with st.chat_message(msg["rol"]):
             st.markdown(msg["texto"])
 
-    # La caja donde el usuario escribe/dicta
-    orden_usuario = st.chat_input("Ej: 'Buscame si hay correas Gates' o 'Descontame un filtro BOSCH 1234'")
+    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Sumale 2 correas al stock'")
     
     if orden_usuario:
-        # 1. Mostramos lo que dijo el usuario
         st.session_state.historial_chat.append({"rol": "user", "texto": orden_usuario})
         with st.chat_message("user"):
             st.markdown(orden_usuario)
             
-        # 2. La IA procesa y responde
         with st.chat_message("assistant"):
-            with st.spinner("Revisando el depósito..."):
+            with st.spinner("Procesando en el depósito..."):
                 inventario = obtener_inventario_completo()
                 respuesta_json = procesar_orden_voz(orden_usuario, inventario)
                 
                 accion = respuesta_json.get("accion")
                 texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
                 
+                # Accion 2: Baja
                 if accion == "baja":
-                    id_a_descontar = respuesta_json.get("id_producto")
-                    cant_a_descontar = int(respuesta_json.get("cantidad", 1))
-                    
-                    exito, msj_db = registrar_merma(id_a_descontar, cant_a_descontar)
-                    if exito:
-                        respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})"
-                        st.success(respuesta_final)
-                    else:
-                        respuesta_final = f"❌ No pude hacer el ajuste: {msj_db}"
-                        st.error(respuesta_final)
+                    id_producto = respuesta_json.get("id_producto")
+                    cant = int(respuesta_json.get("cantidad", 1))
+                    exito, msj_db = registrar_merma(id_producto, cant)
+                    respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    (st.success if exito else st.error)(respuesta_final)
+                
+                # Accion 3: Alta
+                elif accion == "alta":
+                    id_producto = respuesta_json.get("id_producto")
+                    cant = int(respuesta_json.get("cantidad", 1))
+                    exito, msj_db = registrar_aumento_stock(id_producto, cant)
+                    respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    (st.success if exito else st.error)(respuesta_final)
+
+                # Accion 1: Consulta / Todo lo demás
                 else:
-                    # Es solo una consulta de radar
                     respuesta_final = texto_ia
                     st.markdown(respuesta_final)
                 
-                # Guardamos la respuesta en el historial
                 st.session_state.historial_chat.append({"rol": "assistant", "texto": respuesta_final})
 
 
