@@ -6,6 +6,21 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+def obtener_modelo_valido():
+    """Busca en Google la lista oficial y elige automáticamente un modelo compatible."""
+    modelo_elegido = "gemini-pro" # Fallback de seguridad
+    try:
+        # Pylance suele marcar error aquí, le ponemos el ignore
+        for m in genai.list_models(): # type: ignore
+            if 'generateContent' in m.supported_generation_methods:
+                if '1.5-flash' in m.name:
+                    return m.name
+                elif 'gemini-pro' in m.name:
+                    modelo_elegido = m.name
+    except Exception:
+        pass
+    return modelo_elegido
+
 def procesar_orden_voz(texto_usuario, inventario_actual):
     # --- BÚSQUEDA DINÁMICA DE LA CLAVE ---
     api_key = os.getenv("GEMINI_API_KEY")
@@ -16,17 +31,24 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
             api_key = None
 
     if not api_key:
-        return {"accion": "error", "respuesta": "Falta configurar la GEMINI_API_KEY en los secretos. (Asegurate de hacer 'Reboot app' en Streamlit)."}
+        return {"accion": "error", "respuesta": "Falta configurar la GEMINI_API_KEY en los secretos."}
 
     # Configurar Gemini con la clave encontrada
     genai.configure(api_key=api_key) # type: ignore
-    
-    # CAMBIO APLICADO: Usamos 'gemini-pro' que es compatible con tu versión actual
-    model = genai.GenerativeModel('gemini-pro') # type: ignore
 
-    # Convertimos el inventario a un texto simple para que Gemini lo lea
+    # --- AUTO-DETECCIÓN DEL MODELO ---
+    try:
+        nombre_modelo = obtener_modelo_valido()
+        model = genai.GenerativeModel(nombre_modelo) # type: ignore
+    except Exception as e:
+        return {"accion": "error", "respuesta": f"Error al auto-detectar modelos: {str(e)}"}
+
+    # Convertimos el inventario a un texto simple
     inv_str = ""
-    for item in inventario_actual:
+    # Aseguramos que inventario_actual sea una lista para que Pylance no llore
+    lista_inventario = inventario_actual or []
+    
+    for item in lista_inventario:
         if not isinstance(item, dict): continue
         inv_str += f"- ID: {item.get('id')}, Desc: {item.get('descripcion')}, Marca: {item.get('marca')}, Stock: {item.get('stock')}, Precio Venta: ${item.get('precio_venta')}\n"
 
@@ -58,7 +80,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         response = model.generate_content(prompt, generation_config={"temperature": 0.0}) # type: ignore
         texto = response.text.strip()
         
-        # Limpieza por si la IA agrega formato markdown
+        # Limpieza de formato markdown
         if texto.startswith("```json"):
             texto = texto.replace("```json", "").replace("```", "").strip()
         elif texto.startswith("```"):
@@ -66,4 +88,4 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
             
         return json.loads(texto)
     except Exception as e:
-        return {"accion": "error", "respuesta": f"Tuve un problema al procesar la orden: {str(e)}"}
+        return {"accion": "error", "respuesta": f"Falló al intentar usar el modelo {nombre_modelo}. Detalle: {str(e)}"}
