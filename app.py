@@ -88,7 +88,6 @@ with tab_carga:
                     st.error(f"❌ Error al procesar la factura: {e}")
 
     if st.session_state.temp_datos:
-        # Validación estricta para Pylance
         d = st.session_state.temp_datos
         if not isinstance(d, dict):
             d = {}
@@ -184,11 +183,23 @@ with tab_carga:
 with tab_inventario:
     st.header("Stock en Sistema")
     inv = obtener_inventario_completo()
+    
     if inv:
         df = pd.DataFrame(inv)
         cols_deseadas = ['id', 'marca', 'descripcion', 'stock', 'ultimo_costo_base', 'precio_interno', 'precio_venta']
         cols_existentes = [c for c in cols_deseadas if c in df.columns]
-        st.dataframe(df[cols_existentes], use_container_width=True, hide_index=True)
+        
+        # BUSCADOR DE INVENTARIO
+        busqueda_inv = st.text_input("🔍 Buscar repuesto (Código, Marca o Descripción):", placeholder="Ej: Correa, Bosch, 1234...")
+        
+        if busqueda_inv:
+            termino = busqueda_inv.lower()
+            # Filtra el DataFrame buscando coincidencias en cualquier columna
+            df_filtrado = df[df.apply(lambda row: row.astype(str).str.lower().str.contains(termino).any(), axis=1)]
+        else:
+            df_filtrado = df
+            
+        st.dataframe(df_filtrado[cols_existentes], use_container_width=True, hide_index=True)
         
         st.divider()
         opciones = {f"{item['id']} - {item.get('descripcion', '')}": item for item in inv}
@@ -286,7 +297,6 @@ with tab_config:
         if provs:
             datos_tabla = []
             for cuit, datos_prov in provs.items():
-                # Validación estricta para Pylance
                 if not isinstance(datos_prov, dict):
                     datos_prov = {}
                 condiciones = datos_prov.get('condiciones', {})
