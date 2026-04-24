@@ -141,6 +141,39 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     batch.commit()
     return True, "Mercadería cargada con éxito y precios actualizados."
 
+# --- ASISTENTE DE DEPÓSITO (MERMAS Y AJUSTES) ---
+def registrar_merma(id_producto, cantidad):
+    """Descuenta stock indicado por el asistente de voz"""
+    ref_prod = db.collection("productos").document(id_producto)
+    doc = ref_prod.get()
+    
+    if not doc.exists:
+        return False, "El producto no existe en la base de datos."
+        
+    datos = doc.to_dict() or {}
+    stock_actual = int(datos.get('stock', 0))
+    
+    if stock_actual < cantidad:
+        return False, f"Stock insuficiente. Solo hay {stock_actual} unidades."
+        
+    batch = db.batch()
+    batch.update(ref_prod, {
+        "stock": firestore.Increment(-cantidad), # type: ignore
+        "ultima_actualizacion": datetime.now(timezone.utc)
+    })
+    
+    # Registro de auditoría para la baja
+    ref_baja = db.collection("auditoria_mermas").document()
+    batch.set(ref_baja, {
+        "id_producto": id_producto,
+        "cantidad_baja": cantidad,
+        "fecha": datetime.now(timezone.utc),
+        "motivo": "Ajuste reportado vía Asistente de Voz"
+    })
+    
+    batch.commit()
+    return True, f"Se descontaron {cantidad} unidades correctamente."
+
 # --- INVENTARIO ---
 def obtener_inventario_completo():
     docs = db.collection("productos").get()
@@ -198,7 +231,7 @@ def confirmar_venta(vendedor):
 # --- LIMPIEZA ---
 def borrar_toda_la_base_de_datos():
     try:
-        for col in ["productos", "facturas_procesadas", "presupuestos_activos"]:
+        for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas"]:
             docs = db.collection(col).get()
             for d in docs:
                 if col == "presupuestos_activos":
