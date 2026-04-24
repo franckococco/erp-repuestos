@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 def procesar_orden_voz(texto_usuario, inventario_actual):
-    # --- BÚSQUEDA DE LA CLAVE GROQ ---
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         try:
@@ -18,10 +17,8 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     if not api_key:
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
 
-    # Inicializar cliente Groq
     client = Groq(api_key=api_key)
 
-    # Convertimos el inventario a un texto simple para la IA
     inv_str = ""
     for item in (inventario_actual or []):
         if not isinstance(item, dict): continue
@@ -31,7 +28,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         inv_str = "El inventario está vacío."
 
     prompt = f"""
-    Eres el Asistente de Depósito de 'Hafid Repuestos'. Tu objetivo es ayudar al operario con stock, precios y EQUIVALENCIAS.
+    Eres el Asistente de Depósito de 'Hafid Repuestos'. Tu objetivo es ayudar al operario.
     
     INVENTARIO ACTUAL:
     {inv_str}
@@ -39,15 +36,16 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     ORDEN DEL OPERARIO:
     "{texto_usuario}"
 
-    REGLAS DE FORMATO Y EQUIVALENCIA (MUY IMPORTANTE):
-    - Si el operario busca una marca y no hay, busca el mismo repuesto (misma descripción o código) en OTRAS marcas disponibles.
-    - Al dar listas o resultados, DEBES usar saltos de línea (\\n\\n) y viñetas ( - ) para que se lea ordenado en la pantalla de un celular. Nunca escribas todo en un solo párrafo.
-    - Responde siempre de forma breve y técnica.
+    REGLAS ESTRICTAS DE BÚSQUEDA Y FORMATO:
+    1. FILTRADO EXACTO: Si el operario busca un producto (ej: "correas", "bomba"), revisa el inventario y MUESTRA ÚNICAMENTE los productos que contengan esa palabra en su descripción o ID. ¡IGNORA y oculta todo el resto del inventario!
+    2. SIN INVENTOS: Si no hay ningún producto que coincida con lo que pide, responde simplemente: "No encontré [producto] en el stock actual."
+    3. EQUIVALENCIAS: Si pide una marca específica y no hay, pero SÍ hay de otra marca, muéstrale esa otra marca avisando que es un equivalente.
+    4. FORMATO VISUAL: Usa viñetas ( - ) y saltos de línea para listar los productos encontrados. Sé directo, no saludes ni des explicaciones largas.
 
-    Devuelve ÚNICAMENTE un JSON (sin markdown) eligiendo UNA de estas tres opciones:
+    Devuelve ÚNICAMENTE un JSON eligiendo UNA de estas tres opciones:
 
-    OPCIÓN 1 (Consulta/Equivalencia):
-    {{"accion": "consulta", "respuesta": "Tu respuesta sobre stock, precio y equivalentes, usando viñetas."}}
+    OPCIÓN 1 (Consulta/Búsqueda):
+    {{"accion": "consulta", "respuesta": "Lista de los productos EXACTOS que pidió el usuario."}}
 
     OPCIÓN 2 (Baja de Stock / Descontar):
     {{"accion": "baja", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
@@ -57,7 +55,6 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     """
 
     try:
-        # Usamos Llama 3.1 que está activo, es rápido y gratuito
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.1-8b-instant",
@@ -67,7 +64,6 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
         
-        # Limpieza de JSON
         if texto.startswith("```json"):
             texto = texto.replace("```json", "").replace("```", "").strip()
         elif texto.startswith("```"):
