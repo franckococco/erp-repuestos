@@ -7,6 +7,7 @@ from fpdf import FPDF
 from datetime import datetime
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
+from modulos.ia_asistente import procesar_orden_voz # <-- NUEVA IMPORTACIÓN
 from modulos.db_firebase import (
     registrar_ingreso_inteligente, 
     obtener_inventario_completo, 
@@ -21,7 +22,8 @@ from modulos.db_firebase import (
     vaciar_carrito,
     confirmar_venta,
     borrar_toda_la_base_de_datos,
-    calcular_cascada_precios
+    calcular_cascada_precios,
+    registrar_merma # <-- NUEVA FUNCIÓN
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -63,9 +65,9 @@ st.set_page_config(page_title="Hafid IA", layout="wide")
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
 
-tab_carga, tab_inventario, tab_mostrador, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "⚙️ Configuración"])
+tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"])
 
-# --- PESTAÑA 1: CARGA DE STOCK (CON VALIDACIÓN MANUAL) ---
+# --- PESTAÑA 1: CARGA DE STOCK ---
 with tab_carga:
     st.header("Escanear Factura")
     
@@ -266,7 +268,59 @@ with tab_mostrador:
             vaciar_carrito(vendedor)
             st.rerun()
 
-# --- PESTAÑA 4: CONFIGURACIÓN ---
+# --- PESTAÑA 4: ASISTENTE DE VOZ ---
+with tab_asistente:
+    st.header("🤖 Asistente de Depósito (Gemini AI)")
+    st.info("Tocá el micrófono en el teclado de tu celular para dictar, o escribí directo abajo.")
+    
+    # Inicializamos el historial del chat
+    if "historial_chat" not in st.session_state:
+        st.session_state.historial_chat = []
+
+    # Mostramos los mensajes viejos
+    for msg in st.session_state.historial_chat:
+        with st.chat_message(msg["rol"]):
+            st.markdown(msg["texto"])
+
+    # La caja donde el usuario escribe/dicta
+    orden_usuario = st.chat_input("Ej: 'Buscame si hay correas Gates' o 'Descontame un filtro BOSCH 1234'")
+    
+    if orden_usuario:
+        # 1. Mostramos lo que dijo el usuario
+        st.session_state.historial_chat.append({"rol": "user", "texto": orden_usuario})
+        with st.chat_message("user"):
+            st.markdown(orden_usuario)
+            
+        # 2. La IA procesa y responde
+        with st.chat_message("assistant"):
+            with st.spinner("Revisando el depósito..."):
+                inventario = obtener_inventario_completo()
+                respuesta_json = procesar_orden_voz(orden_usuario, inventario)
+                
+                accion = respuesta_json.get("accion")
+                texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
+                
+                if accion == "baja":
+                    id_a_descontar = respuesta_json.get("id_producto")
+                    cant_a_descontar = int(respuesta_json.get("cantidad", 1))
+                    
+                    exito, msj_db = registrar_merma(id_a_descontar, cant_a_descontar)
+                    if exito:
+                        respuesta_final = f"✅ Listo. {texto_ia} ({msj_db})"
+                        st.success(respuesta_final)
+                    else:
+                        respuesta_final = f"❌ No pude hacer el ajuste: {msj_db}"
+                        st.error(respuesta_final)
+                else:
+                    # Es solo una consulta de radar
+                    respuesta_final = texto_ia
+                    st.markdown(respuesta_final)
+                
+                # Guardamos la respuesta en el historial
+                st.session_state.historial_chat.append({"rol": "assistant", "texto": respuesta_final})
+
+
+# --- PESTAÑA 5: CONFIGURACIÓN ---
 with tab_config:
     st.header("Configuración del Sistema")
     
@@ -323,7 +377,6 @@ with tab_config:
                 })
             st.dataframe(datos_tabla, use_container_width=True)
             
-            # SECCIÓN ELIMINAR PROVEEDOR
             with st.expander("🗑️ Eliminar un Proveedor"):
                 prov_a_borrar = st.selectbox(
                     "Seleccionar proveedor a eliminar:", 
@@ -353,7 +406,6 @@ with tab_config:
             st.write("**Marcas registradas:**")
             st.write(", ".join(marcas_actuales))
             
-            # SECCIÓN ELIMINAR MARCA
             with st.expander("🗑️ Eliminar una Marca"):
                 marca_a_borrar = st.selectbox("Seleccionar marca a eliminar:", options=marcas_actuales)
                 if st.button("Eliminar Marca", type="primary"):

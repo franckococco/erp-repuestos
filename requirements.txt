@@ -8,3 +8,4 @@ pillow
 firebase-admin
 fpdf2
 qrcode
+google-generativeai
