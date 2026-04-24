@@ -58,13 +58,12 @@ def generar_pdf_presupuesto(vendedor, items, total):
 
 st.set_page_config(page_title="Hafid IA", layout="wide")
 
-# Inicializar sesión para datos temporales
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
 
 tab_carga, tab_inventario, tab_mostrador, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "⚙️ Configuración"])
 
-# --- PESTAÑA 1: CARGA DE STOCK ---
+# --- PESTAÑA 1: CARGA DE STOCK (CON VALIDACIÓN MANUAL) ---
 with tab_carga:
     st.header("Escanear Factura")
     
@@ -89,14 +88,37 @@ with tab_carga:
 
     if st.session_state.temp_datos:
         d = st.session_state.temp_datos
-        if not isinstance(d, dict):
-            d = {}
+        if not isinstance(d, dict): d = {}
             
         cuit_detectado = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
         st.write(f"### Proveedor detectado: {d.get('proveedor', 'DESCONOCIDO')} (CUIT: {cuit_detectado})")
         
+        # --- INICIO DE LA GRILLA DE VALIDACIÓN ---
+        st.info("💡 **Revisá los datos.** Podés hacer doble clic en cualquier celda para corregir códigos, precios, o seleccionar la marca correcta antes de guardar.")
+        
         articulos = d.get('articulos', [])
-        st.table(articulos)
+        df_articulos = pd.DataFrame(articulos)
+        
+        if 'marca' not in df_articulos.columns:
+            df_articulos['marca'] = "GENERICO"
+            
+        marcas_db = obtener_marcas()
+        opciones_marcas = ["GENERICO"] + marcas_db if marcas_db else ["GENERICO"]
+
+        df_editado = st.data_editor(
+            df_articulos,
+            column_config={
+                "codigo": st.column_config.TextColumn("Código (Ref)", required=True),
+                "descripcion": st.column_config.TextColumn("Descripción", required=True),
+                "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
+                "precio_unitario": st.column_config.NumberColumn("Precio Base ($)", min_value=0.0, format="$ %.2f", required=True),
+                "marca": st.column_config.SelectboxColumn("Marca", help="Seleccioná la marca", options=opciones_marcas, required=True)
+            },
+            use_container_width=True,
+            num_rows="dynamic",
+            key="grilla_validacion"
+        )
+        # --- FIN DE LA GRILLA ---
         
         st.divider()
         st.subheader("⚙️ Opciones de Etiquetas QR para esta factura")
@@ -105,11 +127,8 @@ with tab_carga:
         with col1:
             tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
         with col2:
-            if articulos:
-                art_ejemplo = articulos[0]
-                if not isinstance(art_ejemplo, dict):
-                    art_ejemplo = {}
-                    
+            if not df_editado.empty:
+                art_ejemplo = df_editado.iloc[0].to_dict()
                 cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
                 marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
                 desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
@@ -120,17 +139,15 @@ with tab_carga:
                 if cuit_detectado in provs:
                     datos_prov = provs[cuit_detectado]
                     if isinstance(datos_prov, dict):
-                        condiciones_prev = datos_prov.get('condiciones', {})
-                        if isinstance(condiciones_prev, dict):
-                            recargo_prev = float(condiciones_prev.get(condicion_pago, 0.0))
+                        recargo_prev = float(datos_prov.get('condiciones', {}).get(condicion_pago, 0.0))
                 
                 calculos = calcular_cascada_precios(precio_bruto, recargo_prev)
-                precio_etiqueta = calculos['precio_venta']
-                
-                qr_preview = generar_qr_producto(cod_ej, desc_ej, precio_etiqueta, tamano_caja=tamano_qr)
+                qr_preview = generar_qr_producto(cod_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
                 st.image(qr_preview, caption="Vista Previa Público", width=150)
         
         if st.button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True):
+            d['articulos'] = df_editado.to_dict('records')
+            
             exito, msg = registrar_ingreso_inteligente(d, condicion_pago)
             
             if exito:
@@ -140,16 +157,13 @@ with tab_carga:
                 if prov_id in provs:
                     datos_prov = provs[prov_id]
                     if isinstance(datos_prov, dict):
-                        condiciones_prov = datos_prov.get('condiciones', {})
-                        if isinstance(condiciones_prov, dict):
-                            recargo = float(condiciones_prov.get(condicion_pago, 0.0))
+                        recargo = float(datos_prov.get('condiciones', {}).get(condicion_pago, 0.0))
 
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                    for art in articulos:
-                        if not isinstance(art, dict):
-                            continue
-                            
+                    for art in d['articulos']:
+                        if not isinstance(art, dict): continue
+                        
                         codigo_base = str(art.get('codigo', '')).strip()
                         marca = str(art.get('marca', 'GENERICO')).strip().upper()
                         if not codigo_base or codigo_base.lower() in ["null", "none"]:
@@ -189,12 +203,10 @@ with tab_inventario:
         cols_deseadas = ['id', 'marca', 'descripcion', 'stock', 'ultimo_costo_base', 'precio_interno', 'precio_venta']
         cols_existentes = [c for c in cols_deseadas if c in df.columns]
         
-        # BUSCADOR DE INVENTARIO
         busqueda_inv = st.text_input("🔍 Buscar repuesto (Código, Marca o Descripción):", placeholder="Ej: Correa, Bosch, 1234...")
         
         if busqueda_inv:
             termino = busqueda_inv.lower()
-            # Filtra el DataFrame buscando coincidencias en cualquier columna
             df_filtrado = df[df.apply(lambda row: row.astype(str).str.lower().str.contains(termino).any(), axis=1)]
         else:
             df_filtrado = df
@@ -297,11 +309,9 @@ with tab_config:
         if provs:
             datos_tabla = []
             for cuit, datos_prov in provs.items():
-                if not isinstance(datos_prov, dict):
-                    datos_prov = {}
+                if not isinstance(datos_prov, dict): datos_prov = {}
                 condiciones = datos_prov.get('condiciones', {})
-                if not isinstance(condiciones, dict):
-                    condiciones = {}
+                if not isinstance(condiciones, dict): condiciones = {}
                     
                 datos_tabla.append({
                     "Proveedor": datos_prov.get("nombre", ""),
