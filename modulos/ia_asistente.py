@@ -8,7 +8,6 @@ load_dotenv(override=True)
 
 def procesar_orden_voz(texto_usuario, inventario_actual):
     # --- BÚSQUEDA DINÁMICA DE LA CLAVE ---
-    # Obligamos al sistema a buscar la clave en el momento exacto de la consulta
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
@@ -21,7 +20,9 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
 
     # Configurar Gemini con la clave encontrada
     genai.configure(api_key=api_key) # type: ignore
-    model = genai.GenerativeModel('gemini-1.5-flash') # type: ignore
+    
+    # CAMBIO APLICADO: Usamos 'gemini-pro' que es compatible con tu versión actual
+    model = genai.GenerativeModel('gemini-pro') # type: ignore
 
     # Convertimos el inventario a un texto simple para que Gemini lo lea
     inv_str = ""
