@@ -6,19 +6,21 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-# Configurar Gemini
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key and "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
-
-if api_key:
-    genai.configure(api_key=api_key) # type: ignore
-
 def procesar_orden_voz(texto_usuario, inventario_actual):
+    # --- BÚSQUEDA DINÁMICA DE LA CLAVE ---
+    # Obligamos al sistema a buscar la clave en el momento exacto de la consulta
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        return {"accion": "error", "respuesta": "Falta configurar la GEMINI_API_KEY en los secretos."}
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            api_key = None
 
-    # Usamos Gemini 1.5 Flash porque es ultra rápido para este tipo de tareas de texto
+    if not api_key:
+        return {"accion": "error", "respuesta": "Falta configurar la GEMINI_API_KEY en los secretos. (Asegurate de hacer 'Reboot app' en Streamlit)."}
+
+    # Configurar Gemini con la clave encontrada
+    genai.configure(api_key=api_key) # type: ignore
     model = genai.GenerativeModel('gemini-1.5-flash') # type: ignore
 
     # Convertimos el inventario a un texto simple para que Gemini lo lea
