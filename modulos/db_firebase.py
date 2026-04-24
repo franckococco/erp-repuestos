@@ -33,6 +33,11 @@ def agregar_marca(nombre):
     id_marca = str(nombre).upper().strip()
     db.collection("marcas").document(id_marca).set({"creado": datetime.now(timezone.utc)})
 
+def eliminar_marca(nombre):
+    id_marca = str(nombre).upper().strip()
+    db.collection("marcas").document(id_marca).delete()
+    return True
+
 # --- GESTIÓN DE PROVEEDORES ---
 def obtener_proveedores():
     docs = db.collection("proveedores").get()
@@ -48,6 +53,11 @@ def configurar_proveedor(nombre, cuit, recargo_contado=0.0, recargo_30_dias=15.0
             "30 Días": float(recargo_30_dias)
         }
     }, merge=True)
+
+def eliminar_proveedor(cuit):
+    id_prov = "".join(filter(str.isdigit, str(cuit)))
+    db.collection("proveedores").document(id_prov).delete()
+    return True
 
 # --- MOTOR DE CÁLCULO DE PRECIOS ---
 def calcular_cascada_precios(precio_base, recargo_financiero):
@@ -77,7 +87,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     if not prov_doc.exists:
         return False, "Proveedor no configurado. Por favor, dalo de alta en Configuración."
     
-    # Extraemos el recargo según la condición elegida
     condiciones = prov_doc.to_dict().get("condiciones", {}) # type: ignore
     recargo = float(condiciones.get(condicion_pago, 0.0))
     
@@ -88,7 +97,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         codigo_base = str(art.get('codigo', '')).strip().upper()
         marca = str(art.get('marca', 'GENERICO')).strip().upper()
         
-        # Si no hay código, armamos uno con la descripción
         if not codigo_base or codigo_base == "NONE":
             codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15]
             
