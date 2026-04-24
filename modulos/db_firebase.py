@@ -3,199 +3,200 @@ from firebase_admin import credentials, firestore
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timezone
-import uuid
+import math
 import streamlit as st
 
 load_dotenv(override=True)
 
 def inicializar_firebase():
-    """Maneja la conexión tanto en local como en la nube de Streamlit"""
-    if not firebase_admin._apps:
-        # 1. Intentamos con los Secrets de Streamlit (NUBE)
+    """Conexión híbrida local/nube"""
+    if not firebase_admin._apps: # type: ignore
         if "firebase_key" in st.secrets:
             f_key = st.secrets["firebase_key"]
             creds_dict = dict(f_key)
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            creds_dict["private_key"] = str(creds_dict["private_key"]).replace("\\n", "\n")
             cred = credentials.Certificate(creds_dict)
-        # 2. Si no hay secretos, usamos el JSON local (PC)
         else:
             ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase_claves.json")
             cred = credentials.Certificate(ruta_json)
-        
         firebase_admin.initialize_app(cred)
     return firestore.client()
 
 db = inicializar_firebase()
 
-# --- LÓGICA DE CONTROL DE DUPLICADOS ---
+# --- GESTIÓN DE MARCAS ---
+def obtener_marcas():
+    docs = db.collection("marcas").get()
+    return [d.id for d in docs]
 
-def generar_id_unico_factura(cuit, pv, num):
-    """Limpia los datos para que siempre generen el mismo ID"""
-    c_limpio = "".join(filter(str.isdigit, str(cuit)))
-    p_limpio = str(pv).strip().zfill(5)
-    n_limpio = str(num).strip().zfill(8)
-    return f"FACT_{c_limpio}_{p_limpio}_{n_limpio}"
+def agregar_marca(nombre):
+    id_marca = str(nombre).upper().strip()
+    db.collection("marcas").document(id_marca).set({"creado": datetime.now(timezone.utc)})
 
-def factura_ya_existe(cuit, pv, num):
-    """Verifica si la factura ya fue procesada anteriormente"""
-    if not cuit or cuit == "00-00000000-0": 
-        return False
+# --- GESTIÓN DE PROVEEDORES ---
+def obtener_proveedores():
+    docs = db.collection("proveedores").get()
+    return {d.id: d.to_dict() for d in docs}
+
+def configurar_proveedor(nombre, cuit, recargo_contado=0.0, recargo_30_dias=15.0):
+    id_prov = "".join(filter(str.isdigit, str(cuit)))
+    db.collection("proveedores").document(id_prov).set({
+        "nombre": str(nombre).upper(),
+        "cuit": id_prov,
+        "condiciones": {
+            "Contado": float(recargo_contado),
+            "30 Días": float(recargo_30_dias)
+        }
+    }, merge=True)
+
+# --- MOTOR DE CÁLCULO DE PRECIOS ---
+def calcular_cascada_precios(precio_base, recargo_financiero):
+    base = float(precio_base)
+    costo_iva = base * 1.21
+    costo_final = costo_iva * (1 + (float(recargo_financiero) / 100.0))
+    precio_interno = costo_final * 1.40
+    precio_venta = math.ceil(precio_interno / 10.0) * 10
+    return {
+        "costo_iva": round(costo_iva, 2),
+        "costo_final": round(costo_final, 2),
+        "precio_interno": round(precio_interno, 2),
+        "precio_venta": int(precio_venta)
+    }
+
+# --- CARGA DE MERCADERÍA REFORZADA ---
+def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
+    prov_id = "".join(filter(str.isdigit, str(datos_ia.get('cuit_proveedor', '0'))))
+    pv = str(datos_ia.get('punto_venta', '0')).zfill(5)
+    num = str(datos_ia.get('numero_comprobante', '0')).zfill(8)
+    id_factura = f"FACT_{prov_id}_{pv}_{num}"
     
-    id_f = generar_id_unico_factura(cuit, pv, num)
-    doc = db.collection("facturas_procesadas").document(id_f).get()
-    return doc.exists
+    if db.collection("facturas_procesadas").document(id_factura).get().exists:
+        return False, f"La factura {pv}-{num} ya fue cargada."
 
-def registrar_ingreso_mercaderia(datos_ia):
-    """Procesa la factura, actualiza stock y bloquea duplicados"""
-    proveedor = datos_ia['proveedor']
-    cuit = datos_ia.get('cuit_proveedor', '00-00000000-0')
-    pv = datos_ia.get('punto_venta', '0')
-    num = datos_ia.get('numero_comprobante', '0')
+    prov_doc = db.collection("proveedores").document(prov_id).get()
+    if not prov_doc.exists:
+        return False, "Proveedor no configurado. Por favor, dalo de alta en Configuración."
     
-    # Validamos si existe antes de hacer nada
-    if factura_ya_existe(cuit, pv, num):
-        return False, f"¡Atención! La factura {pv}-{num} del CUIT {cuit} ya fue cargada anteriormente."
-
-    dto_proveedor = obtener_reglas_proveedor(proveedor)
+    # Extraemos el recargo según la condición elegida
+    condiciones = prov_doc.to_dict().get("condiciones", {}) # type: ignore
+    recargo = float(condiciones.get(condicion_pago, 0.0))
+    
     ahora = datetime.now(timezone.utc)
     batch = db.batch()
 
-    for art in datos_ia['articulos']:
-        codigo = str(art.get('codigo', '')).strip()
-        if not codigo or codigo.lower() in ["null", "none"]:
-            desc = art.get('descripcion', '').strip()
-            codigo = desc.replace(' ', '_').upper() if desc else f"ID_{str(uuid.uuid4())[:6]}"
+    for art in datos_ia.get('articulos', []):
+        codigo_base = str(art.get('codigo', '')).strip().upper()
+        marca = str(art.get('marca', 'GENERICO')).strip().upper()
         
-        costo_neto = float(art.get('precio_unitario', 0)) * (1 - (dto_proveedor / 100))
-        ref_prod = db.collection("productos").document(codigo)
+        # Si no hay código, armamos uno con la descripción
+        if not codigo_base or codigo_base == "NONE":
+            codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15]
+            
+        id_producto = f"{codigo_base}_{marca}"
+        precio_unitario = float(art.get('precio_unitario', 0.0))
+        calculos = calcular_cascada_precios(precio_unitario, recargo)
+        
+        ref_prod = db.collection("productos").document(id_producto)
         doc_prod = ref_prod.get()
-        
         cantidad = int(art.get('cantidad', 0))
-        descripcion = art.get('descripcion', 'Sin descripción')
         
         if doc_prod.exists:
-            datos = doc_prod.to_dict() or {}
-            historial = datos.get("precios_por_proveedor", {})
-            historial[proveedor] = costo_neto
             batch.update(ref_prod, {
-                "descripcion": descripcion,
                 "stock": firestore.Increment(cantidad), # type: ignore
-                "precios_por_proveedor": historial,
+                "ultimo_costo_base": precio_unitario,
+                "precio_interno": calculos['precio_interno'],
+                "precio_venta": calculos['precio_venta'],
                 "ultima_actualizacion": ahora
             })
         else:
             batch.set(ref_prod, {
-                "descripcion": descripcion,
+                "codigo": codigo_base,
+                "marca": marca,
+                "descripcion": str(art.get('descripcion', 'Repuesto')),
                 "stock": cantidad,
-                "precios_por_proveedor": {proveedor: costo_neto},
+                "ultimo_costo_base": precio_unitario,
+                "precio_interno": calculos['precio_interno'],
+                "precio_venta": calculos['precio_venta'],
                 "ultima_actualizacion": ahora
             })
 
-    # Registramos la factura como procesada con su ID limpio
-    id_f = generar_id_unico_factura(cuit, pv, num)
-    ref_factura = db.collection("facturas_procesadas").document(id_f)
-    batch.set(ref_factura, {
-        "proveedor": proveedor,
-        "cuit": cuit,
-        "punto_venta": pv,
-        "numero": num,
+    batch.set(db.collection("facturas_procesadas").document(id_factura), {
+        "proveedor_id": prov_id,
+        "pv": pv,
+        "num": num,
+        "condicion_pago": condicion_pago,
+        "recargo_aplicado": recargo,
         "fecha_carga": ahora,
-        "total_articulos": len(datos_ia['articulos'])
+        "factura_imagen": imagen_url
     })
 
     batch.commit()
-    return True, "Ingreso registrado correctamente."
+    return True, "Mercadería cargada con éxito y precios actualizados."
 
-# --- FUNCIONES DE CONFIGURACIÓN Y CONSULTA ---
-
-def guardar_descuento_proveedor(nombre_proveedor, descuento):
-    db.collection("configuracion").document("descuentos").set({
-        nombre_proveedor.upper().strip(): float(descuento)
-    }, merge=True)
-
-def obtener_todos_los_descuentos():
-    doc = db.collection("configuracion").document("descuentos").get()
-    return doc.to_dict() or {} if doc.exists else {}
-
-def obtener_reglas_proveedor(nombre_proveedor):
-    descuentos = obtener_todos_los_descuentos()
-    for prov_clave, desc in descuentos.items():
-        if prov_clave in nombre_proveedor.upper(): return desc
-    return 0.0
-
+# --- INVENTARIO ---
 def obtener_inventario_completo():
     docs = db.collection("productos").get()
-    inventario = []
-    for d in docs:
-        item = d.to_dict() or {}
-        item['codigo'] = d.id
-        precios = item.get("precios_por_proveedor", {}).values()
-        item['precio_max'] = max(precios) if precios else 0
-        inventario.append(item)
-    return inventario
+    return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
-# --- LÓGICA DE VENTAS Y CARRITO ---
-
-def agregar_al_carrito(vendedor, codigo_bruto, cantidad=1):
-    codigo = codigo_bruto.split("\n")[0].replace("COD:", "").strip()
-    ref_prod = db.collection("productos").document(codigo)
-    doc_prod = ref_prod.get()
+# --- VENTAS Y CARRITO ---
+def agregar_al_carrito(vendedor, id_producto, cantidad=1):
+    ref_prod = db.collection("productos").document(id_producto)
+    doc = ref_prod.get()
+    if not doc.exists: return False, "Producto no existe."
     
-    if not doc_prod.exists:
-        return False, f"El código {codigo} no existe."
-    
-    datos = doc_prod.to_dict() or {}
-    stock_actual = int(datos.get("stock", 0))
-    if stock_actual < cantidad:
-        return False, f"Stock insuficiente ({stock_actual})."
+    datos = doc.to_dict() or {}
+    if int(datos.get('stock', 0)) < cantidad: return False, "Stock insuficiente."
 
-    precios = datos.get("precios_por_proveedor", {}).values()
-    precio_venta = max(precios) if precios else 0.0
-
-    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
-    doc_item = ref_item.get()
+    precio = float(datos.get('precio_venta', 0.0))
+    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_producto)
     
-    if doc_item.exists:
-        item_data = doc_item.to_dict() or {}
-        nueva_cant = item_data.get("cantidad", 0) + cantidad
-        if nueva_cant > stock_actual:
-            return False, f"No podés agregar más. Límite: {stock_actual}."
-        ref_item.update({"cantidad": nueva_cant, "subtotal": nueva_cant * precio_venta})
-    else:
-        ref_item.set({
-            "descripcion": datos.get("descripcion", "Repuesto"),
-            "precio_unitario": precio_venta,
-            "cantidad": cantidad,
-            "subtotal": precio_venta * cantidad
-        })
-    return True, "Agregado."
+    ref_item.set({
+        "descripcion": f"{datos.get('descripcion', '')} ({datos.get('marca', '')})",
+        "precio_unitario": precio,
+        "cantidad": firestore.Increment(cantidad), # type: ignore
+    }, merge=True)
+    return True, "Agregado al carrito."
 
 def obtener_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
-    return [{"codigo": d.id, **(d.to_dict() or {})} for d in docs]
+    carrito = []
+    for d in docs:
+        item = d.to_dict() or {}
+        item['id'] = d.id
+        item['subtotal'] = float(item.get('precio_unitario', 0)) * int(item.get('cantidad', 0))
+        carrito.append(item)
+    return carrito
 
 def vaciar_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
-    for d in docs:
-        d.reference.delete()
+    for d in docs: d.reference.delete()
 
 def confirmar_venta(vendedor):
     items = obtener_carrito(vendedor)
-    if not items: 
-        return False, "El carrito está vacío."
+    if not items: return False, "El carrito está vacío."
     
     batch = db.batch()
     for item in items:
-        codigo = item['codigo']
+        codigo = item['id']
         cantidad = item['cantidad']
-        
-        # 1. Descontamos stock del inventario
         ref_prod = db.collection("productos").document(codigo)
         batch.update(ref_prod, {"stock": firestore.Increment(-cantidad)}) # type: ignore
-        
-        # 2. Borramos el ítem del carrito
         ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
         batch.delete(ref_item)
     
     batch.commit()
     return True, "Venta realizada con éxito."
+
+# --- LIMPIEZA ---
+def borrar_toda_la_base_de_datos():
+    try:
+        for col in ["productos", "facturas_procesadas", "presupuestos_activos"]:
+            docs = db.collection(col).get()
+            for d in docs:
+                if col == "presupuestos_activos":
+                    items = d.reference.collection("items").get()
+                    for i in items: i.reference.delete()
+                d.reference.delete()
+        return True, "Base de datos reseteada con éxito."
+    except Exception as e:
+        return False, f"Error: {str(e)}"
