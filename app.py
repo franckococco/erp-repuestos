@@ -12,8 +12,10 @@ from modulos.db_firebase import (
     obtener_inventario_completo, 
     obtener_proveedores,
     configurar_proveedor,
+    eliminar_proveedor,
     obtener_marcas,
     agregar_marca,
+    eliminar_marca,
     agregar_al_carrito,
     obtener_carrito,
     vaciar_carrito,
@@ -93,7 +95,6 @@ with tab_carga:
         cuit_detectado = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
         st.write(f"### Proveedor detectado: {d.get('proveedor', 'DESCONOCIDO')} (CUIT: {cuit_detectado})")
         
-        # --- INICIO DE LA GRILLA DE VALIDACIÓN ---
         st.info("💡 **Revisá los datos.** Podés hacer doble clic en cualquier celda para corregir códigos, precios, o seleccionar la marca correcta antes de guardar.")
         
         articulos = d.get('articulos', [])
@@ -118,7 +119,6 @@ with tab_carga:
             num_rows="dynamic",
             key="grilla_validacion"
         )
-        # --- FIN DE LA GRILLA ---
         
         st.divider()
         st.subheader("⚙️ Opciones de Etiquetas QR para esta factura")
@@ -129,6 +129,8 @@ with tab_carga:
         with col2:
             if not df_editado.empty:
                 art_ejemplo = df_editado.iloc[0].to_dict()
+                if not isinstance(art_ejemplo, dict): art_ejemplo = {}
+                
                 cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
                 marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
                 desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
@@ -147,7 +149,6 @@ with tab_carga:
         
         if st.button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True):
             d['articulos'] = df_editado.to_dict('records')
-            
             exito, msg = registrar_ingreso_inteligente(d, condicion_pago)
             
             if exito:
@@ -304,6 +305,7 @@ with tab_config:
                 else:
                     st.error("El nombre y el CUIT son obligatorios.")
         
+        st.divider()
         st.write("### Directorio de Proveedores")
         provs = obtener_proveedores() or {}
         if provs:
@@ -320,6 +322,18 @@ with tab_config:
                     "30 Días": f"{condiciones.get('30 Días', 0)}%"
                 })
             st.dataframe(datos_tabla, use_container_width=True)
+            
+            # SECCIÓN ELIMINAR PROVEEDOR
+            with st.expander("🗑️ Eliminar un Proveedor"):
+                prov_a_borrar = st.selectbox(
+                    "Seleccionar proveedor a eliminar:", 
+                    options=list(provs.keys()), 
+                    format_func=lambda x: f"{(provs.get(x) or {}).get('nombre', 'Desconocido')} (CUIT: {x})"
+                )
+                if st.button("Eliminar Proveedor", type="primary"):
+                    eliminar_proveedor(prov_a_borrar)
+                    st.success("Proveedor eliminado del sistema.")
+                    st.rerun()
             
     with tab_marcas:
         st.subheader("Gestión de Marcas")
@@ -338,5 +352,13 @@ with tab_config:
         if marcas_actuales:
             st.write("**Marcas registradas:**")
             st.write(", ".join(marcas_actuales))
+            
+            # SECCIÓN ELIMINAR MARCA
+            with st.expander("🗑️ Eliminar una Marca"):
+                marca_a_borrar = st.selectbox("Seleccionar marca a eliminar:", options=marcas_actuales)
+                if st.button("Eliminar Marca", type="primary"):
+                    eliminar_marca(marca_a_borrar)
+                    st.success("Marca eliminada del sistema.")
+                    st.rerun()
         else:
             st.info("Aún no hay marcas cargadas.")
