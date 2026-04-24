@@ -52,16 +52,18 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     """
 
     try:
-        # Usamos Llama 3 para máxima velocidad y razonamiento
+        # Usamos Llama 3.1 instant que es el reemplazo actual y activo
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant", # <--- ESTA ES LA LÍNEA QUE CORREGIMOS
             temperature=0.0,
+            # Añadimos response_format para obligar a Groq a devolver un JSON válido siempre
+            response_format={"type": "json_object"} 
         )
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
         
-        # Limpieza de JSON
+        # Limpieza de JSON por si acaso
         if texto.startswith("```json"):
             texto = texto.replace("```json", "").replace("```", "").strip()
         elif texto.startswith("```"):
