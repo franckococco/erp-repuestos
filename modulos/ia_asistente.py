@@ -28,24 +28,26 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         inv_str = "El inventario está vacío."
 
     prompt = f"""
-    Eres el Asistente de Depósito de 'Hafid Repuestos'. Tu objetivo es ayudar al operario.
-    
+    Eres el sistema estricto de búsqueda de depósito de 'Hafid Repuestos'.
+
     INVENTARIO ACTUAL:
     {inv_str}
 
-    ORDEN DEL OPERARIO:
-    "{texto_usuario}"
+    ORDEN DEL USUARIO: "{texto_usuario}"
 
     REGLAS ESTRICTAS DE BÚSQUEDA Y FORMATO:
-    1. FILTRADO EXACTO: Si el operario busca un producto (ej: "correas", "bomba"), revisa el inventario y MUESTRA ÚNICAMENTE los productos que contengan esa palabra en su descripción o ID. ¡IGNORA y oculta todo el resto del inventario!
-    2. SIN INVENTOS: Si no hay ningún producto que coincida con lo que pide, responde simplemente: "No encontré [producto] en el stock actual."
-    3. EQUIVALENCIAS: Si pide una marca específica y no hay, pero SÍ hay de otra marca, muéstrale esa otra marca avisando que es un equivalente.
-    4. FORMATO VISUAL: Usa viñetas ( - ) y saltos de línea para listar los productos encontrados. Sé directo, no saludes ni des explicaciones largas.
+    1. BÚSQUEDA LITERAL: Busca ÚNICAMENTE la palabra clave que pide el usuario. Si pide "maza", MUESTRA SOLO descripciones que contengan "maza". ¡PROHIBIDO mostrar rulemanes o productos relacionados que no tengan la palabra exacta! Si pide "correa", SOLO correas.
+    2. SIN INVENTOS: Si en el inventario no hay nada que coincida exactamente con la palabra buscada, responde: "No encontré [producto] en el stock."
+    3. FORMATO VISUAL: Tu respuesta debe ser texto puro formateado con saltos de línea (\\n) y viñetas (-). 
+       ¡ESTÁ TOTALMENTE PROHIBIDO usar formato de lista de programación como ['item1', 'item2']!
+       
+       EJEMPLO DE CÓMO DEBES RESPONDER:
+       "Encontré los siguientes artículos:\\n\\n- MAZA RUEDA DELANTERA: Stock 4, Precio $82990\\n- MAZA RUEDA TRASERA: Stock 2, Precio $131700"
 
-    Devuelve ÚNICAMENTE un JSON eligiendo UNA de estas tres opciones:
+    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas tres opciones:
 
     OPCIÓN 1 (Consulta/Búsqueda):
-    {{"accion": "consulta", "respuesta": "Lista de los productos EXACTOS que pidió el usuario."}}
+    {{"accion": "consulta", "respuesta": "Tu respuesta respetando los saltos de línea y viñetas como en el ejemplo."}}
 
     OPCIÓN 2 (Baja de Stock / Descontar):
     {{"accion": "baja", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
@@ -55,9 +57,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     """
 
     try:
+        # CAMBIO CLAVE: Usamos el modelo 70b (mucho más inteligente para acatar reglas estrictas)
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile", 
             temperature=0.0,
             response_format={"type": "json_object"} 
         )
