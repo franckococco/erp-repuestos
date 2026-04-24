@@ -31,7 +31,9 @@ def obtener_marcas():
 
 def agregar_marca(nombre):
     id_marca = str(nombre).upper().strip()
-    db.collection("marcas").document(id_marca).set({"creado": datetime.now(timezone.utc)})
+    db.collection("marcas").document(id_marca).set({
+        "creado": datetime.now(timezone.utc)
+    })
 
 def eliminar_marca(nombre):
     id_marca = str(nombre).upper().strip()
@@ -66,6 +68,7 @@ def calcular_cascada_precios(precio_base, recargo_financiero):
     costo_final = costo_iva * (1 + (float(recargo_financiero) / 100.0))
     precio_interno = costo_final * 1.40
     precio_venta = math.ceil(precio_interno / 10.0) * 10
+    
     return {
         "costo_iva": round(costo_iva, 2),
         "costo_final": round(costo_final, 2),
@@ -85,9 +88,10 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 
     prov_doc = db.collection("proveedores").document(prov_id).get()
     if not prov_doc.exists:
-        return False, "Proveedor no configurado. Por favor, dalo de alta en Configuración."
+        return False, "Proveedor no configurado."
     
-    condiciones = prov_doc.to_dict().get("condiciones", {}) # type: ignore
+    datos_prov = prov_doc.to_dict() or {}
+    condiciones = datos_prov.get("condiciones", {})
     recargo = float(condiciones.get(condicion_pago, 0.0))
     
     ahora = datetime.now(timezone.utc)
@@ -132,29 +136,19 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         "proveedor_id": prov_id,
         "pv": pv,
         "num": num,
-        "condicion_pago": condicion_pago,
-        "recargo_aplicado": recargo,
         "fecha_carga": ahora,
         "factura_imagen": imagen_url
     })
 
     batch.commit()
-    return True, "Mercadería cargada con éxito y precios actualizados."
+    return True, "Mercadería cargada correctamente."
 
-# --- ASISTENTE DE DEPÓSITO (MERMAS Y AJUSTES) ---
+# --- ASISTENTE DE DEPÓSITO ---
 def registrar_merma(id_producto, cantidad):
-    """Descuenta stock indicado por el asistente de voz"""
     ref_prod = db.collection("productos").document(id_producto)
-    doc = ref_prod.get()
     
-    if not doc.exists:
-        return False, "El producto no existe en la base de datos."
-        
-    datos = doc.to_dict() or {}
-    stock_actual = int(datos.get('stock', 0))
-    
-    if stock_actual < cantidad:
-        return False, f"Stock insuficiente. Solo hay {stock_actual} unidades."
+    if not ref_prod.get().exists:
+        return False, "Producto no existe."
         
     batch = db.batch()
     batch.update(ref_prod, {
@@ -172,72 +166,72 @@ def registrar_merma(id_producto, cantidad):
     })
     
     batch.commit()
-    return True, f"Se descontaron {cantidad} unidades correctamente."
+    return True, f"Baja de {cantidad} unidades registrada."
 
-# --- INVENTARIO ---
+# --- INVENTARIO Y VENTAS ---
 def obtener_inventario_completo():
     docs = db.collection("productos").get()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
-# --- VENTAS Y CARRITO ---
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     ref_prod = db.collection("productos").document(id_producto)
     doc = ref_prod.get()
-    if not doc.exists: return False, "Producto no existe."
+    
+    if not doc.exists:
+        return False, "No existe."
     
     datos = doc.to_dict() or {}
-    if int(datos.get('stock', 0)) < cantidad: return False, "Stock insuficiente."
-
     precio = float(datos.get('precio_venta', 0.0))
     ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_producto)
     
     ref_item.set({
-        "descripcion": f"{datos.get('descripcion', '')} ({datos.get('marca', '')})",
+        "descripcion": f"{datos.get('descripcion')} ({datos.get('marca')})",
         "precio_unitario": precio,
-        "cantidad": firestore.Increment(cantidad), # type: ignore
+        "cantidad": firestore.Increment(cantidad) # type: ignore
     }, merge=True)
-    return True, "Agregado al carrito."
+    
+    return True, "Agregado."
 
 def obtener_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
     carrito = []
+    
     for d in docs:
         item = d.to_dict() or {}
         item['id'] = d.id
         item['subtotal'] = float(item.get('precio_unitario', 0)) * int(item.get('cantidad', 0))
         carrito.append(item)
+        
     return carrito
 
 def vaciar_carrito(vendedor):
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
-    for d in docs: d.reference.delete()
+    for d in docs:
+        d.reference.delete()
 
 def confirmar_venta(vendedor):
     items = obtener_carrito(vendedor)
-    if not items: return False, "El carrito está vacío."
     
+    if not items:
+        return False, "Vacío."
+        
     batch = db.batch()
-    for item in items:
-        codigo = item['id']
-        cantidad = item['cantidad']
-        ref_prod = db.collection("productos").document(codigo)
-        batch.update(ref_prod, {"stock": firestore.Increment(-cantidad)}) # type: ignore
-        ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(codigo)
-        batch.delete(ref_item)
     
+    for item in items:
+        ref_prod = db.collection("productos").document(item['id'])
+        ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(item['id'])
+        
+        batch.update(ref_prod, {
+            "stock": firestore.Increment(-item['cantidad']) # type: ignore
+        })
+        batch.delete(ref_item)
+        
     batch.commit()
-    return True, "Venta realizada con éxito."
+    return True, "Venta confirmada."
 
-# --- LIMPIEZA ---
 def borrar_toda_la_base_de_datos():
-    try:
-        for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas"]:
-            docs = db.collection(col).get()
-            for d in docs:
-                if col == "presupuestos_activos":
-                    items = d.reference.collection("items").get()
-                    for i in items: i.reference.delete()
-                d.reference.delete()
-        return True, "Base de datos reseteada con éxito."
-    except Exception as e:
-        return False, f"Error: {str(e)}"
+    for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas"]:
+        docs = db.collection(col).get()
+        for d in docs:
+            d.reference.delete()
+    return True, "Base de datos limpia."
