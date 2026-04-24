@@ -39,31 +39,35 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     ORDEN DEL OPERARIO:
     "{texto_usuario}"
 
-    REGLAS DE EQUIVALENCIA:
+    REGLAS DE FORMATO Y EQUIVALENCIA (MUY IMPORTANTE):
     - Si el operario busca una marca y no hay, busca el mismo repuesto (misma descripción o código) en OTRAS marcas disponibles.
+    - Al dar listas o resultados, DEBES usar saltos de línea (\\n\\n) y viñetas ( - ) para que se lea ordenado en la pantalla de un celular. Nunca escribas todo en un solo párrafo.
     - Responde siempre de forma breve y técnica.
 
-    Devuelve ÚNICAMENTE un JSON (sin markdown):
-    OPCIÓN 1 (Consulta/Equivalencia):
-    {{"accion": "consulta", "respuesta": "Tu respuesta sobre stock, precio y si encontraste equivalentes."}}
+    Devuelve ÚNICAMENTE un JSON (sin markdown) eligiendo UNA de estas tres opciones:
 
-    OPCIÓN 2 (Baja de Stock):
-    {{"accion": "baja", "id_producto": "ID_EXACTO", "cantidad": 1, "respuesta": "Confirmación de baja."}}
+    OPCIÓN 1 (Consulta/Equivalencia):
+    {{"accion": "consulta", "respuesta": "Tu respuesta sobre stock, precio y equivalentes, usando viñetas."}}
+
+    OPCIÓN 2 (Baja de Stock / Descontar):
+    {{"accion": "baja", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
+
+    OPCIÓN 3 (Alta de Stock / Aumentar):
+    {{"accion": "alta", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
     """
 
     try:
-        # Usamos Llama 3.1 instant que es el reemplazo actual y activo
+        # Usamos Llama 3.1 que está activo, es rápido y gratuito
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-8b-instant", # <--- ESTA ES LA LÍNEA QUE CORREGIMOS
+            model="llama-3.1-8b-instant",
             temperature=0.0,
-            # Añadimos response_format para obligar a Groq a devolver un JSON válido siempre
             response_format={"type": "json_object"} 
         )
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
         
-        # Limpieza de JSON por si acaso
+        # Limpieza de JSON
         if texto.startswith("```json"):
             texto = texto.replace("```json", "").replace("```", "").strip()
         elif texto.startswith("```"):

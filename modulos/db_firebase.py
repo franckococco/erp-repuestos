@@ -168,6 +168,31 @@ def registrar_merma(id_producto, cantidad):
     batch.commit()
     return True, f"Baja de {cantidad} unidades registrada."
 
+# NUEVA FUNCIÓN PARA AUMENTAR STOCK DESDE EL ASISTENTE
+def registrar_aumento_stock(id_producto, cantidad):
+    ref_prod = db.collection("productos").document(id_producto)
+    
+    if not ref_prod.get().exists:
+        return False, "Producto no existe en el sistema."
+        
+    batch = db.batch()
+    batch.update(ref_prod, {
+        "stock": firestore.Increment(cantidad), # type: ignore
+        "ultima_actualizacion": datetime.now(timezone.utc)
+    })
+    
+    # Registro de auditoría
+    ref_alta = db.collection("auditoria_ingresos").document()
+    batch.set(ref_alta, {
+        "id_producto": id_producto,
+        "cantidad_ingreso": cantidad,
+        "fecha": datetime.now(timezone.utc),
+        "motivo": "Ingreso manual vía Asistente de Voz"
+    })
+    
+    batch.commit()
+    return True, f"Aumento de {cantidad} unidades registrado exitosamente."
+
 # --- INVENTARIO Y VENTAS ---
 def obtener_inventario_completo():
     docs = db.collection("productos").get()
@@ -230,7 +255,7 @@ def confirmar_venta(vendedor):
     return True, "Venta confirmada."
 
 def borrar_toda_la_base_de_datos():
-    for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas"]:
+    for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas", "auditoria_ingresos"]:
         docs = db.collection(col).get()
         for d in docs:
             d.reference.delete()
