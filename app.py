@@ -151,7 +151,18 @@ with tab_carga:
                 st.image(qr_preview, caption="Vista Previa Público", width=150)
         
         if st.button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True):
-            d['articulos'] = df_editado.to_dict('records')
+            
+            # --- CORRECCIÓN FASE 1: Inyectar datos del proveedor a cada artículo ---
+            nombre_prov = d.get('proveedor', 'DESCONOCIDO')
+            articulos_lista = df_editado.to_dict('records')
+            
+            for art in articulos_lista:
+                art['proveedor'] = nombre_prov
+                art['cuit_proveedor'] = cuit_detectado
+                
+            d['articulos'] = articulos_lista
+            # -----------------------------------------------------------------------
+            
             exito, msg = registrar_ingreso_inteligente(d, condicion_pago)
             
             if exito:
@@ -204,10 +215,11 @@ with tab_inventario:
     
     if inv:
         df = pd.DataFrame(inv)
-        cols_deseadas = ['id', 'marca', 'descripcion', 'stock', 'ultimo_costo_base', 'precio_interno', 'precio_venta']
+        # Agregamos 'proveedor' a las columnas visibles para que controles que se guardó bien
+        cols_deseadas = ['id', 'marca', 'descripcion', 'proveedor', 'stock', 'ultimo_costo_base', 'precio_interno', 'precio_venta']
         cols_existentes = [c for c in cols_deseadas if c in df.columns]
         
-        busqueda_inv = st.text_input("🔍 Buscar repuesto (Código, Marca o Descripción):", placeholder="Ej: Correa, Bosch, 1234...")
+        busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
         
         if busqueda_inv:
             termino = busqueda_inv.lower()
@@ -274,18 +286,15 @@ with tab_asistente:
     st.header("🤖 Asistente de Depósito")
     st.info("Escribí o dictá tu orden. (La pantalla se limpia en cada consulta nueva para que no te confundas).")
     
-    # Iniciamos variables para guardar SOLO la última interacción
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
     if "ultima_respuesta" not in st.session_state:
         st.session_state.ultima_respuesta = None
     if "ultimo_estado" not in st.session_state:
-        st.session_state.ultimo_estado = None # Para saber si poner en verde (success) o rojo (error)
+        st.session_state.ultimo_estado = None 
 
-    # Caja de texto para que el usuario escriba
-    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Sumale 2 bujías al stock'")
+    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Filtrame artículos del proveedor X'")
     
-    # SI EL USUARIO ENVÍA ALGO NUEVO
     if orden_usuario:
         st.session_state.ultima_orden = orden_usuario
         
@@ -296,7 +305,6 @@ with tab_asistente:
             accion = respuesta_json.get("accion")
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
             
-            # Procesar la acción devuelta
             if accion == "baja":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
@@ -311,11 +319,10 @@ with tab_asistente:
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
 
-            else: # Es solo una consulta
+            else: 
                 st.session_state.ultima_respuesta = texto_ia
                 st.session_state.ultimo_estado = "normal"
 
-    # MOSTRAR SOLO LA ÚLTIMA INTERACCIÓN GUARDADA
     if st.session_state.ultima_orden:
         with st.chat_message("user"):
             st.markdown(st.session_state.ultima_orden)
@@ -327,7 +334,6 @@ with tab_asistente:
                 st.error(st.session_state.ultima_respuesta)
             else:
                 st.markdown(st.session_state.ultima_respuesta)
-
 
 # --- PESTAÑA 5: CONFIGURACIÓN ---
 with tab_config:
