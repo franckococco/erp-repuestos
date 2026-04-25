@@ -101,6 +101,10 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         codigo_base = str(art.get('codigo', '')).strip().upper()
         marca = str(art.get('marca', 'GENERICO')).strip().upper()
         
+        # --- NUEVO: Extraemos el proveedor que inyectó app.py ---
+        proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
+        cuit_proveedor = str(art.get('cuit_proveedor', '0'))
+        
         if not codigo_base or codigo_base == "NONE":
             codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15]
             
@@ -118,6 +122,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "ultimo_costo_base": precio_unitario,
                 "precio_interno": calculos['precio_interno'],
                 "precio_venta": calculos['precio_venta'],
+                "proveedor": proveedor,             # <- Guardamos en DB
+                "cuit_proveedor": cuit_proveedor,   # <- Guardamos en DB
                 "ultima_actualizacion": ahora
             })
         else:
@@ -129,6 +135,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "ultimo_costo_base": precio_unitario,
                 "precio_interno": calculos['precio_interno'],
                 "precio_venta": calculos['precio_venta'],
+                "proveedor": proveedor,             # <- Guardamos en DB
+                "cuit_proveedor": cuit_proveedor,   # <- Guardamos en DB
                 "ultima_actualizacion": ahora
             })
 
