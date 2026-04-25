@@ -25,7 +25,7 @@ def inicializar_firebase():
 db = inicializar_firebase()
 
 # --- GESTIÓN DE MARCAS ---
-def obtener_marcas():
+def obtener_marcas() -> list:
     docs = db.collection("marcas").get()
     return [d.id for d in docs]
 
@@ -41,9 +41,9 @@ def eliminar_marca(nombre):
     return True
 
 # --- GESTIÓN DE PROVEEDORES ---
-def obtener_proveedores():
+def obtener_proveedores() -> dict:
     docs = db.collection("proveedores").get()
-    return {d.id: d.to_dict() for d in docs}
+    return {d.id: d.to_dict() or {} for d in docs}
 
 def configurar_proveedor(nombre, cuit, recargo_contado=0.0, recargo_30_dias=15.0):
     id_prov = "".join(filter(str.isdigit, str(cuit)))
@@ -62,7 +62,7 @@ def eliminar_proveedor(cuit):
     return True
 
 # --- MOTOR DE CÁLCULO DE PRECIOS ---
-def calcular_cascada_precios(precio_base, recargo_financiero):
+def calcular_cascada_precios(precio_base, recargo_financiero) -> dict:
     base = float(precio_base)
     costo_iva = base * 1.21
     costo_final = costo_iva * (1 + (float(recargo_financiero) / 100.0))
@@ -100,8 +100,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     for art in datos_ia.get('articulos', []):
         codigo_base = str(art.get('codigo', '')).strip().upper()
         marca = str(art.get('marca', 'GENERICO')).strip().upper()
-        
-        # --- NUEVO: Extraemos el proveedor que inyectó app.py ---
         proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
         cuit_proveedor = str(art.get('cuit_proveedor', '0'))
         
@@ -122,8 +120,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "ultimo_costo_base": precio_unitario,
                 "precio_interno": calculos['precio_interno'],
                 "precio_venta": calculos['precio_venta'],
-                "proveedor": proveedor,             # <- Guardamos en DB
-                "cuit_proveedor": cuit_proveedor,   # <- Guardamos en DB
+                "proveedor": proveedor,
+                "cuit_proveedor": cuit_proveedor,
                 "ultima_actualizacion": ahora
             })
         else:
@@ -135,8 +133,12 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "ultimo_costo_base": precio_unitario,
                 "precio_interno": calculos['precio_interno'],
                 "precio_venta": calculos['precio_venta'],
-                "proveedor": proveedor,             # <- Guardamos en DB
-                "cuit_proveedor": cuit_proveedor,   # <- Guardamos en DB
+                "proveedor": proveedor,
+                "cuit_proveedor": cuit_proveedor,
+                "ubicacion": {
+                    "mostrador": "",
+                    "deposito": ""
+                },
                 "ultima_actualizacion": ahora
             })
 
@@ -151,6 +153,54 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     batch.commit()
     return True, "Mercadería cargada correctamente."
 
+# --- ALTA MANUAL DE PRODUCTO ---
+def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base, recargo, stock, ubi_mostrador, ubi_deposito):
+    codigo_base = str(codigo).strip().upper()
+    marca_limpia = str(marca).strip().upper()
+    id_producto = f"{codigo_base}_{marca_limpia}"
+
+    ref_prod = db.collection("productos").document(id_producto)
+    if ref_prod.get().exists:
+        return False, f"El producto con código {codigo_base} y marca {marca_limpia} ya existe."
+
+    # SOLUCIÓN DEL ERROR PYLANCE .get() en None:
+    prov_doc = db.collection("proveedores").document(str(cuit_proveedor)).get()
+    datos_proveedor_db = prov_doc.to_dict() or {} 
+    nombre_proveedor = datos_proveedor_db.get("nombre", "DESCONOCIDO") if prov_doc.exists else "DESCONOCIDO"
+
+    calculos = calcular_cascada_precios(float(precio_base), float(recargo))
+    ahora = datetime.now(timezone.utc)
+
+    ref_prod.set({
+        "codigo": codigo_base,
+        "marca": marca_limpia,
+        "descripcion": str(descripcion).strip(),
+        "stock": int(stock),
+        "ultimo_costo_base": float(precio_base),
+        "precio_interno": calculos['precio_interno'],
+        "precio_venta": calculos['precio_venta'],
+        "proveedor": nombre_proveedor,
+        "cuit_proveedor": str(cuit_proveedor),
+        "ubicacion": {
+            "mostrador": str(ubi_mostrador).strip().upper(),
+            "deposito": str(ubi_deposito).strip().upper()
+        },
+        "ultima_actualizacion": ahora
+    })
+    
+    return True, f"Producto {codigo_base} cargado exitosamente."
+
+def actualizar_ubicacion_producto(id_producto, ubi_mostrador, ubi_deposito):
+    ref_prod = db.collection("productos").document(id_producto)
+    if not ref_prod.get().exists:
+        return False, "Producto no existe."
+        
+    ref_prod.update({
+        "ubicacion.mostrador": str(ubi_mostrador).strip().upper(),
+        "ubicacion.deposito": str(ubi_deposito).strip().upper()
+    })
+    return True, "Ubicaciones actualizadas."
+
 # --- ASISTENTE DE DEPÓSITO ---
 def registrar_merma(id_producto, cantidad):
     ref_prod = db.collection("productos").document(id_producto)
@@ -164,7 +214,6 @@ def registrar_merma(id_producto, cantidad):
         "ultima_actualizacion": datetime.now(timezone.utc)
     })
     
-    # Registro de auditoría para la baja
     ref_baja = db.collection("auditoria_mermas").document()
     batch.set(ref_baja, {
         "id_producto": id_producto,
@@ -176,7 +225,6 @@ def registrar_merma(id_producto, cantidad):
     batch.commit()
     return True, f"Baja de {cantidad} unidades registrada."
 
-# NUEVA FUNCIÓN PARA AUMENTAR STOCK DESDE EL ASISTENTE
 def registrar_aumento_stock(id_producto, cantidad):
     ref_prod = db.collection("productos").document(id_producto)
     
@@ -189,7 +237,6 @@ def registrar_aumento_stock(id_producto, cantidad):
         "ultima_actualizacion": datetime.now(timezone.utc)
     })
     
-    # Registro de auditoría
     ref_alta = db.collection("auditoria_ingresos").document()
     batch.set(ref_alta, {
         "id_producto": id_producto,
@@ -202,7 +249,7 @@ def registrar_aumento_stock(id_producto, cantidad):
     return True, f"Aumento de {cantidad} unidades registrado exitosamente."
 
 # --- INVENTARIO Y VENTAS ---
-def obtener_inventario_completo():
+def obtener_inventario_completo() -> list:
     docs = db.collection("productos").get()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
@@ -225,7 +272,7 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     
     return True, "Agregado."
 
-def obtener_carrito(vendedor):
+def obtener_carrito(vendedor) -> list:
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()
     carrito = []
     
