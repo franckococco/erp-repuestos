@@ -355,12 +355,19 @@ with tab_mostrador:
             if exito: st.success(f"Añadido: {id_limpio}")
             else: st.error(msj)
 
-    codigo_manual = st.text_area("Lectura del QR (Ingreso Manual o Pistola):", height=68, key=f"scan_{vendedor}")
-    if st.button("➕ Agregar Artículo"):
-        if codigo_manual:
+    # CAMBIO IMPORTANTE: st.text_input para soportar pistola / escáner correctamente (Enter = Submit)
+    with st.form("form_carga_rapida", clear_on_submit=True):
+        col_scan1, col_scan2 = st.columns([4, 1])
+        codigo_manual = col_scan1.text_input("Ingreso Manual o Pistola de Código:", key=f"scan_{vendedor}")
+        submit_btn = col_scan2.form_submit_button("➕ Agregar Artículo", use_container_width=True)
+        
+        if submit_btn and codigo_manual:
             exito, msj = agregar_al_carrito(str(vendedor), codigo_manual)
-            if exito: st.success(msj); st.rerun()
-            else: st.error(msj)
+            if exito: 
+                st.success(msj)
+                st.rerun()
+            else: 
+                st.error(msj)
 
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []
@@ -392,7 +399,7 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. (La pantalla se limpia en cada consulta nueva para que no te confundas).")
+    st.info("Escribí o dictá tu orden. Ej: 'Cargame 2 unidades del código X', 'Haceme presupuesto para Luis', 'Descontame 1 filtro'.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -401,7 +408,7 @@ with tab_asistente:
     if "ultimo_estado" not in st.session_state:
         st.session_state.ultimo_estado = None 
 
-    orden_usuario = st.chat_input("Ej: 'Buscame correas', 'Descontame 1 filtro' o 'Filtrame artículos del proveedor X'")
+    orden_usuario = st.chat_input("Dicte o escriba aquí...")
     
     if orden_usuario:
         st.session_state.ultima_orden = orden_usuario
@@ -428,18 +435,34 @@ with tab_asistente:
                     st.session_state.cliente_activo = {"nombre": nombre_det, "descuento": 0.0}
                     st.session_state.ultima_respuesta = f"⚠️ {texto_ia} (Nota: '{nombre_det}' no está en la base de datos, se aplicará 0% de descuento)."
                     st.session_state.ultimo_estado = "normal"
+            
+            # NUEVA LÓGICA: Agregar por voz al carrito
+            elif accion == "agregar_carrito":
+                id_producto = respuesta_json.get("id_producto")
+                cant = int(respuesta_json.get("cantidad", 1))
+                # Siempre lo asignamos a la "Caja Principal" si viene por voz
+                exito, msj_db = agregar_al_carrito("Caja Principal", id_producto, cant)
+                if exito:
+                    st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})"
+                    st.session_state.ultimo_estado = "success"
+                else:
+                    st.session_state.ultima_respuesta = f"❌ Error: {msj_db}"
+                    st.session_state.ultimo_estado = "error"
+
             elif accion == "baja":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
                 exito, msj_db = registrar_merma(id_producto, cant)
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
+            
             elif accion == "alta":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
                 exito, msj_db = registrar_aumento_stock(id_producto, cant)
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
+            
             else: 
                 st.session_state.ultima_respuesta = texto_ia
                 st.session_state.ultimo_estado = "normal"
