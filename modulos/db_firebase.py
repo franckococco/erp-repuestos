@@ -24,6 +24,28 @@ def inicializar_firebase():
 
 db = inicializar_firebase()
 
+# --- GESTIÓN DE CLIENTES (NUEVO) ---
+def obtener_clientes() -> dict:
+    docs = db.collection("clientes").get()
+    return {d.id: d.to_dict() or {} for d in docs}
+
+def configurar_cliente(nombre, cuit_dni, descuento=0.0):
+    id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
+    if not id_cli:
+        return False, "CUIT/DNI inválido."
+    db.collection("clientes").document(id_cli).set({
+        "nombre": str(nombre).upper(),
+        "cuit_dni": id_cli,
+        "descuento": float(descuento),
+        "actualizado": datetime.now(timezone.utc)
+    }, merge=True)
+    return True, "Cliente configurado."
+
+def eliminar_cliente(cuit_dni):
+    id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
+    db.collection("clientes").document(id_cli).delete()
+    return True
+
 # --- GESTIÓN DE MARCAS ---
 def obtener_marcas() -> list:
     docs = db.collection("marcas").get()
@@ -163,7 +185,6 @@ def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base
     if ref_prod.get().exists:
         return False, f"El producto con código {codigo_base} y marca {marca_limpia} ya existe."
 
-    # SOLUCIÓN DEL ERROR PYLANCE .get() en None:
     prov_doc = db.collection("proveedores").document(str(cuit_proveedor)).get()
     datos_proveedor_db = prov_doc.to_dict() or {} 
     nombre_proveedor = datos_proveedor_db.get("nombre", "DESCONOCIDO") if prov_doc.exists else "DESCONOCIDO"
@@ -310,7 +331,7 @@ def confirmar_venta(vendedor):
     return True, "Venta confirmada."
 
 def borrar_toda_la_base_de_datos():
-    for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas", "auditoria_ingresos"]:
+    for col in ["productos", "facturas_procesadas", "presupuestos_activos", "auditoria_mermas", "auditoria_ingresos", "clientes"]:
         docs = db.collection(col).get()
         for d in docs:
             d.reference.delete()

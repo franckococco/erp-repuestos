@@ -15,7 +15,6 @@ def preprocesar_texto_usuario(texto):
     def unir_numeros(match):
         return match.group(0).replace(" ", "")
     
-    # Busca 2 o más bloques de números separados por espacios
     texto_limpio = re.sub(r'(?:\d+\s+)+\d+', unir_numeros, texto)
     return texto_limpio
 
@@ -37,7 +36,6 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     inv_str = ""
     for item in (inventario_actual or []):
         if not isinstance(item, dict): continue
-        # Integramos proveedor y código al contexto para permitir filtros avanzados
         inv_str += f"- ID: {item.get('id')}, Código: {item.get('codigo', 'S/C')}, Desc: {item.get('descripcion')}, Marca: {item.get('marca')}, Proveedor: {item.get('proveedor', 'Desconocido')}, Stock: {item.get('stock')}, Precio: ${item.get('precio_venta')}\n"
 
     if not inv_str:
@@ -53,12 +51,13 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     (Nota interna: la orden cruda original era "{texto_usuario}")
 
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. CÓDIGO VS PRECIO: Si el usuario menciona un número suelto sin la palabra "pesos" o el signo "$", asume SIEMPRE que es un CÓDIGO de artículo o parte de la descripción, NUNCA un precio. (Ej: "12500" busca el código 12500. "12500 pesos" busca por precio).
+    1. CÓDIGO VS PRECIO: Si el usuario menciona un número suelto sin la palabra "pesos" o el signo "$", asume SIEMPRE que es un CÓDIGO de artículo o parte de la descripción, NUNCA un precio.
     2. FILTROS POR PROVEEDOR: Si el usuario pide "filtrar por" o "buscar proveedor X", lista todos los productos cuyo campo Proveedor coincida.
-    3. STOCK MÍNIMO / CRÍTICO: Si el usuario pregunta por "stock mínimo", "bajo stock" o "sin stock", lista los productos con stock menor o igual a 3. Si además menciona un proveedor, aplica ambos filtros cruzados.
-    4. FORMATO DE RESPUESTA: Para consultas, formatea la respuesta con viñetas claras mostrando: Código, Descripción, Proveedor, Stock y Precio.
+    3. STOCK MÍNIMO / CRÍTICO: Si el usuario pregunta por "stock mínimo", "bajo stock" o "sin stock", lista los productos con stock menor o igual a 3.
+    4. CLIENTES Y PRESUPUESTOS: Si el usuario pide hacer un presupuesto, cotización o preparar un pedido para un cliente específico (ej: "presupuesto para Luis", "empeza a cargarle a Juan"), detecta el nombre del cliente.
+    5. FORMATO DE RESPUESTA: Para consultas, formatea la respuesta con viñetas claras mostrando: Código, Descripción, Proveedor, Stock y Precio.
 
-    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas tres opciones:
+    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas cuatro opciones:
 
     OPCIÓN 1 (Consulta/Búsqueda/Filtro):
     {{"accion": "consulta", "respuesta": "Tu respuesta respetando los saltos de línea y viñetas."}}
@@ -68,10 +67,12 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
 
     OPCIÓN 3 (Alta de Stock / Aumentar):
     {{"accion": "alta", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
+
+    OPCIÓN 4 (Iniciar Presupuesto para Cliente):
+    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE_DEL_CLIENTE", "respuesta": "Confirmación amigable de que se inicia el presupuesto."}}
     """
 
     try:
-        # Usamos el modelo 70b (mucho más inteligente para acatar reglas estrictas y razonamiento lógico)
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama-3.3-70b-versatile", 
@@ -81,7 +82,6 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
         
-        # Limpieza de seguridad por si Groq devuelve markdown envolviendo el JSON
         if "```json" in texto:
             texto = texto.split("```json")[1].split("```")[0]
         elif "```" in texto:
