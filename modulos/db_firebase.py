@@ -24,7 +24,7 @@ def inicializar_firebase():
 
 db = inicializar_firebase()
 
-# --- GESTIÓN DE CLIENTES (NUEVO) ---
+# --- GESTIÓN DE CLIENTES ---
 def obtener_clientes() -> dict:
     docs = db.collection("clientes").get()
     return {d.id: d.to_dict() or {} for d in docs}
@@ -275,15 +275,27 @@ def obtener_inventario_completo() -> list:
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):
-    ref_prod = db.collection("productos").document(id_producto)
+    id_limpio = str(id_producto).strip().upper()
+    ref_prod = db.collection("productos").document(id_limpio)
     doc = ref_prod.get()
     
-    if not doc.exists:
-        return False, "No existe."
+    datos = None
+    id_real = id_limpio
+
+    if doc.exists:
+        datos = doc.to_dict() or {}
+    else:
+        # Búsqueda inteligente: si escriben solo el código sin la marca
+        docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
+        if docs_codigo:
+            doc = docs_codigo[0]
+            datos = doc.to_dict() or {}
+            id_real = doc.id
+        else:
+            return False, f"El código '{id_limpio}' no se encontró en el inventario."
     
-    datos = doc.to_dict() or {}
     precio = float(datos.get('precio_venta', 0.0))
-    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_producto)
+    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_real)
     
     ref_item.set({
         "descripcion": f"{datos.get('descripcion')} ({datos.get('marca')})",
@@ -291,7 +303,7 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
         "cantidad": firestore.Increment(cantidad) # type: ignore
     }, merge=True)
     
-    return True, "Agregado."
+    return True, f"Agregado: {datos.get('descripcion')}"
 
 def obtener_carrito(vendedor) -> list:
     docs = db.collection("presupuestos_activos").document(vendedor).collection("items").get()

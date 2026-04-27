@@ -51,13 +51,13 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     (Nota interna: la orden cruda original era "{texto_usuario}")
 
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. CÓDIGO VS PRECIO: Si el usuario menciona un número suelto sin la palabra "pesos" o el signo "$", asume SIEMPRE que es un CÓDIGO de artículo o parte de la descripción, NUNCA un precio.
-    2. FILTROS POR PROVEEDOR: Si el usuario pide "filtrar por" o "buscar proveedor X", lista todos los productos cuyo campo Proveedor coincida.
-    3. STOCK MÍNIMO / CRÍTICO: Si el usuario pregunta por "stock mínimo", "bajo stock" o "sin stock", lista los productos con stock menor o igual a 3.
-    4. CLIENTES Y PRESUPUESTOS: Si el usuario pide hacer un presupuesto, cotización o preparar un pedido para un cliente específico (ej: "presupuesto para Luis", "empeza a cargarle a Juan"), detecta el nombre del cliente.
-    5. FORMATO DE RESPUESTA: Para consultas, formatea la respuesta con viñetas claras mostrando: Código, Descripción, Proveedor, Stock y Precio.
+    1. CÓDIGO VS PRECIO: Si el usuario menciona un número suelto sin la palabra "pesos", asume que es un CÓDIGO.
+    2. FILTROS POR PROVEEDOR: Si pide "filtrar por" o "buscar proveedor X", lista productos cuyo Proveedor coincida.
+    3. STOCK MÍNIMO: Si pregunta por "stock mínimo" o "sin stock", lista productos con stock <= 3.
+    4. CLIENTES Y PRESUPUESTOS: Si pide hacer presupuesto o cargarle a un cliente específico, detecta el nombre.
+    5. AGREGAR A PRESUPUESTO/CARRITO: Si el usuario dice "agregame", "cargame", "poneme X unidades de", debes detectar el ID del producto que quiere añadir al presupuesto activo.
 
-    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas cuatro opciones:
+    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas cinco opciones:
 
     OPCIÓN 1 (Consulta/Búsqueda/Filtro):
     {{"accion": "consulta", "respuesta": "Tu respuesta respetando los saltos de línea y viñetas."}}
@@ -69,7 +69,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
     {{"accion": "alta", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
 
     OPCIÓN 4 (Iniciar Presupuesto para Cliente):
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE_DEL_CLIENTE", "respuesta": "Confirmación amigable de que se inicia el presupuesto."}}
+    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE_DEL_CLIENTE", "respuesta": "Confirmación amigable."}}
+
+    OPCIÓN 5 (Añadir producto al carrito/presupuesto en curso):
+    {{"accion": "agregar_carrito", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de agregado al presupuesto."}}
     """
 
     try:
