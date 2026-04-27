@@ -346,28 +346,76 @@ with tab_mostrador:
             
     vendedor = st.radio("Usuario / Dispositivo:", ["Caja Principal", "Celular Depósito"], horizontal=True)
     
-    foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
-    if foto_qr:
-        cod_detectado = decodificar_qr_desde_imagen(Image.open(foto_qr))
-        if cod_detectado:
-            id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
-            exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
-            if exito: st.success(f"Añadido: {id_limpio}")
-            else: st.error(msj)
+    st.write("### ➕ Agregar Productos")
+    
+    # NUEVO: Separamos los 3 métodos en sub-pestañas visuales
+    t_manual, t_ia, t_qr = st.tabs(["⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
+    
+    # 1. PISTOLA / MANUAL
+    with t_manual:
+        with st.form("form_carga_rapida", clear_on_submit=True):
+            col_scan1, col_scan2 = st.columns([4, 1])
+            codigo_manual = col_scan1.text_input("Ingreso Manual o Pistola de Código:", key=f"scan_{vendedor}")
+            submit_btn = col_scan2.form_submit_button("➕ Agregar Artículo", use_container_width=True)
+            
+            if submit_btn and codigo_manual:
+                exito, msj = agregar_al_carrito(str(vendedor), codigo_manual)
+                if exito: 
+                    st.success(msj)
+                    st.rerun()
+                else: 
+                    st.error(msj)
+                    
+    # 2. ASISTENTE IA (VOZ)
+    with t_ia:
+        with st.form("form_ia_mostrador", clear_on_submit=True):
+            col_ia1, col_ia2 = st.columns([4, 1])
+            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden (Ej: 'Cargame 2 unidades del código X', 'Presupuesto para Luis'):", key=f"ia_most_{vendedor}")
+            submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
+            
+            if submit_ia and orden_usuario_mostrador:
+                with st.spinner("Hafid IA procesando..."):
+                    inventario = obtener_inventario_completo() or []
+                    respuesta_json = procesar_orden_voz(orden_usuario_mostrador, inventario) or {}
+                    accion = respuesta_json.get("accion")
+                    
+                    if accion == "agregar_carrito":
+                        id_producto = respuesta_json.get("id_producto")
+                        cant = int(respuesta_json.get("cantidad", 1))
+                        exito, msj_db = agregar_al_carrito(str(vendedor), id_producto, cant)
+                        if exito:
+                            st.success(f"🛒 {msj_db}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error: {msj_db}")
+                            
+                    elif accion == "set_cliente":
+                        nombre_det = respuesta_json.get("nombre_cliente", "").upper()
+                        clientes_db = obtener_clientes() or {}
+                        cliente_encontrado = next((c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()), None)
+                        
+                        if cliente_encontrado:
+                            st.session_state.cliente_activo = {"nombre": cliente_encontrado['nombre'], "descuento": float(cliente_encontrado.get('descuento', 0.0))}
+                            st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
+                            st.rerun()
+                        else:
+                            st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
+                    else:
+                        st.info(respuesta_json.get("respuesta", "Orden procesada."))
 
-    # CAMBIO IMPORTANTE: st.text_input para soportar pistola / escáner correctamente (Enter = Submit)
-    with st.form("form_carga_rapida", clear_on_submit=True):
-        col_scan1, col_scan2 = st.columns([4, 1])
-        codigo_manual = col_scan1.text_input("Ingreso Manual o Pistola de Código:", key=f"scan_{vendedor}")
-        submit_btn = col_scan2.form_submit_button("➕ Agregar Artículo", use_container_width=True)
-        
-        if submit_btn and codigo_manual:
-            exito, msj = agregar_al_carrito(str(vendedor), codigo_manual)
-            if exito: 
-                st.success(msj)
-                st.rerun()
-            else: 
-                st.error(msj)
+    # 3. CÁMARA QR
+    with t_qr:
+        foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
+        if foto_qr:
+            cod_detectado = decodificar_qr_desde_imagen(Image.open(foto_qr))
+            if cod_detectado:
+                id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
+                exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
+                if exito: 
+                    st.success(f"Añadido: {id_limpio}")
+                    st.rerun()
+                else: 
+                    st.error(msj)
 
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []
@@ -396,10 +444,10 @@ with tab_mostrador:
             vaciar_carrito(str(vendedor))
             st.rerun()
 
-# --- PESTAÑA 4: ASISTENTE DE VOZ ---
+# --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Ej: 'Cargame 2 unidades del código X', 'Haceme presupuesto para Luis', 'Descontame 1 filtro'.")
+    st.info("Escribí o dictá tu orden. Ej: 'Buscame pastillas de freno', 'Descontame 1 filtro'.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -436,11 +484,9 @@ with tab_asistente:
                     st.session_state.ultima_respuesta = f"⚠️ {texto_ia} (Nota: '{nombre_det}' no está en la base de datos, se aplicará 0% de descuento)."
                     st.session_state.ultimo_estado = "normal"
             
-            # NUEVA LÓGICA: Agregar por voz al carrito
             elif accion == "agregar_carrito":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
-                # Siempre lo asignamos a la "Caja Principal" si viene por voz
                 exito, msj_db = agregar_al_carrito("Caja Principal", id_producto, cant)
                 if exito:
                     st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})"
