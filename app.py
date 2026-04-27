@@ -25,19 +25,23 @@ from modulos.db_firebase import (
     calcular_cascada_precios,
     registrar_merma,
     registrar_aumento_stock,
-    alta_manual_producto
+    alta_manual_producto,
+    obtener_clientes,
+    configurar_cliente,
+    eliminar_cliente
 )
 from modulos.generador_qr import generar_qr_producto
 
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
-def generar_pdf_presupuesto(vendedor, items, total):
+def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(190, 10, "PRESUPUESTO - HAFID REPUESTOS", new_x="LMARGIN", new_y="NEXT", align="C")
     
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(190, 10, f"Vendedor: {vendedor} | Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(190, 10, f"Cliente: {cliente_nombre} | Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(190, 10, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(10)
     
     pdf.set_font("Helvetica", "B", 10)
@@ -57,8 +61,14 @@ def generar_pdf_presupuesto(vendedor, items, total):
         pdf.ln()
     
     pdf.ln(5)
+    if descuento_aplicado > 0:
+        pdf.set_font("Helvetica", "I", 10)
+        descuento_monto = total * (descuento_aplicado / 100)
+        pdf.cell(190, 8, f"Descuento Cliente ({descuento_aplicado}%): -${descuento_monto:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+    
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(190, 10, f"TOTAL: ${total:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+    total_final = total * (1 - descuento_aplicado / 100)
+    pdf.cell(190, 10, f"TOTAL FINAL: ${total_final:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
     
     return bytes(pdf.output())
 
@@ -66,6 +76,8 @@ st.set_page_config(page_title="Hafid IA", layout="wide")
 
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
+if "cliente_activo" not in st.session_state:
+    st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
 
 tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"])
 
@@ -286,7 +298,6 @@ with tab_inventario:
                     if not codigo_manual or not desc_manual:
                         st.error("❌ El Código y la Descripción son campos obligatorios.")
                     else:
-                        # --- TIPADO FUERTE APLICADO AQUÍ ---
                         llave_prov = str(sel_prov) if sel_prov else ""
                         cuit_seleccionado = str(opciones_prov.get(llave_prov, ""))
                         datos_prov = provs.get(cuit_seleccionado, {})
@@ -322,6 +333,17 @@ with tab_inventario:
 # --- PESTAÑA 3: MOSTRADOR ---
 with tab_mostrador:
     st.header("🛒 Punto de Venta / Presupuestos")
+    
+    col_cli1, col_cli2 = st.columns([3,1])
+    with col_cli1:
+        st.subheader(f"👤 Cliente: {st.session_state.cliente_activo['nombre']}")
+        if st.session_state.cliente_activo['descuento'] > 0:
+            st.caption(f"Descuento especial aplicado: {st.session_state.cliente_activo['descuento']}%")
+    with col_cli2:
+        if st.button("❌ Limpiar Cliente", use_container_width=True):
+            st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
+            st.rerun()
+            
     vendedor = st.radio("Usuario / Dispositivo:", ["Caja Principal", "Celular Depósito"], horizontal=True)
     
     foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
@@ -343,9 +365,16 @@ with tab_mostrador:
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []
     if carrito:
-        total = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+        total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+        desc_porc = st.session_state.cliente_activo['descuento']
+        total_final = total_bruto * (1 - desc_porc / 100)
+        
         st.table(carrito)
-        st.write(f"### Total: ${total:,.2f}")
+        
+        st.write(f"### Subtotal: ${total_bruto:,.2f}")
+        if desc_porc > 0:
+            st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
+        st.write(f"## TOTAL: ${total_final:,.2f}")
         
         col_cob, col_pdf, col_vac = st.columns(3)
         if col_cob.button("✅ Confirmar Venta", type="primary", use_container_width=True):
@@ -353,7 +382,7 @@ with tab_mostrador:
             if exito: st.success(msj); st.rerun()
             else: st.error(msj)
         
-        pdf_bytes = generar_pdf_presupuesto(str(vendedor), carrito, total)
+        pdf_bytes = generar_pdf_presupuesto(str(vendedor), carrito, total_bruto, st.session_state.cliente_activo['nombre'], desc_porc)
         col_pdf.download_button("📄 Imprimir PDF", pdf_bytes, f"Presupuesto_{vendedor}.pdf", "application/pdf", use_container_width=True)
         
         if col_vac.button("🗑️ Vaciar", use_container_width=True):
@@ -386,20 +415,31 @@ with tab_asistente:
             accion = respuesta_json.get("accion")
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
             
-            if accion == "baja":
+            if accion == "set_cliente":
+                nombre_det = respuesta_json.get("nombre_cliente", "").upper()
+                clientes_db = obtener_clientes() or {}
+                cliente_encontrado = next((c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()), None)
+                
+                if cliente_encontrado:
+                    st.session_state.cliente_activo = {"nombre": cliente_encontrado['nombre'], "descuento": float(cliente_encontrado.get('descuento', 0.0))}
+                    st.session_state.ultima_respuesta = f"✅ Listo. Cliente {cliente_encontrado['nombre']} activado ({cliente_encontrado['descuento']}% descuento)."
+                    st.session_state.ultimo_estado = "success"
+                else:
+                    st.session_state.cliente_activo = {"nombre": nombre_det, "descuento": 0.0}
+                    st.session_state.ultima_respuesta = f"⚠️ {texto_ia} (Nota: '{nombre_det}' no está en la base de datos, se aplicará 0% de descuento)."
+                    st.session_state.ultimo_estado = "normal"
+            elif accion == "baja":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
                 exito, msj_db = registrar_merma(id_producto, cant)
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
-            
             elif accion == "alta":
                 id_producto = respuesta_json.get("id_producto")
                 cant = int(respuesta_json.get("cantidad", 1))
                 exito, msj_db = registrar_aumento_stock(id_producto, cant)
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
-
             else: 
                 st.session_state.ultima_respuesta = texto_ia
                 st.session_state.ultimo_estado = "normal"
@@ -433,7 +473,7 @@ with tab_config:
     
     st.divider()
     
-    tab_prov, tab_marcas = st.tabs(["🏭 Proveedores y Recargos", "🏷️ Marcas"])
+    tab_prov, tab_marcas, tab_clientes = st.tabs(["🏭 Proveedores y Recargos", "🏷️ Marcas", "👥 Clientes"])
     
     with tab_prov:
         st.subheader("Alta y Edición de Proveedores")
@@ -510,3 +550,45 @@ with tab_config:
                     st.rerun()
         else:
             st.info("Aún no hay marcas cargadas.")
+
+    with tab_clientes:
+        st.subheader("Alta y Edición de Clientes")
+        with st.form("conf_cliente"):
+            c1, c2, c3 = st.columns([3, 2, 1])
+            nombre_cli = c1.text_input("Nombre / Razón Social").upper()
+            cuit_cli = c2.text_input("DNI o CUIT")
+            desc_cli = c3.number_input("% Descuento", min_value=0.0, step=1.0)
+            
+            if st.form_submit_button("Guardar Cliente"):
+                if nombre_cli and cuit_cli:
+                    configurar_cliente(nombre_cli, cuit_cli, desc_cli)
+                    st.success(f"Cliente {nombre_cli} guardado.")
+                    st.rerun()
+                else:
+                    st.error("El nombre y el DNI/CUIT son obligatorios.")
+        
+        st.divider()
+        st.write("### Directorio de Clientes")
+        clis = obtener_clientes() or {}
+        if clis:
+            datos_cli = []
+            for id_c, d_cli in clis.items():
+                datos_cli.append({
+                    "Nombre": d_cli.get("nombre", ""),
+                    "CUIT/DNI": id_c,
+                    "Descuento": f"{d_cli.get('descuento', 0)}%"
+                })
+            st.dataframe(datos_cli, use_container_width=True)
+            
+            with st.expander("🗑️ Eliminar un Cliente"):
+                cli_borrar = st.selectbox(
+                    "Seleccionar cliente a eliminar:",
+                    options=list(clis.keys()),
+                    format_func=lambda x: f"{(clis.get(x) or {}).get('nombre', 'Desconocido')} (Doc: {x})"
+                )
+                if st.button("Eliminar Cliente", type="primary"):
+                    eliminar_cliente(str(cli_borrar))
+                    st.success("Cliente eliminado.")
+                    st.rerun()
+        else:
+            st.info("Aún no hay clientes cargados.")
