@@ -18,7 +18,8 @@ def preprocesar_texto_usuario(texto):
     texto_limpio = re.sub(r'(?:\d+\s+)+\d+', unir_numeros, texto)
     return texto_limpio
 
-def procesar_orden_voz(texto_usuario, inventario_actual):
+# Mantenemos el parámetro inventario_actual para no romper otras funciones, pero ya no lo mandamos a la IA
+def procesar_orden_voz(texto_usuario, inventario_actual=None):
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         try:
@@ -30,49 +31,36 @@ def procesar_orden_voz(texto_usuario, inventario_actual):
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
 
     client = Groq(api_key=api_key)
-    
     texto_procesado = preprocesar_texto_usuario(texto_usuario)
 
-    inv_str = ""
-    for item in (inventario_actual or []):
-        if not isinstance(item, dict): continue
-        inv_str += f"- ID: {item.get('id')}, Código: {item.get('codigo', 'S/C')}, Desc: {item.get('descripcion')}, Marca: {item.get('marca')}, Proveedor: {item.get('proveedor', 'Desconocido')}, Stock: {item.get('stock')}, Precio: ${item.get('precio_venta')}\n"
-
-    if not inv_str:
-        inv_str = "El inventario está vacío."
-
     prompt = f"""
-    Eres el sistema estricto de búsqueda de depósito de 'Hafid Repuestos'.
-
-    INVENTARIO ACTUAL:
-    {inv_str}
+    Eres el asistente rápido de mostrador de 'Hafid Repuestos'.
+    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO Y LAS PALABRAS CLAVE. NO TIENES ACCESO AL INVENTARIO.
 
     ORDEN DEL USUARIO PROCESADA: "{texto_procesado}"
-    (Nota interna: la orden cruda original era "{texto_usuario}")
+    (Nota interna: la orden original era "{texto_usuario}")
 
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. CÓDIGO VS PRECIO: Si el usuario menciona un número suelto sin la palabra "pesos", asume que es un CÓDIGO.
-    2. FILTROS POR PROVEEDOR: Si pide "filtrar por" o "buscar proveedor X", lista productos cuyo Proveedor coincida.
-    3. STOCK MÍNIMO: Si pregunta por "stock mínimo" o "sin stock", lista productos con stock <= 3.
-    4. CLIENTES Y PRESUPUESTOS: Si pide hacer presupuesto o cargarle a un cliente específico, detecta el nombre.
-    5. AGREGAR A PRESUPUESTO/CARRITO: Si el usuario dice "agregame", "cargame", "poneme X unidades de", debes detectar el ID del producto que quiere añadir al presupuesto activo.
+    1. BÚSQUEDA: Si pide "filtrar", "buscar", "tenemos", "hay", extrae únicamente la palabra o palabras clave principales (ej: si dice "buscame pastillas bosch", el termino es "pastillas bosch").
+    2. CLIENTES Y PRESUPUESTOS: Si pide hacer presupuesto para alguien, detecta el nombre.
+    3. CÓDIGOS PARA AGREGAR/DESCONTAR: Si dice "agregame", "cargame", "descontame" seguido de unidades y un código, asume que es el código o nombre del producto.
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas cinco opciones:
 
-    OPCIÓN 1 (Consulta/Búsqueda/Filtro):
-    {{"accion": "consulta", "respuesta": "Tu respuesta respetando los saltos de línea y viñetas."}}
+    OPCIÓN 1 (Búsqueda general de repuestos):
+    {{"accion": "buscar", "termino": "PALABRAS_CLAVE", "respuesta": "Buscando..."}}
 
     OPCIÓN 2 (Baja de Stock / Descontar):
-    {{"accion": "baja", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
+    {{"accion": "baja", "id_producto": "CODIGO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
 
     OPCIÓN 3 (Alta de Stock / Aumentar):
-    {{"accion": "alta", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
+    {{"accion": "alta", "id_producto": "CODIGO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
 
     OPCIÓN 4 (Iniciar Presupuesto para Cliente):
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE_DEL_CLIENTE", "respuesta": "Confirmación amigable."}}
+    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE", "respuesta": "Confirmación amigable."}}
 
-    OPCIÓN 5 (Añadir producto al carrito/presupuesto en curso):
-    {{"accion": "agregar_carrito", "id_producto": "ID_EXACTO", "cantidad": NUMERO, "respuesta": "Confirmación de agregado al presupuesto."}}
+    OPCIÓN 5 (Añadir producto EXACTO al carrito/presupuesto):
+    {{"accion": "agregar_carrito", "id_producto": "CODIGO_O_PALABRA", "cantidad": NUMERO, "respuesta": "Agregando..."}}
     """
 
     try:
