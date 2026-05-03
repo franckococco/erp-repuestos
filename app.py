@@ -5,6 +5,7 @@ import zipfile
 from io import BytesIO
 from fpdf import FPDF
 from datetime import datetime
+import os
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
@@ -36,6 +37,18 @@ from modulos.generador_qr import generar_qr_producto
 def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
     pdf = FPDF()
     pdf.add_page()
+    
+    # Intentar cargar el logo si existe en la carpeta
+    if os.path.exists("logo_hafid.jpeg"):
+        pdf.image("logo_hafid.jpeg", x=85, y=10, w=40)
+        pdf.ln(35)
+    elif os.path.exists("logo_hafid.jpg"):
+        pdf.image("logo_hafid.jpg", x=85, y=10, w=40)
+        pdf.ln(35)
+    elif os.path.exists("logo_hafid.png"):
+        pdf.image("logo_hafid.png", x=85, y=10, w=40)
+        pdf.ln(35)
+
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(190, 10, "PRESUPUESTO - HAFID REPUESTOS", new_x="LMARGIN", new_y="NEXT", align="C")
     
@@ -78,6 +91,10 @@ if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
 if "cliente_activo" not in st.session_state:
     st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
+if "resultados_ia_mostrador" not in st.session_state:
+    st.session_state.resultados_ia_mostrador = None
+if "msg_ia_mostrador" not in st.session_state:
+    st.session_state.msg_ia_mostrador = None
 
 tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"])
 
@@ -348,10 +365,38 @@ with tab_mostrador:
     
     st.write("### ➕ Agregar Productos")
     
-    # NUEVO: Separamos los 3 métodos en sub-pestañas visuales
-    t_manual, t_ia, t_qr = st.tabs(["⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
+    t_buscar, t_manual, t_ia, t_qr = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
     
-    # 1. PISTOLA / MANUAL
+    # 1. BUSCADOR INTELIGENTE
+    with t_buscar:
+        inv_completo = obtener_inventario_completo() or []
+        if inv_completo:
+            opciones_desc = {}
+            for item in inv_completo:
+                if isinstance(item, dict):
+                    desc = f"{item.get('codigo', '')} | {item.get('marca', '')} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
+                    opciones_desc[desc] = item.get('id')
+            
+            sel_prod = st.selectbox("Escriba para buscar por nombre, código o marca:", options=[""] + list(opciones_desc.keys()))
+            
+            col_b1, col_b2 = st.columns([1, 3])
+            cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
+            
+            if col_b2.button("➕ Agregar al Presupuesto", use_container_width=True, type="primary"):
+                if sel_prod:
+                    id_real = opciones_desc[sel_prod]
+                    exito, msj = agregar_al_carrito(str(vendedor), id_real, int(cant_b))
+                    if exito:
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
+                else:
+                    st.warning("Seleccione un producto del menú desplegable primero.")
+        else:
+            st.info("El inventario está vacío. Agregue productos primero.")
+
+    # 2. PISTOLA / MANUAL
     with t_manual:
         with st.form("form_carga_rapida", clear_on_submit=True):
             col_scan1, col_scan2 = st.columns([4, 1])
@@ -366,11 +411,11 @@ with tab_mostrador:
                 else: 
                     st.error(msj)
                     
-    # 2. ASISTENTE IA (VOZ)
+    # 3. ASISTENTE IA (VOZ) - MEJORADO CON BÚSQUEDA PYTHON DETERMINISTA
     with t_ia:
         with st.form("form_ia_mostrador", clear_on_submit=True):
             col_ia1, col_ia2 = st.columns([4, 1])
-            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden (Ej: 'Cargame 2 unidades del código X', 'Presupuesto para Luis'):", key=f"ia_most_{vendedor}")
+            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden (Ej: 'Buscame fastix', 'Cargame 2 unidades del código X'):", key=f"ia_most_{vendedor}")
             submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
             
             if submit_ia and orden_usuario_mostrador:
@@ -385,6 +430,7 @@ with tab_mostrador:
                         exito, msj_db = agregar_al_carrito(str(vendedor), id_producto, cant)
                         if exito:
                             st.success(f"🛒 {msj_db}")
+                            st.session_state.resultados_ia_mostrador = None
                             st.rerun()
                         else:
                             st.error(f"❌ Error: {msj_db}")
@@ -397,13 +443,61 @@ with tab_mostrador:
                         if cliente_encontrado:
                             st.session_state.cliente_activo = {"nombre": cliente_encontrado['nombre'], "descuento": float(cliente_encontrado.get('descuento', 0.0))}
                             st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
+                            st.session_state.resultados_ia_mostrador = None
                             st.rerun()
                         else:
                             st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
+                            
+                    elif accion == "buscar" or accion == "consulta":
+                        termino = respuesta_json.get("termino", "")
+                        if not termino:
+                            termino = orden_usuario_mostrador.lower().replace("buscame", "").replace("buscar", "").strip()
+                            
+                        if termino:
+                            palabras_clave = termino.lower().split()
+                            encontrados = []
+                            for prod in inventario:
+                                if isinstance(prod, dict):
+                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('marca', '')} {prod.get('codigo', '')}".lower()
+                                    # Verificamos que TODAS las palabras clave estén en el texto de búsqueda
+                                    if all(palabra in texto_busqueda for palabra in palabras_clave):
+                                        encontrados.append(prod)
+                            
+                            if encontrados:
+                                st.session_state.resultados_ia_mostrador = encontrados[:5] # Límite para el celu
+                                st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
+                            else:
+                                st.warning(f"No encontré coincidencias para '{termino}'.")
+                                st.session_state.resultados_ia_mostrador = None
+                        else:
+                            st.warning("No detecté qué producto querés buscar.")
+                            st.session_state.resultados_ia_mostrador = None
                     else:
                         st.info(respuesta_json.get("respuesta", "Orden procesada."))
+                        st.session_state.resultados_ia_mostrador = None
 
-    # 3. CÁMARA QR
+        # --- DIBUJAR LOS BOTONES (Fuera del formulario para que no se borren) ---
+        if st.session_state.resultados_ia_mostrador:
+            st.markdown(f"### {st.session_state.msg_ia_mostrador}")
+            for res in st.session_state.resultados_ia_mostrador:
+                if isinstance(res, dict):
+                    precio_f = float(res.get('precio_venta', 0))
+                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('marca', '')}) - ${precio_f:,.2f}"
+                    
+                    if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
+                        exito, msj_db = agregar_al_carrito(str(vendedor), res.get('id'), 1)
+                        if exito:
+                            st.success(f"🛒 Agregado al carrito!")
+                            st.session_state.resultados_ia_mostrador = None
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Error: {msj_db}")
+                            
+            if st.button("❌ Cancelar Búsqueda", key="btn_cancel_search_most"):
+                st.session_state.resultados_ia_mostrador = None
+                st.rerun()
+
+    # 4. CÁMARA QR
     with t_qr:
         foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
         if foto_qr:
@@ -508,6 +602,25 @@ with tab_asistente:
                 exito, msj_db = registrar_aumento_stock(id_producto, cant)
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
+                
+            elif accion == "buscar" or accion == "consulta":
+                termino = respuesta_json.get("termino", "").lower()
+                palabras_clave = termino.split()
+                encontrados = []
+                for p in inventario:
+                    if isinstance(p, dict):
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower()
+                        if all(palabra in texto_busqueda for palabra in palabras_clave):
+                            encontrados.append(p)
+                
+                if encontrados:
+                    lista_txt = f"🔍 Resultados para '{termino}':\n\n"
+                    for p in encontrados[:10]:
+                        lista_txt += f"- **{p.get('codigo', '')}** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
+                    st.session_state.ultima_respuesta = lista_txt
+                else:
+                    st.session_state.ultima_respuesta = f"No hay stock de nada relacionado con '{termino}'."
+                st.session_state.ultimo_estado = "normal"
             
             else: 
                 st.session_state.ultima_respuesta = texto_ia
