@@ -158,8 +158,10 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "proveedor": proveedor,
                 "cuit_proveedor": cuit_proveedor,
                 "ubicacion": {
-                    "mostrador": "",
-                    "deposito": ""
+                    "pasillo": 0,
+                    "piso": 0,
+                    "modulo": 0,
+                    "fila": 0
                 },
                 "ultima_actualizacion": ahora
             })
@@ -176,7 +178,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     return True, "Mercadería cargada correctamente."
 
 # --- ALTA MANUAL DE PRODUCTO ---
-def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base, recargo, stock, ubi_mostrador, ubi_deposito):
+def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper()
     marca_limpia = str(marca).strip().upper()
     id_producto = f"{codigo_base}_{marca_limpia}"
@@ -203,42 +205,52 @@ def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base
         "proveedor": nombre_proveedor,
         "cuit_proveedor": str(cuit_proveedor),
         "ubicacion": {
-            "mostrador": str(ubi_mostrador).strip().upper(),
-            "deposito": str(ubi_deposito).strip().upper()
+            "pasillo": int(pasillo),
+            "piso": int(piso),
+            "modulo": int(modulo),
+            "fila": int(fila)
         },
         "ultima_actualizacion": ahora
     })
     
     return True, f"Producto {codigo_base} cargado exitosamente."
 
-def actualizar_ubicacion_producto(id_producto, ubi_mostrador, ubi_deposito):
+def actualizar_ubicacion_producto(id_producto, pasillo, piso, modulo, fila):
     ref_prod = db.collection("productos").document(id_producto)
     if not ref_prod.get().exists:
         return False, "Producto no existe."
         
     ref_prod.update({
-        "ubicacion.mostrador": str(ubi_mostrador).strip().upper(),
-        "ubicacion.deposito": str(ubi_deposito).strip().upper()
+        "ubicacion.pasillo": int(pasillo),
+        "ubicacion.piso": int(piso),
+        "ubicacion.modulo": int(modulo),
+        "ubicacion.fila": int(fila)
     })
     return True, "Ubicaciones actualizadas."
 
 # --- ASISTENTE DE DEPÓSITO ---
 def registrar_merma(id_producto, cantidad):
-    ref_prod = db.collection("productos").document(id_producto)
+    id_limpio = str(id_producto).strip().upper()
+    ref_prod = db.collection("productos").document(id_limpio)
     
     if not ref_prod.get().exists:
-        return False, "Producto no existe."
+        docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
+        if docs_codigo:
+            ref_prod = db.collection("productos").document(docs_codigo[0].id)
+            id_limpio = docs_codigo[0].id
+        else:
+            return False, f"El código '{id_limpio}' no se encontró en el inventario."
         
     batch = db.batch()
     batch.update(ref_prod, {
-        "stock": firestore.Increment(-cantidad), # type: ignore
+        "stock": firestore.Increment(-int(cantidad)), # type: ignore
         "ultima_actualizacion": datetime.now(timezone.utc)
     })
     
     ref_baja = db.collection("auditoria_mermas").document()
     batch.set(ref_baja, {
-        "id_producto": id_producto,
-        "cantidad_baja": cantidad,
+        "id_producto": id_limpio,
+        "cantidad_baja": int(cantidad),
         "fecha": datetime.now(timezone.utc),
         "motivo": "Ajuste reportado vía Asistente de Voz"
     })
@@ -247,21 +259,28 @@ def registrar_merma(id_producto, cantidad):
     return True, f"Baja de {cantidad} unidades registrada."
 
 def registrar_aumento_stock(id_producto, cantidad):
-    ref_prod = db.collection("productos").document(id_producto)
+    id_limpio = str(id_producto).strip().upper()
+    ref_prod = db.collection("productos").document(id_limpio)
     
+    # Búsqueda inteligente por si la IA solo manda el código sin la marca
     if not ref_prod.get().exists:
-        return False, "Producto no existe en el sistema."
+        docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
+        if docs_codigo:
+            ref_prod = db.collection("productos").document(docs_codigo[0].id)
+            id_limpio = docs_codigo[0].id
+        else:
+            return False, f"El código '{id_limpio}' no existe en el sistema."
         
     batch = db.batch()
     batch.update(ref_prod, {
-        "stock": firestore.Increment(cantidad), # type: ignore
+        "stock": firestore.Increment(int(cantidad)), # type: ignore
         "ultima_actualizacion": datetime.now(timezone.utc)
     })
     
     ref_alta = db.collection("auditoria_ingresos").document()
     batch.set(ref_alta, {
-        "id_producto": id_producto,
-        "cantidad_ingreso": cantidad,
+        "id_producto": id_limpio,
+        "cantidad_ingreso": int(cantidad),
         "fecha": datetime.now(timezone.utc),
         "motivo": "Ingreso manual vía Asistente de Voz"
     })
@@ -300,7 +319,7 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     ref_item.set({
         "descripcion": f"{datos.get('descripcion')} ({datos.get('marca')})",
         "precio_unitario": precio,
-        "cantidad": firestore.Increment(cantidad) # type: ignore
+        "cantidad": firestore.Increment(int(cantidad)) # type: ignore
     }, merge=True)
     
     return True, f"Agregado: {datos.get('descripcion')}"

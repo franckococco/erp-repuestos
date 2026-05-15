@@ -35,32 +35,38 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
 
     prompt = f"""
     Eres el asistente rápido de mostrador de 'Hafid Repuestos'.
-    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO Y LAS PALABRAS CLAVE. NO TIENES ACCESO AL INVENTARIO.
+    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO Y LAS PALABRAS CLAVE. NO TIENES ACCESO AL INVENTARIO NI A LOS PRECIOS.
 
     ORDEN DEL USUARIO PROCESADA: "{texto_procesado}"
     (Nota interna: la orden original era "{texto_usuario}")
 
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. BÚSQUEDA: Si pide "filtrar", "buscar", "tenemos", "hay", extrae únicamente la palabra o palabras clave principales (ej: si dice "buscame pastillas bosch", el termino es "pastillas bosch").
-    2. CLIENTES Y PRESUPUESTOS: Si pide hacer presupuesto para alguien, detecta el nombre.
-    3. CÓDIGOS PARA AGREGAR/DESCONTAR: Si dice "agregame", "cargame", "descontame" seguido de unidades y un código, asume que es el código o nombre del producto.
+    1. BÚSQUEDA GENERAL: Si pide "filtrar", "buscar", "tenemos", "hay", extrae únicamente la palabra clave.
+    2. CONSULTA DE UBICACIÓN: Si pregunta "dónde está", "ubicación", "en qué pasillo", "dónde guardo", extrae el código o nombre.
+    3. ALTA DE STOCK (SUMAR): Si dice "agregar", "sumar", "ingresar", "cargar" seguido de unidades y un código/producto.
+    4. BAJA DE STOCK (RESTAR): Si dice "descontar", "restar", "sacar", "bajar" seguido de unidades y un código/producto.
+    5. CLIENTES Y PRESUPUESTOS: Si pide hacer presupuesto para alguien, detecta el nombre.
+    6. CARRITO: Si pide "añadir", "meter al carrito" un producto exacto.
 
-    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas cinco opciones:
+    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
-    OPCIÓN 1 (Búsqueda general de repuestos):
-    {{"accion": "buscar", "termino": "PALABRAS_CLAVE", "respuesta": "Buscando..."}}
+    OPCIÓN 1 (Búsqueda general):
+    {{"accion": "buscar", "termino": "PALABRAS_CLAVE", "respuesta": "Buscando información..."}}
 
-    OPCIÓN 2 (Baja de Stock / Descontar):
-    {{"accion": "baja", "id_producto": "CODIGO", "cantidad": NUMERO, "respuesta": "Confirmación de baja."}}
+    OPCIÓN 2 (Consulta de Ubicación):
+    {{"accion": "ubicacion", "termino": "PALABRAS_CLAVE", "respuesta": "Buscando ubicación en el depósito..."}}
 
-    OPCIÓN 3 (Alta de Stock / Aumentar):
-    {{"accion": "alta", "id_producto": "CODIGO", "cantidad": NUMERO, "respuesta": "Confirmación de aumento."}}
+    OPCIÓN 3 (Alta de Stock / Sumar):
+    {{"accion": "alta", "id_producto": "CODIGO_O_PALABRA", "cantidad": NUMERO, "respuesta": "Procesando alta de stock..."}}
 
-    OPCIÓN 4 (Iniciar Presupuesto para Cliente):
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE", "respuesta": "Confirmación amigable."}}
+    OPCIÓN 4 (Baja de Stock / Descontar):
+    {{"accion": "baja", "id_producto": "CODIGO_O_PALABRA", "cantidad": NUMERO, "respuesta": "Procesando baja de stock..."}}
 
-    OPCIÓN 5 (Añadir producto EXACTO al carrito/presupuesto):
-    {{"accion": "agregar_carrito", "id_producto": "CODIGO_O_PALABRA", "cantidad": NUMERO, "respuesta": "Agregando..."}}
+    OPCIÓN 5 (Iniciar Presupuesto para Cliente):
+    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE", "respuesta": "Iniciando presupuesto..."}}
+
+    OPCIÓN 6 (Añadir producto EXACTO al carrito/presupuesto):
+    {{"accion": "agregar_carrito", "id_producto": "CODIGO_O_PALABRA", "cantidad": NUMERO, "respuesta": "Agregando al carrito..."}}
     """
 
     try:
