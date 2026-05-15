@@ -137,7 +137,7 @@ with tab_carga:
             df_articulos['marca'] = "GENERICO"
             
         marcas_db = obtener_marcas() or []
-        opciones_marcas = ["GENERICO"] + marcas_db if marcas_db else ["GENERICO"]
+        opciones_marcas = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas_db))
 
         df_editado = st.data_editor(
             df_articulos,
@@ -249,14 +249,18 @@ with tab_inventario:
                 if isinstance(item, dict):
                     ubi = item.get('ubicacion', {})
                     if isinstance(ubi, dict):
-                        item['Mostrador'] = ubi.get('mostrador', '')
-                        item['Depósito'] = ubi.get('deposito', '')
+                        item['Pasillo'] = ubi.get('pasillo', 0)
+                        item['Piso'] = ubi.get('piso', 0)
+                        item['Módulo'] = ubi.get('modulo', 0)
+                        item['Fila'] = ubi.get('fila', 0)
                     else:
-                        item['Mostrador'] = ''
-                        item['Depósito'] = ''
+                        item['Pasillo'] = 0
+                        item['Piso'] = 0
+                        item['Módulo'] = 0
+                        item['Fila'] = 0
 
             df = pd.DataFrame(inv)
-            cols_deseadas = ['id', 'marca', 'descripcion', 'proveedor', 'stock', 'precio_venta', 'Mostrador', 'Depósito']
+            cols_deseadas = ['id', 'marca', 'descripcion', 'proveedor', 'stock', 'precio_venta', 'Pasillo', 'Piso', 'Módulo', 'Fila']
             cols_existentes = [c for c in cols_deseadas if c in df.columns]
             
             busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
@@ -299,15 +303,21 @@ with tab_inventario:
                 st.write("#### 2. Identidad del Repuesto")
                 col_cod, col_marca = st.columns(2)
                 codigo_manual = col_cod.text_input("Código de Artículo (Obligatorio)")
-                marca_manual = col_marca.selectbox("Marca", options=["GENERICO"] + marcas)
+                opciones_marcas_manual = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas))
+                marca_manual = col_marca.selectbox("Marca", options=opciones_marcas_manual)
                 desc_manual = st.text_input("Descripción del Producto (Obligatorio)")
 
-                st.write("#### 3. Valores y Logística")
-                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                st.write("#### 3. Valores")
+                col_v1, col_v2 = st.columns(2)
                 precio_base_manual = col_v1.number_input("Precio Costo Base ($)", min_value=0.0, format="%.2f", step=100.0)
                 stock_manual = col_v2.number_input("Stock Inicial", min_value=1, step=1)
-                ubi_mostrador = col_v3.text_input("Ubicación Mostrador", placeholder="Ej: Estante A-4")
-                ubi_deposito = col_v4.text_input("Ubicación Depósito", placeholder="Ej: Sector B Rack 2")
+
+                st.write("#### 4. Ubicación Exacta")
+                col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+                pasillo_manual = col_u1.number_input("Pasillo", min_value=0, step=1)
+                piso_manual = col_u2.number_input("Piso", min_value=0, step=1)
+                modulo_manual = col_u3.number_input("Módulo", min_value=0, step=1)
+                fila_manual = col_u4.number_input("Fila", min_value=0, step=1)
 
                 submit_alta = st.form_submit_button("💾 Guardar Repuesto en Inventario", type="primary", use_container_width=True)
 
@@ -337,8 +347,10 @@ with tab_inventario:
                             precio_base=precio_base_manual,
                             recargo=recargo_financiero,
                             stock=stock_manual,
-                            ubi_mostrador=ubi_mostrador,
-                            ubi_deposito=ubi_deposito
+                            pasillo=pasillo_manual,
+                            piso=piso_manual,
+                            modulo=modulo_manual,
+                            fila=fila_manual
                         )
                         
                         if exito:
@@ -411,7 +423,7 @@ with tab_mostrador:
                 else: 
                     st.error(msj)
                     
-    # 3. ASISTENTE IA (VOZ) - MEJORADO CON BÚSQUEDA PYTHON DETERMINISTA
+    # 3. ASISTENTE IA (VOZ)
     with t_ia:
         with st.form("form_ia_mostrador", clear_on_submit=True):
             col_ia1, col_ia2 = st.columns([4, 1])
@@ -459,12 +471,11 @@ with tab_mostrador:
                             for prod in inventario:
                                 if isinstance(prod, dict):
                                     texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('marca', '')} {prod.get('codigo', '')}".lower()
-                                    # Verificamos que TODAS las palabras clave estén en el texto de búsqueda
                                     if all(palabra in texto_busqueda for palabra in palabras_clave):
                                         encontrados.append(prod)
                             
                             if encontrados:
-                                st.session_state.resultados_ia_mostrador = encontrados[:5] # Límite para el celu
+                                st.session_state.resultados_ia_mostrador = encontrados[:5] 
                                 st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
                             else:
                                 st.warning(f"No encontré coincidencias para '{termino}'.")
@@ -476,7 +487,6 @@ with tab_mostrador:
                         st.info(respuesta_json.get("respuesta", "Orden procesada."))
                         st.session_state.resultados_ia_mostrador = None
 
-        # --- DIBUJAR LOS BOTONES (Fuera del formulario para que no se borren) ---
         if st.session_state.resultados_ia_mostrador:
             st.markdown(f"### {st.session_state.msg_ia_mostrador}")
             for res in st.session_state.resultados_ia_mostrador:
@@ -541,7 +551,7 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Ej: 'Buscame pastillas de freno', 'Descontame 1 filtro'.")
+    st.info("Escribí o dictá tu orden. Ej: 'Dónde está la correa bosch', 'Sumar 5 unidades del código Y', 'Descontar 2 repuestos'.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -603,6 +613,27 @@ with tab_asistente:
                 st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                 st.session_state.ultimo_estado = "success" if exito else "error"
                 
+            elif accion == "ubicacion":
+                termino = respuesta_json.get("termino", "").lower()
+                palabras_clave = termino.split()
+                encontrados = []
+                for p in inventario:
+                    if isinstance(p, dict):
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower()
+                        if all(palabra in texto_busqueda for palabra in palabras_clave):
+                            encontrados.append(p)
+                if encontrados:
+                    lista_txt = f"📍 Ubicaciones exactas para '{termino}':\n\n"
+                    for p in encontrados[:10]:
+                        ubi = p.get('ubicacion', {})
+                        if not isinstance(ubi, dict): ubi = {}
+                        lista_txt += f"- **{p.get('codigo', '')}** ({p.get('descripcion', '')})\n  👉 Pasillo: {ubi.get('pasillo', 0)} | Piso: {ubi.get('piso', 0)} | Módulo: {ubi.get('modulo', 0)} | Fila: {ubi.get('fila', 0)}\n\n"
+                    st.session_state.ultima_respuesta = lista_txt
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.ultima_respuesta = f"No encontré el repuesto ni su ubicación para '{termino}'."
+                    st.session_state.ultimo_estado = "error"
+
             elif accion == "buscar" or accion == "consulta":
                 termino = respuesta_json.get("termino", "").lower()
                 palabras_clave = termino.split()
@@ -614,13 +645,14 @@ with tab_asistente:
                             encontrados.append(p)
                 
                 if encontrados:
-                    lista_txt = f"🔍 Resultados para '{termino}':\n\n"
+                    lista_txt = f"🔍 Resultados de stock para '{termino}':\n\n"
                     for p in encontrados[:10]:
                         lista_txt += f"- **{p.get('codigo', '')}** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
                     st.session_state.ultima_respuesta = lista_txt
+                    st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"No hay stock de nada relacionado con '{termino}'."
-                st.session_state.ultimo_estado = "normal"
+                    st.session_state.ultimo_estado = "error"
             
             else: 
                 st.session_state.ultima_respuesta = texto_ia
