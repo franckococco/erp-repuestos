@@ -137,7 +137,7 @@ with tab_carga:
             df_articulos['marca'] = "GENERICO"
             
         marcas_db = obtener_marcas() or []
-        opciones_marcas = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas_db))
+        opciones_marcas_factura = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas_db))
 
         df_editado = st.data_editor(
             df_articulos,
@@ -146,7 +146,7 @@ with tab_carga:
                 "descripcion": st.column_config.TextColumn("Descripción", required=True),
                 "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
                 "precio_unitario": st.column_config.NumberColumn("Precio Base ($)", min_value=0.0, format="$ %.2f", required=True),
-                "marca": st.column_config.SelectboxColumn("Marca", help="Seleccioná la marca", options=opciones_marcas, required=True)
+                "marca": st.column_config.SelectboxColumn("Marca", help="Seleccioná la marca", options=opciones_marcas_factura, required=True)
             },
             use_container_width=True,
             num_rows="dynamic",
@@ -266,8 +266,9 @@ with tab_inventario:
             busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
             
             if busqueda_inv:
-                termino = busqueda_inv.lower()
-                df_filtrado = df[df.apply(lambda row: row.astype(str).str.lower().str.contains(termino).any(), axis=1)]
+                termino = busqueda_inv.lower().replace("-", "").replace(" ", "")
+                # Buscamos ignorando guiones y espacios
+                df_filtrado = df[df.apply(lambda row: termino in str(row).lower().replace("-", "").replace(" ", ""), axis=1)]
             else:
                 df_filtrado = df
                 
@@ -437,15 +438,30 @@ with tab_mostrador:
                     accion = respuesta_json.get("accion")
                     
                     if accion == "agregar_carrito":
-                        id_producto = respuesta_json.get("id_producto")
+                        id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
                         cant = int(respuesta_json.get("cantidad", 1))
-                        exito, msj_db = agregar_al_carrito(str(vendedor), id_producto, cant)
-                        if exito:
-                            st.success(f"🛒 {msj_db}")
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
+                        
+                        # Búsqueda inclusiva (Raíz limpia sin guiones)
+                        encontrados = []
+                        for p in inventario:
+                            cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
+                            if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                                encontrados.append(p)
+                                
+                        if len(encontrados) == 1:
+                            exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]['id'], cant)
+                            if exito:
+                                st.success(f"🛒 {msj_db}")
+                                st.session_state.resultados_ia_mostrador = None
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Error: {msj_db}")
+                        elif len(encontrados) > 1:
+                            st.warning(f"Encontré {len(encontrados)} alternativas para ese código.")
+                            st.session_state.resultados_ia_mostrador = encontrados
+                            st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{id_buscado}' querés agregar:"
                         else:
-                            st.error(f"❌ Error: {msj_db}")
+                            st.error(f"❌ No encontré ningún producto asociado a la raíz '{id_buscado}'.")
                             
                     elif accion == "set_cliente":
                         nombre_det = respuesta_json.get("nombre_cliente", "").upper()
@@ -466,16 +482,17 @@ with tab_mostrador:
                             termino = orden_usuario_mostrador.lower().replace("buscame", "").replace("buscar", "").strip()
                             
                         if termino:
-                            palabras_clave = termino.lower().split()
+                            # Búsqueda inclusiva sin guiones para consultas generales
+                            termino_limpio = termino.lower().replace("-", "").replace(" ", "")
                             encontrados = []
                             for prod in inventario:
                                 if isinstance(prod, dict):
-                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('marca', '')} {prod.get('codigo', '')}".lower()
-                                    if all(palabra in texto_busqueda for palabra in palabras_clave):
+                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('marca', '')} {prod.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                                    if termino_limpio in texto_busqueda:
                                         encontrados.append(prod)
                             
                             if encontrados:
-                                st.session_state.resultados_ia_mostrador = encontrados[:5] 
+                                st.session_state.resultados_ia_mostrador = encontrados[:10] 
                                 st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
                             else:
                                 st.warning(f"No encontré coincidencias para '{termino}'.")
@@ -589,39 +606,63 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "normal"
             
             elif accion == "agregar_carrito":
-                id_producto = respuesta_json.get("id_producto")
+                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
                 cant = int(respuesta_json.get("cantidad", 1))
-                exito, msj_db = agregar_al_carrito("Caja Principal", id_producto, cant)
-                if exito:
-                    st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})"
-                    st.session_state.ultimo_estado = "success"
+                
+                encontrados = []
+                for p in inventario:
+                    cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
+                    if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                        encontrados.append(p)
+                        
+                if len(encontrados) == 1:
+                    exito, msj_db = agregar_al_carrito("Caja Principal", encontrados[0]['id'], cant)
+                    st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+                elif len(encontrados) > 1:
+                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('marca')})" for p in encontrados])
+                    st.session_state.ultima_respuesta = f"⚠️ Encontré múltiples variantes para '{id_buscado}'. Por favor, sé más específico o usá la pestaña 'Mostrador' para ver la lista en pantalla.\n{lista_alt}"
+                    st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"❌ Error: {msj_db}"
+                    st.session_state.ultima_respuesta = f"❌ No encontré ningún producto asociado a '{id_buscado}'."
                     st.session_state.ultimo_estado = "error"
 
-            elif accion == "baja":
-                id_producto = respuesta_json.get("id_producto")
+            elif accion in ["baja", "alta"]:
+                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
                 cant = int(respuesta_json.get("cantidad", 1))
-                exito, msj_db = registrar_merma(id_producto, cant)
-                st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
-                st.session_state.ultimo_estado = "success" if exito else "error"
-            
-            elif accion == "alta":
-                id_producto = respuesta_json.get("id_producto")
-                cant = int(respuesta_json.get("cantidad", 1))
-                exito, msj_db = registrar_aumento_stock(id_producto, cant)
-                st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
-                st.session_state.ultimo_estado = "success" if exito else "error"
+                
+                encontrados = []
+                for p in inventario:
+                    cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
+                    if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                        encontrados.append(p)
+                        
+                if len(encontrados) == 1:
+                    if accion == "alta":
+                        exito, msj_db = registrar_aumento_stock(encontrados[0]['id'], cant)
+                    else:
+                        exito, msj_db = registrar_merma(encontrados[0]['id'], cant)
+                        
+                    st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+                elif len(encontrados) > 1:
+                    lista_alt = "\n".join([f"- Código exacto: {p.get('id')}" for p in encontrados])
+                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples variantes en stock para '{id_buscado}'. Por seguridad, dictá el código exacto o la marca.\n{lista_alt}"
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.ultima_respuesta = f"❌ No existe '{id_buscado}' en el sistema."
+                    st.session_state.ultimo_estado = "error"
                 
             elif accion == "ubicacion":
-                termino = respuesta_json.get("termino", "").lower()
-                palabras_clave = termino.split()
+                termino = str(respuesta_json.get("termino", "")).lower().replace("-", "").replace(" ", "")
+                
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower()
-                        if all(palabra in texto_busqueda for palabra in palabras_clave):
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                        if termino in texto_busqueda:
                             encontrados.append(p)
+                            
                 if encontrados:
                     lista_txt = f"📍 Ubicaciones exactas para '{termino}':\n\n"
                     for p in encontrados[:10]:
@@ -635,19 +676,19 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "error"
 
             elif accion == "buscar" or accion == "consulta":
-                termino = respuesta_json.get("termino", "").lower()
-                palabras_clave = termino.split()
+                termino = str(respuesta_json.get("termino", "")).lower().replace("-", "").replace(" ", "")
+                
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower()
-                        if all(palabra in texto_busqueda for palabra in palabras_clave):
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                        if termino in texto_busqueda:
                             encontrados.append(p)
                 
                 if encontrados:
                     lista_txt = f"🔍 Resultados de stock para '{termino}':\n\n"
                     for p in encontrados[:10]:
-                        lista_txt += f"- **{p.get('codigo', '')}** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
+                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('marca', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
                     st.session_state.ultima_respuesta = lista_txt
                     st.session_state.ultimo_estado = "normal"
                 else:
