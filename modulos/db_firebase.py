@@ -9,7 +9,6 @@ import streamlit as st
 load_dotenv(override=True)
 
 def inicializar_firebase():
-    """Conexión híbrida local/nube"""
     if not firebase_admin._apps: # type: ignore
         if "firebase_key" in st.secrets:
             f_key = st.secrets["firebase_key"]
@@ -121,14 +120,18 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 
     for art in datos_ia.get('articulos', []):
         codigo_base = str(art.get('codigo', '')).strip().upper()
-        marca = str(art.get('marca', 'GENERICO')).strip().upper()
+        
+        # Separación técnica: Condición y Vehículo
+        condicion_rep = str(art.get('condicion', 'GENERICO')).strip().upper()
+        vehiculo_rep = str(art.get('vehiculo', 'UNIVERSAL')).strip().upper()
+        
         proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
         cuit_proveedor = str(art.get('cuit_proveedor', '0'))
         
         if not codigo_base or codigo_base == "NONE":
             codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15]
             
-        id_producto = f"{codigo_base}_{marca}"
+        id_producto = f"{codigo_base}_{condicion_rep}"
         precio_unitario = float(art.get('precio_unitario', 0.0))
         calculos = calcular_cascada_precios(precio_unitario, recargo)
         
@@ -144,12 +147,16 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                 "precio_venta": calculos['precio_venta'],
                 "proveedor": proveedor,
                 "cuit_proveedor": cuit_proveedor,
+                "condicion": condicion_rep,
+                "vehiculo": vehiculo_rep,
                 "ultima_actualizacion": ahora
             })
         else:
             batch.set(ref_prod, {
                 "codigo": codigo_base,
-                "marca": marca,
+                "marca": condicion_rep, # Mantengo campo marca por compatibilidad de códigos viejos
+                "condicion": condicion_rep,
+                "vehiculo": vehiculo_rep,
                 "descripcion": str(art.get('descripcion', 'Repuesto')),
                 "stock": cantidad,
                 "ultimo_costo_base": precio_unitario,
@@ -177,15 +184,15 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     batch.commit()
     return True, "Mercadería cargada correctamente."
 
-# --- ALTA MANUAL DE PRODUCTO ---
-def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
+def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper()
-    marca_limpia = str(marca).strip().upper()
-    id_producto = f"{codigo_base}_{marca_limpia}"
+    cond_limpia = str(condicion).strip().upper()
+    veh_limpio = str(vehiculo).strip().upper()
+    id_producto = f"{codigo_base}_{cond_limpia}"
 
     ref_prod = db.collection("productos").document(id_producto)
     if ref_prod.get().exists:
-        return False, f"El producto con código {codigo_base} y marca {marca_limpia} ya existe."
+        return False, f"El producto {codigo_base} ({cond_limpia}) ya existe."
 
     prov_doc = db.collection("proveedores").document(str(cuit_proveedor)).get()
     datos_proveedor_db = prov_doc.to_dict() or {} 
@@ -196,7 +203,9 @@ def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base
 
     ref_prod.set({
         "codigo": codigo_base,
-        "marca": marca_limpia,
+        "marca": cond_limpia, 
+        "condicion": cond_limpia,
+        "vehiculo": veh_limpio,
         "descripcion": str(descripcion).strip(),
         "stock": int(stock),
         "ultimo_costo_base": float(precio_base),
@@ -215,18 +224,62 @@ def alta_manual_producto(codigo, marca, descripcion, cuit_proveedor, precio_base
     
     return True, f"Producto {codigo_base} cargado exitosamente."
 
-def actualizar_ubicacion_producto(id_producto, pasillo, piso, modulo, fila):
+def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modulo=None, fila=None):
+    id_limpio = str(id_producto).strip().upper()
+    ref_prod = db.collection("productos").document(id_limpio)
+    
+    if not ref_prod.get().exists:
+        docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
+        if docs_codigo:
+            ref_prod = db.collection("productos").document(docs_codigo[0].id)
+        else:
+            return False, f"El código '{id_limpio}' no existe en el sistema."
+            
+    updates = {}
+    if pasillo is not None: updates["ubicacion.pasillo"] = int(pasillo)
+    if piso is not None: updates["ubicacion.piso"] = int(piso)
+    if modulo is not None: updates["ubicacion.modulo"] = int(modulo)
+    if fila is not None: updates["ubicacion.fila"] = int(fila)
+    updates["ultima_actualizacion"] = datetime.now(timezone.utc)
+    
+    if updates:
+        ref_prod.update(updates)
+        return True, "Ubicación de inventario actualizada."
+    return False, "No se detectaron datos de ubicación válidos en la orden."
+
+def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
     ref_prod = db.collection("productos").document(id_producto)
     if not ref_prod.get().exists:
-        return False, "Producto no existe."
+        return False, "Producto no encontrado."
+    
+    mapa_campos = {
+        "Descripción": "descripcion",
+        "Stock": "stock",
+        "Precio Final": "precio_venta",
+        "Vehículo": "vehiculo",
+        "Condición": "condicion",
+        "Pasillo": "ubicacion.pasillo",
+        "Piso": "ubicacion.piso",
+        "Módulo": "ubicacion.modulo",
+        "Fila": "ubicacion.fila"
+    }
+    
+    campo_db = mapa_campos.get(campo)
+    if not campo_db:
+        return False, f"Campo no editable."
         
-    ref_prod.update({
-        "ubicacion.pasillo": int(pasillo),
-        "ubicacion.piso": int(piso),
-        "ubicacion.modulo": int(modulo),
-        "ubicacion.fila": int(fila)
-    })
-    return True, "Ubicaciones actualizadas."
+    if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Precio Final"]:
+        nuevo_valor = int(nuevo_valor)
+    else:
+        nuevo_valor = str(nuevo_valor).upper() if campo in ["Vehículo", "Condición"] else str(nuevo_valor)
+        
+    # Sincronizamos 'marca' si editan 'Condición' por retrocompatibilidad
+    updates = {campo_db: nuevo_valor, "ultima_actualizacion": datetime.now(timezone.utc)}
+    if campo == "Condición":
+        updates["marca"] = nuevo_valor
+        
+    ref_prod.update(updates)
+    return True, "OK"
 
 # --- ASISTENTE DE DEPÓSITO ---
 def registrar_merma(id_producto, cantidad):
@@ -262,7 +315,6 @@ def registrar_aumento_stock(id_producto, cantidad):
     id_limpio = str(id_producto).strip().upper()
     ref_prod = db.collection("productos").document(id_limpio)
     
-    # Búsqueda inteligente por si la IA solo manda el código sin la marca
     if not ref_prod.get().exists:
         docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
         if docs_codigo:
@@ -291,7 +343,19 @@ def registrar_aumento_stock(id_producto, cantidad):
 # --- INVENTARIO Y VENTAS ---
 def obtener_inventario_completo() -> list:
     docs = db.collection("productos").get()
-    return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+    inventario = []
+    for d in docs:
+        datos = d.to_dict() or {}
+        datos['id'] = d.id
+        
+        # Parche de retrocompatibilidad visual
+        if 'condicion' not in datos:
+            datos['condicion'] = datos.get('marca', 'GENERICO')
+        if 'vehiculo' not in datos:
+            datos['vehiculo'] = 'UNIVERSAL'
+            
+        inventario.append(datos)
+    return inventario
 
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     id_limpio = str(id_producto).strip().upper()
@@ -304,7 +368,6 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     if doc.exists:
         datos = doc.to_dict() or {}
     else:
-        # Búsqueda inteligente: si escriben solo el código sin la marca
         docs_codigo = db.collection("productos").where("codigo", "==", id_limpio).get()
         if docs_codigo:
             doc = docs_codigo[0]
@@ -316,8 +379,9 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     precio = float(datos.get('precio_venta', 0.0))
     ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_real)
     
+    marca_mostrar = datos.get('condicion', datos.get('marca', ''))
     ref_item.set({
-        "descripcion": f"{datos.get('descripcion')} ({datos.get('marca')})",
+        "descripcion": f"{datos.get('descripcion')} ({marca_mostrar})",
         "precio_unitario": precio,
         "cantidad": firestore.Increment(int(cantidad)) # type: ignore
     }, merge=True)
