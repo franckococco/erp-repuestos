@@ -42,40 +42,41 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
     1. BÚSQUEDA GENERAL: "filtrar", "buscar", "tenemos", "hay".
     2. CONSULTA DE UBICACIÓN: "dónde está", "ubicación".
-    3. ACTUALIZAR UBICACIÓN (RELEVAMIENTO): Si indica que un código o producto ESTÁ o SE GUARDÓ en un pasillo, piso, módulo o fila. Extrae los números. Si no menciona alguno, devuelve null en ese campo.
-    4. REPORTE STOCK MÍNIMO: Si pide listado de stock mínimo, faltantes, o productos con "X" unidades. Si no menciona cantidad, asume 3.
+    3. ACTUALIZAR UBICACIÓN (RELEVAMIENTO): Si indica que un código o producto ESTÁ o SE GUARDÓ en un pasillo, piso, módulo o fila. Extrae los números. Si no menciona alguno, devuelve null.
+    4. REPORTE STOCK MÍNIMO: Si pide listado de stock mínimo o faltantes. Si no menciona cantidad, asume 3.
     5. ALTA DE STOCK (SUMAR): "agregar", "sumar", "ingresar".
     6. BAJA DE STOCK (RESTAR): "descontar", "restar".
     7. CLIENTES Y PRESUPUESTOS: "presupuesto para...".
     8. CARRITO: "añadir", "meter al carrito".
 
-    REGLA CRÍTICA PARA CÓDIGOS:
-    Extrae SIEMPRE LA RAÍZ limpia (sin guiones ni letras sueltas al final). Ej: "15 42 514 f g" -> "1542514".
+    REGLA CRÍTICA PARA BÚSQUEDAS (VEHÍCULOS Y CONDICIÓN):
+    Si el usuario está BUSCANDO y menciona una marca de vehículo (Ej: Peugeot, Volkswagen, Fiat, Citroen) o una condición (Original, Alternativo), INCLÚYELAS en el "termino". Queremos buscar por frase completa. 
+    Ejemplo: Si dice "buscame filtro de aire para peugeot original", el termino debe ser "filtro aire peugeot original".
+
+    REGLA CRÍTICA PARA CÓDIGOS ESPECÍFICOS:
+    Si menciona un código de producto para sumar, restar, ubicar o vender, extrae SIEMPRE LA RAÍZ limpia (sin guiones ni letras sueltas al final). Ej: "15 42 514 f g" -> "1542514".
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
-    OPCIÓN 1 (Búsqueda general):
-    {{"accion": "buscar", "termino": "RAIZ_LIMPIA"}}
+    OPCIÓN 1 (Búsqueda general o Consulta de Ubicación):
+    {{"accion": "buscar", "termino": "FRASE_COMPLETA_O_RAIZ_LIMPIA"}}
 
-    OPCIÓN 2 (Consulta de Ubicación):
-    {{"accion": "ubicacion", "termino": "RAIZ_LIMPIA"}}
-
-    OPCIÓN 3 (Actualizar Ubicación Exacta):
+    OPCIÓN 2 (Actualizar Ubicación Exacta):
     {{"accion": "actualizar_ubicacion", "id_producto": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
 
-    OPCIÓN 4 (Reporte de Stock Mínimo):
+    OPCIÓN 3 (Reporte de Stock Mínimo):
     {{"accion": "reporte_stock", "cantidad": NUMERO_LIMITE_O_3}}
 
-    OPCIÓN 5 (Alta de Stock / Sumar):
+    OPCIÓN 4 (Alta de Stock / Sumar):
     {{"accion": "alta", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
 
-    OPCIÓN 6 (Baja de Stock / Descontar):
+    OPCIÓN 5 (Baja de Stock / Descontar):
     {{"accion": "baja", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
 
-    OPCIÓN 7 (Iniciar Presupuesto para Cliente):
+    OPCIÓN 6 (Iniciar Presupuesto para Cliente):
     {{"accion": "set_cliente", "nombre_cliente": "NOMBRE"}}
 
-    OPCIÓN 8 (Añadir producto al carrito/presupuesto):
+    OPCIÓN 7 (Añadir producto al carrito/presupuesto):
     {{"accion": "agregar_carrito", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
     """
 

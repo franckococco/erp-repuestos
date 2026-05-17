@@ -104,8 +104,16 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     num = str(datos_ia.get('numero_comprobante', '0')).zfill(8)
     id_factura = f"FACT_{prov_id}_{pv}_{num}"
     
-    if db.collection("facturas_procesadas").document(id_factura).get().exists:
-        return False, f"La factura {pv}-{num} ya fue cargada."
+    # Validar si ya existe y devolver fecha exacta
+    doc_factura = db.collection("facturas_procesadas").document(id_factura).get()
+    if doc_factura.exists:
+        datos_fac = doc_factura.to_dict() or {}
+        fecha_bd = datos_fac.get("fecha_carga")
+        if fecha_bd:
+            fecha_str = fecha_bd.strftime("%d/%m/%Y a las %H:%M hs")
+        else:
+            fecha_str = "una fecha desconocida"
+        return False, f"La factura {pv}-{num} ya fue cargada previamente el {fecha_str}."
 
     prov_doc = db.collection("proveedores").document(prov_id).get()
     if not prov_doc.exists:
@@ -121,7 +129,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     for art in datos_ia.get('articulos', []):
         codigo_base = str(art.get('codigo', '')).strip().upper()
         
-        # Separación técnica: Condición y Vehículo
         condicion_rep = str(art.get('condicion', 'GENERICO')).strip().upper()
         vehiculo_rep = str(art.get('vehiculo', 'UNIVERSAL')).strip().upper()
         
@@ -154,7 +161,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         else:
             batch.set(ref_prod, {
                 "codigo": codigo_base,
-                "marca": condicion_rep, # Mantengo campo marca por compatibilidad de códigos viejos
+                "marca": condicion_rep, 
                 "condicion": condicion_rep,
                 "vehiculo": vehiculo_rep,
                 "descripcion": str(art.get('descripcion', 'Repuesto')),
@@ -273,7 +280,6 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
     else:
         nuevo_valor = str(nuevo_valor).upper() if campo in ["Vehículo", "Condición"] else str(nuevo_valor)
         
-    # Sincronizamos 'marca' si editan 'Condición' por retrocompatibilidad
     updates = {campo_db: nuevo_valor, "ultima_actualizacion": datetime.now(timezone.utc)}
     if campo == "Condición":
         updates["marca"] = nuevo_valor
@@ -348,7 +354,6 @@ def obtener_inventario_completo() -> list:
         datos = d.to_dict() or {}
         datos['id'] = d.id
         
-        # Parche de retrocompatibilidad visual
         if 'condicion' not in datos:
             datos['condicion'] = datos.get('marca', 'GENERICO')
         if 'vehiculo' not in datos:
