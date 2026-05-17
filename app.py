@@ -29,7 +29,9 @@ from modulos.db_firebase import (
     alta_manual_producto,
     obtener_clientes,
     configurar_cliente,
-    eliminar_cliente
+    eliminar_cliente,
+    actualizar_ubicacion_relevamiento,
+    actualizar_producto_desde_grilla
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -38,7 +40,6 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
     pdf = FPDF()
     pdf.add_page()
     
-    # Intentar cargar el logo si existe en la carpeta
     if os.path.exists("logo_hafid.jpeg"):
         pdf.image("logo_hafid.jpeg", x=85, y=10, w=40)
         pdf.ln(35)
@@ -128,16 +129,18 @@ with tab_carga:
         cuit_detectado = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
         st.write(f"### Proveedor detectado: {d.get('proveedor', 'DESCONOCIDO')} (CUIT: {cuit_detectado})")
         
-        st.info("💡 **Revisá los datos.** Podés hacer doble clic en cualquier celda para corregir códigos, precios, o seleccionar la marca correcta antes de guardar.")
+        st.info("💡 **Revisá los datos.** Asigná la Condición (Original/Genérico) y la Marca del Vehículo (VW, Fiat, etc.) antes de guardar.")
         
         articulos = d.get('articulos', [])
         df_articulos = pd.DataFrame(articulos)
         
-        if 'marca' not in df_articulos.columns:
-            df_articulos['marca'] = "GENERICO"
+        if 'condicion' not in df_articulos.columns:
+            df_articulos['condicion'] = "GENERICO"
+        if 'vehiculo' not in df_articulos.columns:
+            df_articulos['vehiculo'] = "UNIVERSAL"
             
-        marcas_db = obtener_marcas() or []
-        opciones_marcas_factura = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas_db))
+        opciones_condicion = ["GENERICO", "ORIGINAL", "ALTERNATIVO"]
+        opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
 
         df_editado = st.data_editor(
             df_articulos,
@@ -146,7 +149,8 @@ with tab_carga:
                 "descripcion": st.column_config.TextColumn("Descripción", required=True),
                 "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
                 "precio_unitario": st.column_config.NumberColumn("Precio Base ($)", min_value=0.0, format="$ %.2f", required=True),
-                "marca": st.column_config.SelectboxColumn("Marca", help="Seleccioná la marca", options=opciones_marcas_factura, required=True)
+                "condicion": st.column_config.SelectboxColumn("Condición", options=opciones_condicion, required=True),
+                "vehiculo": st.column_config.SelectboxColumn("Vehículo", options=opciones_vehiculo, required=True)
             },
             use_container_width=True,
             num_rows="dynamic",
@@ -165,8 +169,8 @@ with tab_carga:
                 if not isinstance(art_ejemplo, dict): art_ejemplo = {}
                 
                 cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
-                marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
-                desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
+                cond_ej = str(art_ejemplo.get('condicion', 'GENERICO')).strip().upper()
+                desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({cond_ej})"
                 precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
                 
                 provs = obtener_proveedores() or {}
@@ -208,16 +212,16 @@ with tab_carga:
                         if not isinstance(art, dict): continue
                         
                         codigo_base = str(art.get('codigo', '')).strip()
-                        marca = str(art.get('marca', 'GENERICO')).strip().upper()
+                        condicion = str(art.get('condicion', 'GENERICO')).strip().upper()
                         if not codigo_base or codigo_base.lower() in ["null", "none"]:
                             desc_limpia = str(art.get('descripcion', '')).strip()
                             codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
                         
-                        id_producto = f"{codigo_base}_{marca}"
+                        id_producto = f"{codigo_base}_{condicion}"
                         precio_f = float(art.get('precio_unitario', 0))
                         calc = calcular_cascada_precios(precio_f, recargo)
                         
-                        desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca})"
+                        desc_qr = f"{art.get('descripcion', 'Repuesto')} ({condicion})"
                         qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
                         zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
                 
@@ -240,7 +244,7 @@ with tab_carga:
 with tab_inventario:
     st.header("📦 Gestión de Inventario")
     
-    tab_lista, tab_alta = st.tabs(["📋 Listado Actual", "➕ Alta Manual de Producto"])
+    tab_lista, tab_alta = st.tabs(["📋 Listado Editable", "➕ Alta Manual de Producto"])
     
     with tab_lista:
         inv = obtener_inventario_completo() or []
@@ -258,21 +262,45 @@ with tab_inventario:
                         item['Piso'] = 0
                         item['Módulo'] = 0
                         item['Fila'] = 0
+                        
+                    item['Condición'] = item.get('condicion', 'GENERICO')
+                    item['Vehículo'] = item.get('vehiculo', 'UNIVERSAL')
+                    item['Stock'] = int(item.get('stock', 0))
+                    item['Precio Final'] = item.get('precio_venta', 0)
+                    item['Descripción'] = item.get('descripcion', '')
 
             df = pd.DataFrame(inv)
-            cols_deseadas = ['id', 'marca', 'descripcion', 'proveedor', 'stock', 'precio_venta', 'Pasillo', 'Piso', 'Módulo', 'Fila']
+            cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Condición', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
             cols_existentes = [c for c in cols_deseadas if c in df.columns]
             
+            st.info("💡 Hacé doble clic en cualquier celda para corregir inventario o ubicaciones rápidamente.")
             busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
             
             if busqueda_inv:
                 termino = busqueda_inv.lower().replace("-", "").replace(" ", "")
-                # Buscamos ignorando guiones y espacios
                 df_filtrado = df[df.apply(lambda row: termino in str(row).lower().replace("-", "").replace(" ", ""), axis=1)]
             else:
                 df_filtrado = df
                 
-            st.dataframe(df_filtrado[cols_existentes], use_container_width=True, hide_index=True)
+            df_filtrado = df_filtrado.reset_index(drop=True)
+            
+            st.data_editor(
+                df_filtrado[cols_existentes], 
+                use_container_width=True, 
+                hide_index=True,
+                key="grilla_inv",
+                disabled=["id", "codigo"] # ID y código no se editan por acá para no romper relacionales
+            )
+            
+            if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
+                if st.button("💾 Guardar Cambios Manuales", type="primary"):
+                    cambios = st.session_state.grilla_inv["edited_rows"]
+                    for row_idx, dict_cambios in cambios.items():
+                        id_prod = df_filtrado.iloc[row_idx]['id']
+                        for col_name, new_val in dict_cambios.items():
+                            actualizar_producto_desde_grilla(id_prod, col_name, new_val)
+                    st.success("Inventario actualizado en la base de datos.")
+                    st.rerun()
             
             st.divider()
             opciones = {f"{item.get('id', '')} - {item.get('descripcion', '')}": item for item in inv if isinstance(item, dict)}
@@ -288,7 +316,6 @@ with tab_inventario:
     with tab_alta:
         st.subheader("Ingresar Artículo sin Factura")
         provs = obtener_proveedores() or {}
-        marcas = obtener_marcas() or []
 
         if not provs:
             st.warning("⚠️ Debes registrar al menos un proveedor en la pestaña Configuración antes de cargar artículos.")
@@ -302,10 +329,10 @@ with tab_inventario:
                 cond_pago = col_cond.radio("Condición de Pago", ["Contado", "30 Días"], horizontal=True)
 
                 st.write("#### 2. Identidad del Repuesto")
-                col_cod, col_marca = st.columns(2)
-                codigo_manual = col_cod.text_input("Código de Artículo (Obligatorio)")
-                opciones_marcas_manual = list(dict.fromkeys(["GENERICO", "ORIGINAL", "ALTERNATIVO"] + marcas))
-                marca_manual = col_marca.selectbox("Marca", options=opciones_marcas_manual)
+                col_cod, col_condicion, col_vehiculo = st.columns(3)
+                codigo_manual = col_cod.text_input("Código (Ref) (Obligatorio)")
+                cond_manual = col_condicion.selectbox("Condición", options=["GENERICO", "ORIGINAL", "ALTERNATIVO"])
+                veh_manual = col_vehiculo.selectbox("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"])
                 desc_manual = st.text_input("Descripción del Producto (Obligatorio)")
 
                 st.write("#### 3. Valores")
@@ -330,19 +357,18 @@ with tab_inventario:
                         cuit_seleccionado = str(opciones_prov.get(llave_prov, ""))
                         datos_prov = provs.get(cuit_seleccionado, {})
                         
-                        if not isinstance(datos_prov, dict): 
-                            datos_prov = {}
+                        if not isinstance(datos_prov, dict): datos_prov = {}
                             
                         condiciones_prov = datos_prov.get("condiciones", {})
-                        if not isinstance(condiciones_prov, dict): 
-                            condiciones_prov = {}
+                        if not isinstance(condiciones_prov, dict): condiciones_prov = {}
                             
                         llave_cond = str(cond_pago) if cond_pago else "Contado"
                         recargo_financiero = float(condiciones_prov.get(llave_cond, 0.0))
 
                         exito, msj_alta = alta_manual_producto(
                             codigo=codigo_manual,
-                            marca=marca_manual,
+                            condicion=cond_manual,
+                            vehiculo=veh_manual,
                             descripcion=desc_manual,
                             cuit_proveedor=cuit_seleccionado,
                             precio_base=precio_base_manual,
@@ -387,10 +413,10 @@ with tab_mostrador:
             opciones_desc = {}
             for item in inv_completo:
                 if isinstance(item, dict):
-                    desc = f"{item.get('codigo', '')} | {item.get('marca', '')} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
+                    desc = f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - {item.get('condicion', '')} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
                     opciones_desc[desc] = item.get('id')
             
-            sel_prod = st.selectbox("Escriba para buscar por nombre, código o marca:", options=[""] + list(opciones_desc.keys()))
+            sel_prod = st.selectbox("Escriba para buscar por nombre, código o vehículo:", options=[""] + list(opciones_desc.keys()))
             
             col_b1, col_b2 = st.columns([1, 3])
             cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
@@ -441,7 +467,6 @@ with tab_mostrador:
                         id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
                         cant = int(respuesta_json.get("cantidad", 1))
                         
-                        # Búsqueda inclusiva (Raíz limpia sin guiones)
                         encontrados = []
                         for p in inventario:
                             cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
@@ -461,7 +486,7 @@ with tab_mostrador:
                             st.session_state.resultados_ia_mostrador = encontrados
                             st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{id_buscado}' querés agregar:"
                         else:
-                            st.error(f"❌ No encontré ningún producto asociado a la raíz '{id_buscado}'.")
+                            st.error(f"❌ No encontré ningún producto asociado a '{id_buscado}'.")
                             
                     elif accion == "set_cliente":
                         nombre_det = respuesta_json.get("nombre_cliente", "").upper()
@@ -482,12 +507,11 @@ with tab_mostrador:
                             termino = orden_usuario_mostrador.lower().replace("buscame", "").replace("buscar", "").strip()
                             
                         if termino:
-                            # Búsqueda inclusiva sin guiones para consultas generales
                             termino_limpio = termino.lower().replace("-", "").replace(" ", "")
                             encontrados = []
                             for prod in inventario:
                                 if isinstance(prod, dict):
-                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('marca', '')} {prod.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('condicion', '')} {prod.get('vehiculo', '')} {prod.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
                                     if termino_limpio in texto_busqueda:
                                         encontrados.append(prod)
                             
@@ -509,7 +533,7 @@ with tab_mostrador:
             for res in st.session_state.resultados_ia_mostrador:
                 if isinstance(res, dict):
                     precio_f = float(res.get('precio_venta', 0))
-                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('marca', '')}) - ${precio_f:,.2f}"
+                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('vehiculo', '')}-{res.get('condicion', '')}) - ${precio_f:,.2f}"
                     
                     if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
                         exito, msj_db = agregar_al_carrito(str(vendedor), res.get('id'), 1)
@@ -568,7 +592,7 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Ej: 'Dónde está la correa bosch', 'Sumar 5 unidades del código Y', 'Descontar 2 repuestos'.")
+    st.info("Escribí o dictá tu orden. Ej: 'Código X está en pasillo 1', 'Reporte de stock mínimo', 'Dónde está correa'.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -576,11 +600,14 @@ with tab_asistente:
         st.session_state.ultima_respuesta = None
     if "ultimo_estado" not in st.session_state:
         st.session_state.ultimo_estado = None 
+    if "df_reporte" not in st.session_state:
+        st.session_state.df_reporte = None
 
     orden_usuario = st.chat_input("Dicte o escriba aquí...")
     
     if orden_usuario:
         st.session_state.ultima_orden = orden_usuario
+        st.session_state.df_reporte = None # Limpiamos reporte anterior
         
         with st.spinner("Procesando en el depósito..."):
             inventario = obtener_inventario_completo() or []
@@ -591,7 +618,31 @@ with tab_asistente:
             accion = respuesta_json.get("accion")
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
             
-            if accion == "set_cliente":
+            if accion == "actualizar_ubicacion":
+                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
+                pas = respuesta_json.get("pasillo")
+                pis = respuesta_json.get("piso")
+                mod = respuesta_json.get("modulo")
+                fil = respuesta_json.get("fila")
+                
+                exito, msj_db = actualizar_ubicacion_relevamiento(id_buscado, pas, pis, mod, fil)
+                st.session_state.ultima_respuesta = f"✅ Ubicación guardada. {msj_db}" if exito else f"❌ Error: {msj_db}"
+                st.session_state.ultimo_estado = "success" if exito else "error"
+
+            elif accion == "reporte_stock":
+                cant_limite = int(respuesta_json.get("cantidad", 3))
+                bajo_stock = [p for p in inventario if int(p.get('stock', 0)) <= cant_limite]
+                
+                if bajo_stock:
+                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** Hay {len(bajo_stock)} productos con {cant_limite} unidades o menos."
+                    df_r = pd.DataFrame(bajo_stock)
+                    st.session_state.df_reporte = df_r[['codigo', 'descripcion', 'vehiculo', 'condicion', 'stock']]
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.ultima_respuesta = f"✅ Excelente. Todo el stock está por encima de {cant_limite} unidades."
+                    st.session_state.ultimo_estado = "success"
+            
+            elif accion == "set_cliente":
                 nombre_det = respuesta_json.get("nombre_cliente", "").upper()
                 clientes_db = obtener_clientes() or {}
                 cliente_encontrado = next((c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()), None)
@@ -620,8 +671,8 @@ with tab_asistente:
                     st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('marca')})" for p in encontrados])
-                    st.session_state.ultima_respuesta = f"⚠️ Encontré múltiples variantes para '{id_buscado}'. Por favor, sé más específico o usá la pestaña 'Mostrador' para ver la lista en pantalla.\n{lista_alt}"
+                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('condicion')})" for p in encontrados])
+                    st.session_state.ultima_respuesta = f"⚠️ Encontré múltiples variantes para '{id_buscado}'. Usá la pestaña 'Mostrador' para ver la lista en pantalla.\n{lista_alt}"
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"❌ No encontré ningún producto asociado a '{id_buscado}'."
@@ -647,7 +698,7 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
                     lista_alt = "\n".join([f"- Código exacto: {p.get('id')}" for p in encontrados])
-                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples variantes en stock para '{id_buscado}'. Por seguridad, dictá el código exacto o la marca.\n{lista_alt}"
+                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples variantes en stock para '{id_buscado}'. Por seguridad, dictá el código exacto.\n{lista_alt}"
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"❌ No existe '{id_buscado}' en el sistema."
@@ -659,7 +710,7 @@ with tab_asistente:
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
                         if termino in texto_busqueda:
                             encontrados.append(p)
                             
@@ -681,14 +732,14 @@ with tab_asistente:
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('marca', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
+                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
                         if termino in texto_busqueda:
                             encontrados.append(p)
                 
                 if encontrados:
                     lista_txt = f"🔍 Resultados de stock para '{termino}':\n\n"
                     for p in encontrados[:10]:
-                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('marca', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
+                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('condicion', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
                     st.session_state.ultima_respuesta = lista_txt
                     st.session_state.ultimo_estado = "normal"
                 else:
@@ -710,6 +761,10 @@ with tab_asistente:
                 st.error(st.session_state.ultima_respuesta)
             else:
                 st.markdown(st.session_state.ultima_respuesta)
+                
+            # Renderizar la tabla de reporte si existe
+            if st.session_state.get("df_reporte") is not None:
+                st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
 
 # --- PESTAÑA 5: CONFIGURACIÓN ---
 with tab_config:
