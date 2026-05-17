@@ -51,7 +51,7 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
         pdf.ln(35)
 
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(190, 10, "PRESUPUESTO - HAFID REPUESTOS", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(190, 10, "PRESUPUESTO - MAGNUM VALORES SAS", new_x="LMARGIN", new_y="NEXT", align="C")
     
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(190, 10, f"Cliente: {cliente_nombre} | Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
@@ -86,7 +86,7 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
     
     return bytes(pdf.output())
 
-st.set_page_config(page_title="Hafid IA", layout="wide")
+st.set_page_config(page_title="Gestión de Inventario", layout="wide")
 
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
@@ -145,12 +145,12 @@ with tab_carga:
         df_editado = st.data_editor(
             df_articulos,
             column_config={
-                "codigo": st.column_config.TextColumn("Código (Ref)", required=True),
-                "descripcion": st.column_config.TextColumn("Descripción", required=True),
-                "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
-                "precio_unitario": st.column_config.NumberColumn("Precio Base ($)", min_value=0.0, format="$ %.2f", required=True),
-                "condicion": st.column_config.SelectboxColumn("Condición", options=opciones_condicion, required=True),
-                "vehiculo": st.column_config.SelectboxColumn("Vehículo", options=opciones_vehiculo, required=True)
+                "codigo": st.column_config.TextColumn("Código", width="small", required=True),
+                "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
+                "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
+                "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
+                "condicion": st.column_config.SelectboxColumn("Condición", width="small", options=opciones_condicion, required=True),
+                "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
             },
             use_container_width=True,
             num_rows="dynamic",
@@ -288,8 +288,20 @@ with tab_inventario:
                 df_filtrado[cols_existentes], 
                 use_container_width=True, 
                 hide_index=True,
-                key="grilla_inv",
-                disabled=["id", "codigo"] # ID y código no se editan por acá para no romper relacionales
+                column_config={
+                    "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
+                    "codigo": st.column_config.TextColumn("Cód", disabled=True, width="small"),
+                    "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
+                    "Vehículo": st.column_config.SelectboxColumn("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"], width="small"),
+                    "Condición": st.column_config.SelectboxColumn("Condición", options=["GENERICO", "ORIGINAL", "ALTERNATIVO"], width="small"),
+                    "Stock": st.column_config.NumberColumn("Stk", width="small"),
+                    "Precio Final": st.column_config.NumberColumn("$ Final", width="small"),
+                    "Pasillo": st.column_config.NumberColumn("Pas", width="small"),
+                    "Piso": st.column_config.NumberColumn("P", width="small"),
+                    "Módulo": st.column_config.NumberColumn("Mod", width="small"),
+                    "Fila": st.column_config.NumberColumn("F", width="small")
+                },
+                key="grilla_inv"
             )
             
             if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
@@ -592,7 +604,7 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Ej: 'Código X está en pasillo 1', 'Reporte de stock mínimo', 'Dónde está correa'.")
+    st.info("Escribí o dictá tu orden. Ej: 'Código X está en pasillo 1', 'Reporte de stock mínimo', 'Dónde está correa peugeot'.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -607,7 +619,7 @@ with tab_asistente:
     
     if orden_usuario:
         st.session_state.ultima_orden = orden_usuario
-        st.session_state.df_reporte = None # Limpiamos reporte anterior
+        st.session_state.df_reporte = None
         
         with st.spinner("Procesando en el depósito..."):
             inventario = obtener_inventario_completo() or []
@@ -739,7 +751,10 @@ with tab_asistente:
                 if encontrados:
                     lista_txt = f"🔍 Resultados de stock para '{termino}':\n\n"
                     for p in encontrados[:10]:
-                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('condicion', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n"
+                        ubi = p.get('ubicacion', {})
+                        if not isinstance(ubi, dict): ubi = {}
+                        loc_str = f"Pasillo: {ubi.get('pasillo',0)} | Piso: {ubi.get('piso',0)} | Módulo: {ubi.get('modulo',0)} | Fila: {ubi.get('fila',0)}"
+                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('condicion', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n  📍 {loc_str}\n\n"
                     st.session_state.ultima_respuesta = lista_txt
                     st.session_state.ultimo_estado = "normal"
                 else:
@@ -762,7 +777,6 @@ with tab_asistente:
             else:
                 st.markdown(st.session_state.ultima_respuesta)
                 
-            # Renderizar la tabla de reporte si existe
             if st.session_state.get("df_reporte") is not None:
                 st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
 
