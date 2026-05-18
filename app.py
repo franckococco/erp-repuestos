@@ -6,6 +6,8 @@ from io import BytesIO
 from fpdf import FPDF
 from datetime import datetime
 import os
+import unicodedata
+import re
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
@@ -34,6 +36,15 @@ from modulos.db_firebase import (
     actualizar_producto_desde_grilla
 )
 from modulos.generador_qr import generar_qr_producto
+
+# --- FUNCIÓN DE NORMALIZACIÓN EXTREMA ---
+def normalizar_para_busqueda(texto):
+    if not texto:
+        return ""
+    # Quitar tildes y diacríticos
+    t = ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
+    # Dejar solo letras, números y espacios
+    return re.sub(r'[^a-z0-9\s]', '', t.lower())
 
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
 def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
@@ -277,8 +288,13 @@ with tab_inventario:
             busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
             
             if busqueda_inv:
-                termino = busqueda_inv.lower().replace("-", "").replace(" ", "")
-                df_filtrado = df[df.apply(lambda row: termino in str(row).lower().replace("-", "").replace(" ", ""), axis=1)]
+                terminos_busqueda = normalizar_para_busqueda(busqueda_inv).split()
+                # Filtrar asegurando que TODOS los tokens de búsqueda existan en la fila
+                def coincidencia_total(row):
+                    texto_fila = normalizar_para_busqueda(" ".join(str(val) for val in row.values))
+                    return all(t in texto_fila for t in terminos_busqueda)
+                
+                df_filtrado = df[df.apply(coincidencia_total, axis=1)]
             else:
                 df_filtrado = df
                 
@@ -466,7 +482,7 @@ with tab_mostrador:
     with t_ia:
         with st.form("form_ia_mostrador", clear_on_submit=True):
             col_ia1, col_ia2 = st.columns([4, 1])
-            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden (Ej: 'Buscame fastix', 'Cargame 2 unidades del código X'):", key=f"ia_most_{vendedor}")
+            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
             submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
             
             if submit_ia and orden_usuario_mostrador:
@@ -476,13 +492,15 @@ with tab_mostrador:
                     accion = respuesta_json.get("accion")
                     
                     if accion == "agregar_carrito":
-                        id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
+                        termino = str(respuesta_json.get("termino", ""))
                         cant = int(respuesta_json.get("cantidad", 1))
+                        terminos_busqueda = normalizar_para_busqueda(termino).split()
                         
                         encontrados = []
                         for p in inventario:
-                            cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
-                            if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                            texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('condicion', '')}"
+                            texto_norm = normalizar_para_busqueda(texto_item)
+                            if all(t in texto_norm for t in terminos_busqueda):
                                 encontrados.append(p)
                                 
                         if len(encontrados) == 1:
@@ -494,11 +512,11 @@ with tab_mostrador:
                             else:
                                 st.error(f"❌ Error: {msj_db}")
                         elif len(encontrados) > 1:
-                            st.warning(f"Encontré {len(encontrados)} alternativas para ese código.")
+                            st.warning(f"Encontré {len(encontrados)} alternativas para '{termino}'.")
                             st.session_state.resultados_ia_mostrador = encontrados
-                            st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{id_buscado}' querés agregar:"
+                            st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{termino}' querés agregar:"
                         else:
-                            st.error(f"❌ No encontré ningún producto asociado a '{id_buscado}'.")
+                            st.error(f"❌ No encontré ningún producto asociado a '{termino}'.")
                             
                     elif accion == "set_cliente":
                         nombre_det = respuesta_json.get("nombre_cliente", "").upper()
@@ -516,28 +534,29 @@ with tab_mostrador:
                     elif accion == "buscar" or accion == "consulta":
                         termino = respuesta_json.get("termino", "")
                         if not termino:
-                            termino = orden_usuario_mostrador.lower().replace("buscame", "").replace("buscar", "").strip()
+                            termino = orden_usuario_mostrador
                             
                         if termino:
-                            termino_limpio = termino.lower().replace("-", "").replace(" ", "")
+                            terminos_busqueda = normalizar_para_busqueda(termino).split()
                             encontrados = []
                             for prod in inventario:
                                 if isinstance(prod, dict):
-                                    texto_busqueda = f"{prod.get('descripcion', '')} {prod.get('condicion', '')} {prod.get('vehiculo', '')} {prod.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
-                                    if termino_limpio in texto_busqueda:
+                                    texto_item = f"{prod.get('descripcion', '')} {prod.get('condicion', '')} {prod.get('vehiculo', '')} {prod.get('codigo', '')}"
+                                    texto_norm = normalizar_para_busqueda(texto_item)
+                                    if all(t in texto_norm for t in terminos_busqueda):
                                         encontrados.append(prod)
                             
                             if encontrados:
                                 st.session_state.resultados_ia_mostrador = encontrados[:10] 
                                 st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
                             else:
-                                st.warning(f"No encontré coincidencias para '{termino}'.")
+                                st.warning(f"No encontré coincidencias exactas para '{termino}'.")
                                 st.session_state.resultados_ia_mostrador = None
                         else:
                             st.warning("No detecté qué producto querés buscar.")
                             st.session_state.resultados_ia_mostrador = None
                     else:
-                        st.info(respuesta_json.get("respuesta", "Orden procesada."))
+                        st.info("Orden procesada, pero no aplica a la vista Mostrador.")
                         st.session_state.resultados_ia_mostrador = None
 
         if st.session_state.resultados_ia_mostrador:
@@ -604,7 +623,7 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Ej: 'Código X está en pasillo 1', 'Reporte de stock mínimo', 'Dónde está correa peugeot'.")
+    st.info("Escribí o dictá tu orden. Búsquedas por palabras sueltas, reportes exactos o actualizaciones de ubicación.")
     
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -631,27 +650,49 @@ with tab_asistente:
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
             
             if accion == "actualizar_ubicacion":
-                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
+                termino = str(respuesta_json.get("termino", ""))
                 pas = respuesta_json.get("pasillo")
                 pis = respuesta_json.get("piso")
                 mod = respuesta_json.get("modulo")
                 fil = respuesta_json.get("fila")
                 
-                exito, msj_db = actualizar_ubicacion_relevamiento(id_buscado, pas, pis, mod, fil)
-                st.session_state.ultima_respuesta = f"✅ Ubicación guardada. {msj_db}" if exito else f"❌ Error: {msj_db}"
-                st.session_state.ultimo_estado = "success" if exito else "error"
+                terminos_busqueda = normalizar_para_busqueda(termino).split()
+                encontrados = []
+                for p in inventario:
+                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
+                    texto_norm = normalizar_para_busqueda(texto_item)
+                    if all(t in texto_norm for t in terminos_busqueda):
+                        encontrados.append(p)
+                        
+                if len(encontrados) == 1:
+                    exito, msj_db = actualizar_ubicacion_relevamiento(encontrados[0]['id'], pas, pis, mod, fil)
+                    st.session_state.ultima_respuesta = f"✅ Ubicación guardada. {msj_db}" if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+                elif len(encontrados) > 1:
+                    st.session_state.ultima_respuesta = f"⚠️ Hay {len(encontrados)} productos similares para '{termino}'. Sé más específico (ej: dictá el código exacto)."
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.ultima_respuesta = f"❌ No encontré ningún producto que coincida con '{termino}'."
+                    st.session_state.ultimo_estado = "error"
 
             elif accion == "reporte_stock":
                 cant_limite = int(respuesta_json.get("cantidad", 3))
-                bajo_stock = [p for p in inventario if int(p.get('stock', 0)) <= cant_limite]
+                operador = respuesta_json.get("operador", "menor_o_igual")
+                
+                if operador == "exacto":
+                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) == cant_limite]
+                    msg_op = f"exactamente {cant_limite}"
+                else:
+                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) <= cant_limite]
+                    msg_op = f"{cant_limite} o menos"
                 
                 if bajo_stock:
-                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** Hay {len(bajo_stock)} productos con {cant_limite} unidades o menos."
+                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** Hay {len(bajo_stock)} productos con {msg_op} unidades."
                     df_r = pd.DataFrame(bajo_stock)
                     st.session_state.df_reporte = df_r[['codigo', 'descripcion', 'vehiculo', 'condicion', 'stock']]
                     st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"✅ Excelente. Todo el stock está por encima de {cant_limite} unidades."
+                    st.session_state.ultima_respuesta = f"✅ Excelente. No hay productos con {msg_op} unidades."
                     st.session_state.ultimo_estado = "success"
             
             elif accion == "set_cliente":
@@ -665,39 +706,43 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "success"
                 else:
                     st.session_state.cliente_activo = {"nombre": nombre_det, "descuento": 0.0}
-                    st.session_state.ultima_respuesta = f"⚠️ {texto_ia} (Nota: '{nombre_det}' no está en la base de datos, se aplicará 0% de descuento)."
+                    st.session_state.ultima_respuesta = f"⚠️ Activado. (Nota: '{nombre_det}' no está en la base de datos, aplicará 0% descuento)."
                     st.session_state.ultimo_estado = "normal"
             
             elif accion == "agregar_carrito":
-                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
+                termino = str(respuesta_json.get("termino", ""))
                 cant = int(respuesta_json.get("cantidad", 1))
+                terminos_busqueda = normalizar_para_busqueda(termino).split()
                 
                 encontrados = []
                 for p in inventario:
-                    cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
-                    if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
+                    texto_norm = normalizar_para_busqueda(texto_item)
+                    if all(t in texto_norm for t in terminos_busqueda):
                         encontrados.append(p)
                         
                 if len(encontrados) == 1:
                     exito, msj_db = agregar_al_carrito("Caja Principal", encontrados[0]['id'], cant)
-                    st.session_state.ultima_respuesta = f"🛒 Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultima_respuesta = f"🛒 Listo. Agregado al carrito." if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('condicion')})" for p in encontrados])
-                    st.session_state.ultima_respuesta = f"⚠️ Encontré múltiples variantes para '{id_buscado}'. Usá la pestaña 'Mostrador' para ver la lista en pantalla.\n{lista_alt}"
+                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('vehiculo')})" for p in encontrados])
+                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples opciones para '{termino}'. Sé más específico o usá la pestaña 'Mostrador'.\n{lista_alt}"
                     st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"❌ No encontré ningún producto asociado a '{id_buscado}'."
+                    st.session_state.ultima_respuesta = f"❌ No encontré ningún producto que coincida con '{termino}'."
                     st.session_state.ultimo_estado = "error"
 
             elif accion in ["baja", "alta"]:
-                id_buscado = str(respuesta_json.get("id_producto", "")).lower().replace("-", "").replace(" ", "")
+                termino = str(respuesta_json.get("termino", ""))
                 cant = int(respuesta_json.get("cantidad", 1))
+                terminos_busqueda = normalizar_para_busqueda(termino).split()
                 
                 encontrados = []
                 for p in inventario:
-                    cod_limpio = str(p.get('codigo', '')).lower().replace("-", "").replace(" ", "")
-                    if id_buscado in cod_limpio or id_buscado in str(p.get('descripcion', '')).lower():
+                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
+                    texto_norm = normalizar_para_busqueda(texto_item)
+                    if all(t in texto_norm for t in terminos_busqueda):
                         encontrados.append(p)
                         
                 if len(encontrados) == 1:
@@ -706,46 +751,25 @@ with tab_asistente:
                     else:
                         exito, msj_db = registrar_merma(encontrados[0]['id'], cant)
                         
-                    st.session_state.ultima_respuesta = f"✅ Listo. {texto_ia} ({msj_db})" if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultima_respuesta = f"✅ Listo. Operación registrada." if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    lista_alt = "\n".join([f"- Código exacto: {p.get('id')}" for p in encontrados])
-                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples variantes en stock para '{id_buscado}'. Por seguridad, dictá el código exacto.\n{lista_alt}"
+                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples opciones para '{termino}'. Por seguridad, dictá el código exacto."
                     st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"❌ No existe '{id_buscado}' en el sistema."
+                    st.session_state.ultima_respuesta = f"❌ No existe '{termino}' en el sistema."
                     st.session_state.ultimo_estado = "error"
                 
-            elif accion == "ubicacion":
-                termino = str(respuesta_json.get("termino", "")).lower().replace("-", "").replace(" ", "")
+            elif accion == "buscar" or accion == "consulta" or accion == "ubicacion":
+                termino = str(respuesta_json.get("termino", ""))
+                terminos_busqueda = normalizar_para_busqueda(termino).split()
                 
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
-                        if termino in texto_busqueda:
-                            encontrados.append(p)
-                            
-                if encontrados:
-                    lista_txt = f"📍 Ubicaciones exactas para '{termino}':\n\n"
-                    for p in encontrados[:10]:
-                        ubi = p.get('ubicacion', {})
-                        if not isinstance(ubi, dict): ubi = {}
-                        lista_txt += f"- **{p.get('codigo', '')}** ({p.get('descripcion', '')})\n  👉 Pasillo: {ubi.get('pasillo', 0)} | Piso: {ubi.get('piso', 0)} | Módulo: {ubi.get('modulo', 0)} | Fila: {ubi.get('fila', 0)}\n\n"
-                    st.session_state.ultima_respuesta = lista_txt
-                    st.session_state.ultimo_estado = "normal"
-                else:
-                    st.session_state.ultima_respuesta = f"No encontré el repuesto ni su ubicación para '{termino}'."
-                    st.session_state.ultimo_estado = "error"
-
-            elif accion == "buscar" or accion == "consulta":
-                termino = str(respuesta_json.get("termino", "")).lower().replace("-", "").replace(" ", "")
-                
-                encontrados = []
-                for p in inventario:
-                    if isinstance(p, dict):
-                        texto_busqueda = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('codigo', '')}".lower().replace("-", "").replace(" ", "")
-                        if termino in texto_busqueda:
+                        texto_item = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('condicion', '')} {p.get('codigo', '')}"
+                        texto_norm = normalizar_para_busqueda(texto_item)
+                        if all(t in texto_norm for t in terminos_busqueda):
                             encontrados.append(p)
                 
                 if encontrados:
