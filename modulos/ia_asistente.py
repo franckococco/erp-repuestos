@@ -9,8 +9,7 @@ load_dotenv(override=True)
 
 def preprocesar_texto_usuario(texto):
     """
-    Une secuencias de números separados por espacios para corregir 
-    el dictado de códigos por voz (ej. "50 51 03" -> "505103").
+    Limpia el texto inicial para ayudar a la IA con los números dictados.
     """
     def unir_numeros(match):
         return match.group(0).replace(" ", "")
@@ -34,50 +33,43 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     texto_procesado = preprocesar_texto_usuario(texto_usuario)
 
     prompt = f"""
-    Eres el asistente rápido de mostrador de 'Hafid Repuestos'.
-    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO Y LAS PALABRAS CLAVE.
+    Eres el asistente inteligente de depósito y mostrador de repuestos.
+    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO, NORMALIZAR LA BÚSQUEDA Y DEFINIR OPERADORES MATEMÁTICOS.
 
-    ORDEN DEL USUARIO PROCESADA: "{texto_procesado}"
+    ORDEN DEL USUARIO: "{texto_procesado}"
 
     REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. BÚSQUEDA GENERAL: "filtrar", "buscar", "tenemos", "hay".
-    2. CONSULTA DE UBICACIÓN: "dónde está", "ubicación".
-    3. ACTUALIZAR UBICACIÓN (RELEVAMIENTO): Si indica que un código o producto ESTÁ o SE GUARDÓ en un pasillo, piso, módulo o fila. Extrae los números. Si no menciona alguno, devuelve null.
-    4. REPORTE STOCK MÍNIMO: Si pide listado de stock mínimo o faltantes. Si no menciona cantidad, asume 3.
-    5. ALTA DE STOCK (SUMAR): "agregar", "sumar", "ingresar".
-    6. BAJA DE STOCK (RESTAR): "descontar", "restar".
-    7. CLIENTES Y PRESUPUESTOS: "presupuesto para...".
-    8. CARRITO: "añadir", "meter al carrito".
-
-    REGLA CRÍTICA PARA BÚSQUEDAS (VEHÍCULOS Y CONDICIÓN):
-    Si el usuario está BUSCANDO y menciona una marca de vehículo (Ej: Peugeot, Volkswagen, Fiat, Citroen) o una condición (Original, Alternativo), INCLÚYELAS en el "termino". Queremos buscar por frase completa. 
-    Ejemplo: Si dice "buscame filtro de aire para peugeot original", el termino debe ser "filtro aire peugeot original".
-
-    REGLA CRÍTICA PARA CÓDIGOS ESPECÍFICOS:
-    Si menciona un código de producto para sumar, restar, ubicar o vender, extrae SIEMPRE LA RAÍZ limpia (sin guiones ni letras sueltas al final). Ej: "15 42 514 f g" -> "1542514".
+    1. BÚSQUEDA Y CONSULTA (Vehículos, Marcas, Repuestos): Extrae todas las palabras clave relevantes. Ignora palabras de relleno como "para", "de", "el", "la", "un". 
+       Ej: "buscame filtro de aire para peugeot" -> el termino debe ser "filtro aire peugeot".
+    2. REPORTE DE STOCK (MATEMÁTICA ESTRICTA): 
+       - Si el usuario pide los que tienen una cantidad específica (ej: "los que tienen 3"), el operador es "exacto".
+       - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", el operador es "menor_o_igual".
+       - Si no especifica cantidad en un reporte de mínimos, asume 3.
+    3. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
+    4. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible (la raíz). Ej: "15 42 514 f g" -> "1542514".
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
-    OPCIÓN 1 (Búsqueda general o Consulta de Ubicación):
-    {{"accion": "buscar", "termino": "FRASE_COMPLETA_O_RAIZ_LIMPIA"}}
+    OPCIÓN 1 (Búsqueda general o Consulta de Ubicación por palabras clave):
+    {{"accion": "buscar", "termino": "PALABRAS CLAVE LIMPIAS ESPACIADAS"}}
 
-    OPCIÓN 2 (Actualizar Ubicación Exacta):
-    {{"accion": "actualizar_ubicacion", "id_producto": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
+    OPCIÓN 2 (Reporte de Stock Matemático):
+    {{"accion": "reporte_stock", "operador": "exacto" O "menor_o_igual", "cantidad": NUMERO}}
 
-    OPCIÓN 3 (Reporte de Stock Mínimo):
-    {{"accion": "reporte_stock", "cantidad": NUMERO_LIMITE_O_3}}
+    OPCIÓN 3 (Actualizar Ubicación Exacta):
+    {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
 
     OPCIÓN 4 (Alta de Stock / Sumar):
-    {{"accion": "alta", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
+    {{"accion": "alta", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
 
     OPCIÓN 5 (Baja de Stock / Descontar):
-    {{"accion": "baja", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
+    {{"accion": "baja", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
 
     OPCIÓN 6 (Iniciar Presupuesto para Cliente):
     {{"accion": "set_cliente", "nombre_cliente": "NOMBRE"}}
 
     OPCIÓN 7 (Añadir producto al carrito/presupuesto):
-    {{"accion": "agregar_carrito", "id_producto": "RAIZ_LIMPIA", "cantidad": NUMERO}}
+    {{"accion": "agregar_carrito", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
     """
 
     try:
