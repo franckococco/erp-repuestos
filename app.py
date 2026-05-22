@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from PIL import Image
 import zipfile
@@ -33,17 +34,44 @@ from modulos.db_firebase import (
     configurar_cliente,
     eliminar_cliente,
     actualizar_ubicacion_relevamiento,
-    actualizar_producto_desde_grilla
+    actualizar_producto_desde_grilla,
+    obtener_producto_por_codigo  # <- Importante: Esta es la nueva función que generaba los errores
 )
 from modulos.generador_qr import generar_qr_producto
+
+st.set_page_config(page_title="Gestión de Inventario", layout="wide")
+
+# --- MOTOR DE ATAJOS DE TECLADO (JavaScript Invisible) ---
+components.html(
+    """
+    <script>
+    const doc = window.parent.document;
+    doc.addEventListener('keydown', function(e) {
+        if (e.ctrlKey) {
+            let tabIndex = -1;
+            if (e.key.toLowerCase() === 's') { tabIndex = 0; e.preventDefault(); } // Ctrl+S: Stock
+            else if (e.key.toLowerCase() === 'i') { tabIndex = 1; e.preventDefault(); } // Ctrl+I: Inventario
+            else if (e.key.toLowerCase() === 'm') { tabIndex = 2; e.preventDefault(); } // Ctrl+M: Mostrador
+            else if (e.key.toLowerCase() === 'a') { tabIndex = 3; e.preventDefault(); } // Ctrl+A: Asistente
+            
+            if (tabIndex !== -1) {
+                const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
+                if (tabs.length > tabIndex) {
+                    tabs[tabIndex].click();
+                }
+            }
+        }
+    });
+    </script>
+    """,
+    height=0, width=0,
+)
 
 # --- FUNCIÓN DE NORMALIZACIÓN EXTREMA ---
 def normalizar_para_busqueda(texto):
     if not texto:
         return ""
-    # Quitar tildes y diacríticos
     t = ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
-    # Dejar solo letras, números y espacios
     return re.sub(r'[^a-z0-9\s]', '', t.lower())
 
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
@@ -97,8 +125,6 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
     
     return bytes(pdf.output())
 
-st.set_page_config(page_title="Gestión de Inventario", layout="wide")
-
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
 if "cliente_activo" not in st.session_state:
@@ -128,6 +154,15 @@ with tab_carga:
                 try:
                     datos = procesar_factura_con_ia(Image.open(img))
                     if datos:
+                        # --- LA MEMORIA DE DESCRIPCIONES EN ACCIÓN ---
+                        for art in datos.get('articulos', []):
+                            cod = str(art.get('codigo', ''))
+                            prod_db = obtener_producto_por_codigo(cod)
+                            if prod_db: # Si ya existía, pisamos lo que dijo la IA con tus datos reales
+                                art['descripcion'] = prod_db.get('descripcion', art.get('descripcion'))
+                                art['condicion'] = prod_db.get('condicion', art.get('condicion', 'GENERICO'))
+                                art['vehiculo'] = prod_db.get('vehiculo', art.get('vehiculo', 'UNIVERSAL'))
+                                
                         st.session_state.temp_datos = datos
                         st.rerun()
                 except Exception as e:
@@ -186,12 +221,14 @@ with tab_carga:
                 
                 provs = obtener_proveedores() or {}
                 recargo_prev = 0.0
+                descuento_prev = 0.0
                 if cuit_detectado in provs:
                     datos_prov = provs[cuit_detectado]
                     if isinstance(datos_prov, dict):
                         recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                        descuento_prev = float(datos_prov.get('descuento', 0.0))
                 
-                calculos = calcular_cascada_precios(precio_bruto, recargo_prev)
+                calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
                 qr_preview = generar_qr_producto(cod_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
                 st.image(qr_preview, caption="Vista Previa Público", width=150)
         
@@ -212,10 +249,12 @@ with tab_carga:
                 prov_id = cuit_detectado
                 provs = obtener_proveedores() or {}
                 recargo = 0.0
+                descuento_prov = 0.0
                 if prov_id in provs:
                     datos_prov = provs[prov_id]
                     if isinstance(datos_prov, dict):
                         recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                        descuento_prov = float(datos_prov.get('descuento', 0.0))
 
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
@@ -230,7 +269,7 @@ with tab_carga:
                         
                         id_producto = f"{codigo_base}_{condicion}"
                         precio_f = float(art.get('precio_unitario', 0))
-                        calc = calcular_cascada_precios(precio_f, recargo)
+                        calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
                         
                         desc_qr = f"{art.get('descripcion', 'Repuesto')} ({condicion})"
                         qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
@@ -289,7 +328,6 @@ with tab_inventario:
             
             if busqueda_inv:
                 terminos_busqueda = normalizar_para_busqueda(busqueda_inv).split()
-                # Filtrar asegurando que TODOS los tokens de búsqueda existan en la fila
                 def coincidencia_total(row):
                     texto_fila = normalizar_para_busqueda(" ".join(str(val) for val in row.values))
                     return all(t in texto_fila for t in terminos_busqueda)
@@ -830,14 +868,15 @@ with tab_config:
             nombre_prov = col1.text_input("Nombre Proveedor (Ej: Filtros Juan)").upper()
             cuit_prov = col2.text_input("CUIT (Solo números)")
             
-            st.write("Recargos Financieros (%)")
-            col3, col4 = st.columns(2)
-            rec_contado = col3.number_input("Pago Contado (%)", min_value=0.0, value=0.0, step=1.0)
-            rec_30 = col4.number_input("Pago a 30 Días (%)", min_value=0.0, value=15.0, step=1.0)
+            st.write("Recargos Financieros y Descuentos (%)")
+            col3, col4, col5 = st.columns(3)
+            rec_contado = col3.number_input("Recargo Contado (%)", min_value=0.0, value=0.0, step=1.0)
+            rec_30 = col4.number_input("Recargo 30 Días (%)", min_value=0.0, value=15.0, step=1.0)
+            desc_prov = col5.number_input("Descuento Factura (%)", min_value=0.0, value=0.0, step=1.0)
             
             if st.form_submit_button("Guardar Proveedor"):
                 if nombre_prov and cuit_prov:
-                    configurar_proveedor(nombre_prov, cuit_prov, rec_contado, rec_30)
+                    configurar_proveedor(nombre_prov, cuit_prov, rec_contado, rec_30, desc_prov)
                     st.success(f"Proveedor {nombre_prov} guardado.")
                     st.rerun()
                 else:
@@ -856,6 +895,7 @@ with tab_config:
                 datos_tabla.append({
                     "Proveedor": datos_prov.get("nombre", ""),
                     "CUIT": cuit,
+                    "Desc. Prov": f"{datos_prov.get('descuento', 0)}%",
                     "Contado": f"{condiciones.get('Contado', 0)}%",
                     "30 Días": f"{condiciones.get('30 Días', 0)}%"
                 })
