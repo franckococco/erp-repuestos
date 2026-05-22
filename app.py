@@ -35,7 +35,7 @@ from modulos.db_firebase import (
     eliminar_cliente,
     actualizar_ubicacion_relevamiento,
     actualizar_producto_desde_grilla,
-    obtener_producto_por_codigo  # <- Importante: Esta es la nueva función que generaba los errores
+    obtener_producto_por_codigo
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -150,15 +150,14 @@ with tab_carga:
 
     if img:
         if st.button("Procesar Factura", type="primary"):
-            with st.spinner("Leyendo factura con IA..."):
+            with st.spinner("Leyendo factura con IA y revisando memoria del inventario..."):
                 try:
                     datos = procesar_factura_con_ia(Image.open(img))
                     if datos:
-                        # --- LA MEMORIA DE DESCRIPCIONES EN ACCIÓN ---
                         for art in datos.get('articulos', []):
                             cod = str(art.get('codigo', ''))
                             prod_db = obtener_producto_por_codigo(cod)
-                            if prod_db: # Si ya existía, pisamos lo que dijo la IA con tus datos reales
+                            if prod_db:
                                 art['descripcion'] = prod_db.get('descripcion', art.get('descripcion'))
                                 art['condicion'] = prod_db.get('condicion', art.get('condicion', 'GENERICO'))
                                 art['vehiculo'] = prod_db.get('vehiculo', art.get('vehiculo', 'UNIVERSAL'))
@@ -175,7 +174,7 @@ with tab_carga:
         cuit_detectado = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
         st.write(f"### Proveedor detectado: {d.get('proveedor', 'DESCONOCIDO')} (CUIT: {cuit_detectado})")
         
-        st.info("💡 **Revisá los datos.** Asigná la Condición (Original/Genérico) y la Marca del Vehículo (VW, Fiat, etc.) antes de guardar.")
+        st.info("💡 **Revisá y Editá los datos.** Podés moverte con las flechas, usar Enter para editar y Tab para saltar.")
         
         articulos = d.get('articulos', [])
         df_articulos = pd.DataFrame(articulos)
@@ -188,51 +187,54 @@ with tab_carga:
         opciones_condicion = ["GENERICO", "ORIGINAL", "ALTERNATIVO"]
         opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
 
-        df_editado = st.data_editor(
-            df_articulos,
-            column_config={
-                "codigo": st.column_config.TextColumn("Código", width="small", required=True),
-                "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
-                "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
-                "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
-                "condicion": st.column_config.SelectboxColumn("Condición", width="small", options=opciones_condicion, required=True),
-                "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
-            },
-            use_container_width=True,
-            num_rows="dynamic",
-            key="grilla_validacion"
-        )
-        
-        st.divider()
-        st.subheader("⚙️ Opciones de Etiquetas QR para esta factura")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
-        with col2:
-            if not df_editado.empty:
-                art_ejemplo = df_editado.iloc[0].to_dict() or {}
-                if not isinstance(art_ejemplo, dict): art_ejemplo = {}
-                
-                cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
-                cond_ej = str(art_ejemplo.get('condicion', 'GENERICO')).strip().upper()
-                desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({cond_ej})"
-                precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
-                
-                provs = obtener_proveedores() or {}
-                recargo_prev = 0.0
-                descuento_prev = 0.0
-                if cuit_detectado in provs:
-                    datos_prov = provs[cuit_detectado]
-                    if isinstance(datos_prov, dict):
-                        recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                        descuento_prev = float(datos_prov.get('descuento', 0.0))
-                
-                calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
-                qr_preview = generar_qr_producto(cod_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
-                st.image(qr_preview, caption="Vista Previa Público", width=150)
-        
-        if st.button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True):
+        with st.form("form_confirmacion_factura"):
+            df_editado = st.data_editor(
+                df_articulos,
+                column_config={
+                    "codigo": st.column_config.TextColumn("Código", width="small", required=True),
+                    "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
+                    "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
+                    "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
+                    "condicion": st.column_config.SelectboxColumn("Condición", width="small", options=opciones_condicion, required=True),
+                    "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
+                },
+                use_container_width=True,
+                num_rows="dynamic",
+                key="grilla_validacion"
+            )
+            
+            st.divider()
+            st.subheader("⚙️ Opciones de Etiquetas QR")
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
+            with col2:
+                if not df_editado.empty:
+                    art_ejemplo = df_editado.iloc[0].to_dict() or {}
+                    if not isinstance(art_ejemplo, dict): art_ejemplo = {}
+                    
+                    cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
+                    cond_ej = str(art_ejemplo.get('condicion', 'GENERICO')).strip().upper()
+                    desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({cond_ej})"
+                    precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
+                    
+                    provs = obtener_proveedores() or {}
+                    recargo_prev = 0.0
+                    descuento_prev = 0.0
+                    if cuit_detectado in provs:
+                        datos_prov = provs[cuit_detectado]
+                        if isinstance(datos_prov, dict):
+                            recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                            descuento_prev = float(datos_prov.get('descuento', 0.0))
+                    
+                    calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
+                    qr_preview = generar_qr_producto(cod_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
+                    st.image(qr_preview, caption="Vista Previa Público", width=150)
+            
+            submit_factura = st.form_submit_button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True)
+
+        if submit_factura:
             nombre_prov = d.get('proveedor', 'DESCONOCIDO')
             articulos_lista = df_editado.to_dict('records')
             
