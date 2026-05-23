@@ -44,6 +44,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     2. REPORTE DE STOCK (MATEMÁTICA ESTRICTA): 
        - Si el usuario pide los que tienen una cantidad específica (ej: "los que tienen 3"), el operador es "exacto".
        - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", el operador es "menor_o_igual".
+       - Si pide "3 o más", "al menos 3" o "más de 3", el operador es "mayor_o_igual".
        - Si no especifica cantidad en un reporte de mínimos, asume 3.
     3. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
     4. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible (la raíz). Ej: "15 42 514 f g" -> "1542514".
@@ -55,7 +56,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     {{"accion": "buscar", "termino": "PALABRAS CLAVE LIMPIAS ESPACIADAS"}}
 
     OPCIÓN 2 (Reporte de Stock Matemático):
-    {{"accion": "reporte_stock", "operador": "exacto" O "menor_o_igual", "cantidad": NUMERO}}
+    {{"accion": "reporte_stock", "operador": "exacto" O "menor_o_igual" O "mayor_o_igual", "cantidad": NUMERO}}
 
     OPCIÓN 3 (Actualizar Ubicación Exacta):
     {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
