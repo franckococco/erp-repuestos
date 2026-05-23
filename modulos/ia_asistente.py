@@ -47,6 +47,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
        - Si no especifica cantidad en un reporte de mínimos, asume 3.
     3. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
     4. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible (la raíz). Ej: "15 42 514 f g" -> "1542514".
+    5. PROVEEDORES: Si el usuario pide filtrar, mostrar o buscar repuestos de un proveedor específico, extrae solo el nombre del proveedor.
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
@@ -70,6 +71,9 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
 
     OPCIÓN 7 (Añadir producto al carrito/presupuesto):
     {{"accion": "agregar_carrito", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
+
+    OPCIÓN 8 (Filtrar o listar repuestos por Proveedor):
+    {{"accion": "filtrar_proveedor", "proveedor": "NOMBRE DEL PROVEEDOR LIMPIO"}}
     """
 
     try:
@@ -82,12 +86,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
         
-        if "```json" in texto:
-            texto = texto.split("```json")[1].split("```")[0]
-        elif "```" in texto:
-            texto = texto.split("```")[1].split("```")[0]
-            
-        return json.loads(texto.strip())
+        # Limpieza segura para evitar errores de sintaxis al copiar/pegar
+        texto = texto.replace("```json", "").replace("```", "").strip()
+        
+        return json.loads(texto)
         
     except Exception as e:
         return {"accion": "error", "respuesta": f"Error en lectura de IA: {str(e)}"}

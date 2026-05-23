@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone
 import math
 import streamlit as st
+import pandas as pd
 
 load_dotenv(override=True)
 
@@ -22,6 +23,67 @@ def inicializar_firebase():
     return firestore.client()
 
 db = inicializar_firebase()
+
+# --- BACKUP Y RESTAURACIÓN ---
+def exportar_inventario_csv():
+    inv = obtener_inventario_completo()
+    if not inv:
+        return None
+    df = pd.DataFrame(inv)
+    
+    # Ordenar columnas para que 'id' sea la primera
+    cols = df.columns.tolist()
+    if 'id' in cols:
+        cols.insert(0, cols.pop(cols.index('id')))
+    df = df[cols]
+    
+    csv_buffer = df.to_csv(index=False)
+    return csv_buffer.encode('utf-8')
+
+def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
+    batch = db.batch()
+    operaciones = 0
+    ahora = datetime.now(timezone.utc)
+    
+    for _, row in df_csv.iterrows():
+        if 'id' not in row or pd.isna(row['id']):
+            continue
+            
+        id_prod = str(row['id']).strip()
+        ref_prod = db.collection("productos").document(id_prod)
+        
+        if modo == "sumar_stock":
+            stock_a_sumar = int(row.get('stock', 0) if pd.notna(row.get('stock')) else 0)
+            if stock_a_sumar != 0:
+                batch.update(ref_prod, {
+                    "stock": firestore.Increment(stock_a_sumar), # type: ignore
+                    "ultima_actualizacion": ahora
+                })
+        else:
+            # Modo sobreescribir exacto
+            doc_data = row.dropna().to_dict()
+            if 'id' in doc_data:
+                del doc_data['id']
+            
+            # Asegurar tipos numéricos para Firebase
+            if 'stock' in doc_data: doc_data['stock'] = int(doc_data['stock'])
+            if 'precio_venta' in doc_data: doc_data['precio_venta'] = float(doc_data['precio_venta'])
+            if 'precio_interno' in doc_data: doc_data['precio_interno'] = float(doc_data['precio_interno'])
+            if 'ultimo_costo_base' in doc_data: doc_data['ultimo_costo_base'] = float(doc_data['ultimo_costo_base'])
+            
+            doc_data['ultima_actualizacion'] = ahora
+            batch.set(ref_prod, doc_data, merge=True)
+            
+        operaciones += 1
+        # Límite de batch en Firestore es 500
+        if operaciones % 400 == 0:
+            batch.commit()
+            batch = db.batch()
+    
+    if operaciones % 400 != 0:
+        batch.commit()
+        
+    return True, f"Procesados {operaciones} repuestos en modo '{modo}'."
 
 # --- GESTIÓN DE CLIENTES ---
 def obtener_clientes() -> dict:
@@ -101,7 +163,6 @@ def calcular_cascada_precios(precio_base, recargo_financiero, descuento_proveedo
 
 # --- AYUDANTE PARA MEMORIA DE DESCRIPCIONES ---
 def obtener_producto_por_codigo(codigo_base):
-    """Busca si el código ya existe en el inventario para rescatar su descripción original."""
     cod_limpio = str(codigo_base).strip().upper().replace("/", "-")
     docs = db.collection("productos").where("codigo", "==", cod_limpio).limit(1).get()
     if docs:
@@ -141,7 +202,9 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 
     for art in datos_ia.get('articulos', []):
         codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
-        condicion_rep = str(art.get('condicion', 'GENERICO')).strip().upper()
+        
+        # Mapeo a Marca asegurado
+        marca_rep = str(art.get('marca', art.get('condicion', 'GENERICO'))).strip().upper()
         vehiculo_rep = str(art.get('vehiculo', 'UNIVERSAL')).strip().upper()
         proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
         cuit_proveedor = str(art.get('cuit_proveedor', '0'))
@@ -149,7 +212,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         if not codigo_base or codigo_base == "NONE":
             codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15].replace("/", "-")
             
-        id_producto = f"{codigo_base}_{condicion_rep}".replace("/", "-").strip()
+        id_producto = f"{codigo_base}_{marca_rep}".replace("/", "-").strip()
         precio_unitario = float(art.get('precio_unitario', 0.0))
         
         calculos = calcular_cascada_precios(precio_unitario, recargo, descuento_prov)
@@ -171,8 +234,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         else:
             batch.set(ref_prod, {
                 "codigo": codigo_base,
-                "marca": condicion_rep, 
-                "condicion": condicion_rep,
+                "marca": marca_rep, 
+                "condicion": marca_rep, # Mantenido temporalmente por si hay consultas viejas
                 "vehiculo": vehiculo_rep,
                 "descripcion": str(art.get('descripcion', 'Repuesto')),
                 "stock": cantidad,
@@ -203,13 +266,13 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 
 def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper().replace("/", "-")
-    cond_limpia = str(condicion).strip().upper()
+    marca_limpia = str(condicion).strip().upper() # Condicion viene del kwarg de app.py y funciona como marca
     veh_limpio = str(vehiculo).strip().upper()
-    id_producto = f"{codigo_base}_{cond_limpia}".replace("/", "-")
+    id_producto = f"{codigo_base}_{marca_limpia}".replace("/", "-")
 
     ref_prod = db.collection("productos").document(id_producto)
     if ref_prod.get().exists:
-        return False, f"El producto {codigo_base} ({cond_limpia}) ya existe."
+        return False, f"El producto {codigo_base} ({marca_limpia}) ya existe."
 
     prov_doc = db.collection("proveedores").document(str(cuit_proveedor)).get()
     datos_proveedor_db = prov_doc.to_dict() or {} 
@@ -221,8 +284,8 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
 
     ref_prod.set({
         "codigo": codigo_base,
-        "marca": cond_limpia, 
-        "condicion": cond_limpia,
+        "marca": marca_limpia, 
+        "condicion": marca_limpia, # Retrocompatibilidad db
         "vehiculo": veh_limpio,
         "descripcion": str(descripcion).strip(),
         "stock": int(stock),
@@ -276,7 +339,7 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
         "Stock": "stock",
         "Precio Final": "precio_venta",
         "Vehículo": "vehiculo",
-        "Condición": "condicion",
+        "Marca": "marca",
         "Pasillo": "ubicacion.pasillo",
         "Piso": "ubicacion.piso",
         "Módulo": "ubicacion.modulo",
@@ -290,11 +353,11 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
     if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Precio Final"]:
         nuevo_valor = int(nuevo_valor)
     else:
-        nuevo_valor = str(nuevo_valor).upper() if campo in ["Vehículo", "Condición"] else str(nuevo_valor)
+        nuevo_valor = str(nuevo_valor).upper() if campo in ["Vehículo", "Marca"] else str(nuevo_valor)
         
     updates = {campo_db: nuevo_valor, "ultima_actualizacion": datetime.now(timezone.utc)}
-    if campo == "Condición":
-        updates["marca"] = nuevo_valor
+    if campo == "Marca":
+        updates["condicion"] = nuevo_valor # Refuerzo retrocompatible
         
     ref_prod.update(updates)
     return True, "OK"
@@ -366,8 +429,8 @@ def obtener_inventario_completo() -> list:
         datos = d.to_dict() or {}
         datos['id'] = d.id
         
-        if 'condicion' not in datos:
-            datos['condicion'] = datos.get('marca', 'GENERICO')
+        if 'marca' not in datos:
+            datos['marca'] = datos.get('condicion', 'GENERICO')
         if 'vehiculo' not in datos:
             datos['vehiculo'] = 'UNIVERSAL'
             
@@ -396,7 +459,7 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     precio = float(datos.get('precio_venta', 0.0))
     ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_real)
     
-    marca_mostrar = datos.get('condicion', datos.get('marca', ''))
+    marca_mostrar = datos.get('marca', datos.get('condicion', ''))
     ref_item.set({
         "descripcion": f"{datos.get('descripcion')} ({marca_mostrar})",
         "precio_unitario": precio,
