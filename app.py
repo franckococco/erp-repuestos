@@ -35,7 +35,9 @@ from modulos.db_firebase import (
     eliminar_cliente,
     actualizar_ubicacion_relevamiento,
     actualizar_producto_desde_grilla,
-    obtener_producto_por_codigo
+    obtener_producto_por_codigo,
+    exportar_inventario_csv,
+    restaurar_inventario_csv
 )
 from modulos.generador_qr import generar_qr_producto
 
@@ -159,7 +161,7 @@ with tab_carga:
                             prod_db = obtener_producto_por_codigo(cod)
                             if prod_db:
                                 art['descripcion'] = prod_db.get('descripcion', art.get('descripcion'))
-                                art['condicion'] = prod_db.get('condicion', art.get('condicion', 'GENERICO'))
+                                art['marca'] = prod_db.get('marca', prod_db.get('condicion', art.get('marca', 'GENERICO')))
                                 art['vehiculo'] = prod_db.get('vehiculo', art.get('vehiculo', 'UNIVERSAL'))
                                 
                         st.session_state.temp_datos = datos
@@ -171,20 +173,33 @@ with tab_carga:
         d = st.session_state.temp_datos or {}
         if not isinstance(d, dict): d = {}
             
-        cuit_detectado = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
-        st.write(f"### Proveedor detectado: {d.get('proveedor', 'DESCONOCIDO')} (CUIT: {cuit_detectado})")
+        st.info("💡 **Revisá y Editá los datos de cabecera de la factura.**")
+        col_prov, col_cuit = st.columns(2)
+        prov_editado = col_prov.text_input("Proveedor detectado:", value=d.get('proveedor', 'DESCONOCIDO'))
+        cuit_original = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
+        cuit_editado = col_cuit.text_input("CUIT (11 dígitos):", value=cuit_original, max_chars=11)
         
-        st.info("💡 **Revisá y Editá los datos.** Podés moverte con las flechas, usar Enter para editar y Tab para saltar.")
+        d['proveedor'] = prov_editado
+        d['cuit_proveedor'] = cuit_editado
+        cuit_detectado = "".join(filter(str.isdigit, cuit_editado))
+        
+        if len(cuit_detectado) != 11 and cuit_detectado != "0" and cuit_detectado != "":
+            st.warning("⚠️ Atención: El CUIT ingresado no tiene 11 dígitos. Revisalo para evitar problemas contables.")
+        
+        st.divider()
+        st.info("💡 **Revisá y Editá los artículos.** Podés moverte con las flechas, usar Enter para editar y Tab para saltar.")
         
         articulos = d.get('articulos', [])
+        for art in articulos:
+            art['marca'] = art.get('marca', art.get('condicion', 'GENERICO'))
+            if 'condicion' in art:
+                del art['condicion']
+                
         df_articulos = pd.DataFrame(articulos)
         
-        if 'condicion' not in df_articulos.columns:
-            df_articulos['condicion'] = "GENERICO"
         if 'vehiculo' not in df_articulos.columns:
             df_articulos['vehiculo'] = "UNIVERSAL"
             
-        opciones_condicion = ["GENERICO", "ORIGINAL", "ALTERNATIVO"]
         opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
 
         with st.form("form_confirmacion_factura"):
@@ -195,7 +210,7 @@ with tab_carga:
                     "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
                     "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
                     "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
-                    "condicion": st.column_config.SelectboxColumn("Condición", width="small", options=opciones_condicion, required=True),
+                    "marca": st.column_config.TextColumn("Marca", width="small", required=True),
                     "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
                 },
                 use_container_width=True,
@@ -215,8 +230,8 @@ with tab_carga:
                     if not isinstance(art_ejemplo, dict): art_ejemplo = {}
                     
                     cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
-                    cond_ej = str(art_ejemplo.get('condicion', 'GENERICO')).strip().upper()
-                    desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({cond_ej})"
+                    marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
+                    desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
                     precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
                     
                     provs = obtener_proveedores() or {}
@@ -242,6 +257,8 @@ with tab_carga:
                 if isinstance(art, dict):
                     art['proveedor'] = nombre_prov
                     art['cuit_proveedor'] = cuit_detectado
+                    # Inyección retrocompatible para la db
+                    art['condicion'] = art.get('marca', 'GENERICO')
                 
             d['articulos'] = articulos_lista
             
@@ -264,16 +281,16 @@ with tab_carga:
                         if not isinstance(art, dict): continue
                         
                         codigo_base = str(art.get('codigo', '')).strip()
-                        condicion = str(art.get('condicion', 'GENERICO')).strip().upper()
+                        marca_rep = str(art.get('marca', 'GENERICO')).strip().upper()
                         if not codigo_base or codigo_base.lower() in ["null", "none"]:
                             desc_limpia = str(art.get('descripcion', '')).strip()
                             codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
                         
-                        id_producto = f"{codigo_base}_{condicion}"
+                        id_producto = f"{codigo_base}_{marca_rep}"
                         precio_f = float(art.get('precio_unitario', 0))
                         calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
                         
-                        desc_qr = f"{art.get('descripcion', 'Repuesto')} ({condicion})"
+                        desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
                         qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
                         zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
                 
@@ -315,14 +332,14 @@ with tab_inventario:
                         item['Módulo'] = 0
                         item['Fila'] = 0
                         
-                    item['Condición'] = item.get('condicion', 'GENERICO')
+                    item['Marca'] = item.get('marca', item.get('condicion', 'GENERICO'))
                     item['Vehículo'] = item.get('vehiculo', 'UNIVERSAL')
                     item['Stock'] = int(item.get('stock', 0))
                     item['Precio Final'] = item.get('precio_venta', 0)
                     item['Descripción'] = item.get('descripcion', '')
 
             df = pd.DataFrame(inv)
-            cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Condición', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
+            cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Marca', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
             cols_existentes = [c for c in cols_deseadas if c in df.columns]
             
             st.info("💡 Hacé doble clic en cualquier celda para corregir inventario o ubicaciones rápidamente.")
@@ -349,7 +366,7 @@ with tab_inventario:
                     "codigo": st.column_config.TextColumn("Cód", disabled=True, width="small"),
                     "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
                     "Vehículo": st.column_config.SelectboxColumn("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"], width="small"),
-                    "Condición": st.column_config.SelectboxColumn("Condición", options=["GENERICO", "ORIGINAL", "ALTERNATIVO"], width="small"),
+                    "Marca": st.column_config.TextColumn("Marca", width="small"),
                     "Stock": st.column_config.NumberColumn("Stk", width="small"),
                     "Precio Final": st.column_config.NumberColumn("$ Final", width="small"),
                     "Pasillo": st.column_config.NumberColumn("Pas", width="small"),
@@ -397,9 +414,9 @@ with tab_inventario:
                 cond_pago = col_cond.radio("Condición de Pago", ["Contado", "30 Días"], horizontal=True)
 
                 st.write("#### 2. Identidad del Repuesto")
-                col_cod, col_condicion, col_vehiculo = st.columns(3)
+                col_cod, col_marca, col_vehiculo = st.columns(3)
                 codigo_manual = col_cod.text_input("Código (Ref) (Obligatorio)")
-                cond_manual = col_condicion.selectbox("Condición", options=["GENERICO", "ORIGINAL", "ALTERNATIVO"])
+                marca_manual = col_marca.text_input("Marca", value="GENERICO")
                 veh_manual = col_vehiculo.selectbox("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"])
                 desc_manual = st.text_input("Descripción del Producto (Obligatorio)")
 
@@ -435,7 +452,7 @@ with tab_inventario:
 
                         exito, msj_alta = alta_manual_producto(
                             codigo=codigo_manual,
-                            condicion=cond_manual,
+                            condicion=marca_manual, 
                             vehiculo=veh_manual,
                             descripcion=desc_manual,
                             cuit_proveedor=cuit_seleccionado,
@@ -481,7 +498,8 @@ with tab_mostrador:
             opciones_desc = {}
             for item in inv_completo:
                 if isinstance(item, dict):
-                    desc = f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - {item.get('condicion', '')} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
+                    marca_item = item.get('marca', item.get('condicion', ''))
+                    desc = f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - {marca_item} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
                     opciones_desc[desc] = item.get('id')
             
             sel_prod = st.selectbox("Escriba para buscar por nombre, código o vehículo:", options=[""] + list(opciones_desc.keys()))
@@ -533,12 +551,15 @@ with tab_mostrador:
                     
                     if accion == "agregar_carrito":
                         termino = str(respuesta_json.get("termino", ""))
-                        cant = int(respuesta_json.get("cantidad", 1))
+                        cant_raw = respuesta_json.get("cantidad")
+                        cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
+                        
                         terminos_busqueda = normalizar_para_busqueda(termino).split()
                         
                         encontrados = []
                         for p in inventario:
-                            texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('condicion', '')}"
+                            marca_p = p.get('marca', p.get('condicion', ''))
+                            texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {marca_p}"
                             texto_norm = normalizar_para_busqueda(texto_item)
                             if all(t in texto_norm for t in terminos_busqueda):
                                 encontrados.append(p)
@@ -581,7 +602,8 @@ with tab_mostrador:
                             encontrados = []
                             for prod in inventario:
                                 if isinstance(prod, dict):
-                                    texto_item = f"{prod.get('descripcion', '')} {prod.get('condicion', '')} {prod.get('vehiculo', '')} {prod.get('codigo', '')}"
+                                    marca_p = prod.get('marca', prod.get('condicion', ''))
+                                    texto_item = f"{prod.get('descripcion', '')} {marca_p} {prod.get('vehiculo', '')} {prod.get('codigo', '')}"
                                     texto_norm = normalizar_para_busqueda(texto_item)
                                     if all(t in texto_norm for t in terminos_busqueda):
                                         encontrados.append(prod)
@@ -604,7 +626,8 @@ with tab_mostrador:
             for res in st.session_state.resultados_ia_mostrador:
                 if isinstance(res, dict):
                     precio_f = float(res.get('precio_venta', 0))
-                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('vehiculo', '')}-{res.get('condicion', '')}) - ${precio_f:,.2f}"
+                    marca_res = res.get('marca', res.get('condicion', ''))
+                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('vehiculo', '')}-{marca_res}) - ${precio_f:,.2f}"
                     
                     if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
                         exito, msj_db = agregar_al_carrito(str(vendedor), res.get('id'), 1)
@@ -716,7 +739,8 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "error"
 
             elif accion == "reporte_stock":
-                cant_limite = int(respuesta_json.get("cantidad", 3))
+                raw_cant = respuesta_json.get("cantidad")
+                cant_limite = int(raw_cant) if raw_cant is not None and str(raw_cant).isdigit() else 3
                 operador = respuesta_json.get("operador", "menor_o_igual")
                 
                 if operador == "exacto":
@@ -729,7 +753,7 @@ with tab_asistente:
                 if bajo_stock:
                     st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** Hay {len(bajo_stock)} productos con {msg_op} unidades."
                     df_r = pd.DataFrame(bajo_stock)
-                    st.session_state.df_reporte = df_r[['codigo', 'descripcion', 'vehiculo', 'condicion', 'stock']]
+                    st.session_state.df_reporte = df_r[['codigo', 'descripcion', 'vehiculo', 'marca', 'stock']]
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"✅ Excelente. No hay productos con {msg_op} unidades."
@@ -751,7 +775,8 @@ with tab_asistente:
             
             elif accion == "agregar_carrito":
                 termino = str(respuesta_json.get("termino", ""))
-                cant = int(respuesta_json.get("cantidad", 1))
+                cant_raw = respuesta_json.get("cantidad")
+                cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
                 
                 encontrados = []
@@ -775,7 +800,8 @@ with tab_asistente:
 
             elif accion in ["baja", "alta"]:
                 termino = str(respuesta_json.get("termino", ""))
-                cant = int(respuesta_json.get("cantidad", 1))
+                cant_raw = respuesta_json.get("cantidad")
+                cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
                 
                 encontrados = []
@@ -800,6 +826,27 @@ with tab_asistente:
                     st.session_state.ultima_respuesta = f"❌ No existe '{termino}' en el sistema."
                     st.session_state.ultimo_estado = "error"
                 
+            elif accion == "filtrar_proveedor":
+                prov_buscado = str(respuesta_json.get("proveedor", "")).lower()
+                terminos_prov = normalizar_para_busqueda(prov_buscado).split()
+                
+                encontrados = []
+                for p in inventario:
+                    prov_db = normalizar_para_busqueda(str(p.get('proveedor', '')))
+                    if prov_db and all(t in prov_db for t in terminos_prov):
+                        encontrados.append(p)
+                
+                if encontrados:
+                    st.session_state.ultima_respuesta = f"🏭 **Filtro por proveedor:** Encontré {len(encontrados)} repuestos vinculados a '{prov_buscado}'."
+                    df_r = pd.DataFrame(encontrados)
+                    cols_mostrar = ['codigo', 'descripcion', 'vehiculo', 'marca', 'stock', 'precio_venta']
+                    cols_ok = [c for c in cols_mostrar if c in df_r.columns]
+                    st.session_state.df_reporte = df_r[cols_ok]
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.ultima_respuesta = f"⚠️ No encontré repuestos asociados al proveedor '{prov_buscado}'."
+                    st.session_state.ultimo_estado = "normal"
+
             elif accion == "buscar" or accion == "consulta" or accion == "ubicacion":
                 termino = str(respuesta_json.get("termino", ""))
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
@@ -807,7 +854,8 @@ with tab_asistente:
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
-                        texto_item = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {p.get('condicion', '')} {p.get('codigo', '')}"
+                        marca_p = p.get('marca', p.get('condicion', ''))
+                        texto_item = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {marca_p} {p.get('codigo', '')}"
                         texto_norm = normalizar_para_busqueda(texto_item)
                         if all(t in texto_norm for t in terminos_busqueda):
                             encontrados.append(p)
@@ -818,7 +866,8 @@ with tab_asistente:
                         ubi = p.get('ubicacion', {})
                         if not isinstance(ubi, dict): ubi = {}
                         loc_str = f"Pasillo: {ubi.get('pasillo',0)} | Piso: {ubi.get('piso',0)} | Módulo: {ubi.get('modulo',0)} | Fila: {ubi.get('fila',0)}"
-                        lista_txt += f"- **{p.get('codigo', '')} ({p.get('condicion', '')})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n  📍 {loc_str}\n\n"
+                        marca_disp = p.get('marca', p.get('condicion', ''))
+                        lista_txt += f"- **{p.get('codigo', '')} ({marca_disp})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n  📍 {loc_str}\n\n"
                     st.session_state.ultima_respuesta = lista_txt
                     st.session_state.ultimo_estado = "normal"
                 else:
@@ -847,6 +896,32 @@ with tab_asistente:
 # --- PESTAÑA 5: CONFIGURACIÓN ---
 with tab_config:
     st.header("Configuración del Sistema")
+    
+    st.subheader("💾 Backup y Restauración de Stock")
+    col_down, col_up = st.columns(2)
+    with col_down:
+        st.info("Descargar el inventario actual.")
+        csv_data = exportar_inventario_csv()
+        if csv_data:
+            st.download_button("⬇️ Descargar Stock (CSV)", data=csv_data, file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", type="primary")
+        else:
+            st.download_button("⬇️ Descargar Stock (CSV)", data="", file_name="vacio.csv", disabled=True, help="El inventario está vacío")
+            
+    with col_up:
+        st.info("Subir un archivo para restaurar o actualizar.")
+        archivo_csv = st.file_uploader("Restaurar Stock (CSV)", type=["csv"])
+        if archivo_csv:
+            df_upload = pd.read_csv(archivo_csv)
+            st.write(f"Vista previa: {len(df_upload)} productos detectados.")
+            modo_restauracion = st.radio("Modo de Restauración:", ["sumar_stock", "sobreescribir"], format_func=lambda x: "➕ Sumar Cantidades al Stock Existente" if x == "sumar_stock" else "⚠️ Sobreescribir Todo (Peligro)")
+            if st.button("Ejecutar Restauración", type="primary"):
+                with st.spinner("Procesando archivo..."):
+                    exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
+                    if exito:
+                        st.success(msg_rest)
+                        st.rerun()
+        
+    st.divider()
     
     with st.expander("⚠️ ZONA DE PELIGRO - Borrar Base de Datos"):
         st.warning("Esto borrará todo el inventario, carritos y el historial de facturas. Es irreversible.")
