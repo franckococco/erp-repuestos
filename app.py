@@ -363,13 +363,7 @@ with tab_inventario:
                 hide_index=True,
                 column_config={
                     "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
-                    "codigo": st.column_config.TextColumn("Cód", disabled=True, width="small"),
-                    "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
-                    "Vehículo": st.column_config.SelectboxColumn("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"], width="small"),
-                    "Marca": st.column_config.TextColumn("Marca", width="small"),
-                    "Stock": st.column_config.NumberColumn("Stk", width="small"),
-                    "Precio Final": st.column_config.NumberColumn("$ Final", width="small"),
-                    "Pasillo": st.column_config.NumberColumn("Pas", width="small"),
+                        "codigo": st.column_config.TextColumn("Código", disabled=True, width="small"),
                     "Piso": st.column_config.NumberColumn("P", width="small"),
                     "Módulo": st.column_config.NumberColumn("Mod", width="small"),
                     "Fila": st.column_config.NumberColumn("F", width="small")
