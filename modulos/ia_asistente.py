@@ -18,8 +18,8 @@ def normalizar_texto_basico(texto):
 
 def es_consulta_mayor_o_igual(texto):
     texto_norm = normalizar_texto_basico(texto)
-    if re.search(r'\b(mas de|al menos|como minimo|tengan .* o mas|mayor o igual|mayor que|\+|>=|\bmas\b)\b', texto_norm):
-        if not re.search(r'\b(menos de|hasta|a lo sumo|como maximo|menor o igual|<=)\b', texto_norm):
+    if re.search(r'\b(mas de|al menos|como minimo|mayores a|mayor a|superior a|por encima de|o mas|mayor o igual|mayor que|>=|\+)\b', texto_norm):
+        if not re.search(r'\b(menos de|hasta|a lo sumo|como maximo|menor o igual|menor que|<=)\b', texto_norm):
             return True
     return False
 
@@ -111,9 +111,14 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
         if isinstance(resultado, dict) and resultado.get("accion") == "reporte_stock":
             operador = str(resultado.get("operador", "") or "").strip().lower()
             if operador not in {"exacto", "menor_o_igual", "mayor_o_igual"}:
-                resultado["operador"] = "menor_o_igual"
-            elif operador == "menor_o_igual" and es_consulta_mayor_o_igual(texto_usuario):
+                operador = "menor_o_igual"
+
+            if operador == "exacto":
+                resultado["operador"] = operador
+            elif es_consulta_mayor_o_igual(texto_usuario):
                 resultado["operador"] = "mayor_o_igual"
+            else:
+                resultado["operador"] = operador
 
         return resultado
         
