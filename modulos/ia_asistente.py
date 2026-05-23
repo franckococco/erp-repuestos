@@ -1,11 +1,28 @@
 import os
 import json
 import re
+import unicodedata
 from groq import Groq # type: ignore
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+
+def normalizar_texto_basico(texto):
+    if not texto:
+        return ""
+    texto = str(texto).lower()
+    texto = unicodedata.normalize('NFD', texto)
+    return ''.join(c for c in texto if unicodedata.category(c) != 'Mn')
+
+
+def es_consulta_mayor_o_igual(texto):
+    texto_norm = normalizar_texto_basico(texto)
+    if re.search(r'\b(mas de|al menos|como minimo|tengan .* o mas|mayor o igual|mayor que|\+|>=|\bmas\b)\b', texto_norm):
+        if not re.search(r'\b(menos de|hasta|a lo sumo|como maximo|menor o igual|<=)\b', texto_norm):
+            return True
+    return False
+
 
 def preprocesar_texto_usuario(texto):
     """
@@ -89,8 +106,16 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
         
         # Limpieza segura para evitar errores de sintaxis al copiar/pegar
         texto = texto.replace("```json", "").replace("```", "").strip()
-        
-        return json.loads(texto)
+        resultado = json.loads(texto)
+
+        if isinstance(resultado, dict) and resultado.get("accion") == "reporte_stock":
+            operador = str(resultado.get("operador", "") or "").strip().lower()
+            if operador not in {"exacto", "menor_o_igual", "mayor_o_igual"}:
+                resultado["operador"] = "menor_o_igual"
+            elif operador == "menor_o_igual" and es_consulta_mayor_o_igual(texto_usuario):
+                resultado["operador"] = "mayor_o_igual"
+
+        return resultado
         
     except Exception as e:
         return {"accion": "error", "respuesta": f"Error en lectura de IA: {str(e)}"}
