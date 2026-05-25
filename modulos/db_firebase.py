@@ -331,15 +331,46 @@ def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modu
         return True, "Ubicación de inventario actualizada."
     return False, "No se detectaron datos de ubicación válidos en la orden."
 
-def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
-    partes = str(id_producto).replace("/", "-").split("_", 1)
-    id_m = partes[0]
-    marca = partes[1] if len(partes) > 1 else "GENERICO"
-    
+def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro=None, marca=None):
+    id_m = str(id_maestro or "").strip().replace("/", "-")
+    marca_key = str(marca or "").strip().upper()
+
+    if not id_m:
+        partes = str(id_producto).replace("/", "-").split("_", 1)
+        id_m = partes[0]
+        if not marca_key:
+            marca_key = partes[1].upper() if len(partes) > 1 else "GENERICO"
+
+    if not marca_key:
+        partes = str(id_producto).replace("/", "-").split("_", 1)
+        marca_key = partes[1].upper() if len(partes) > 1 else "GENERICO"
+
     ref_prod = db.collection("productos").document(id_m)
-    if not ref_prod.get().exists:
+    doc = ref_prod.get()
+    if not doc.exists:
         return False, "Producto no encontrado."
-    
+
+    datos = doc.to_dict() or {}
+    variantes = datos.get("variantes", {})
+    ahora = datetime.now(timezone.utc)
+
+    if campo == "Marca":
+        if not variantes:
+            return False, "Producto sin variantes (formato antiguo)."
+        nueva_marca = str(nuevo_valor).strip().upper()
+        if nueva_marca == marca_key:
+            return True, "OK"
+        if marca_key not in variantes:
+            return False, f"La variante '{marca_key}' no existe."
+        if nueva_marca in variantes:
+            return False, f"Ya existe la marca '{nueva_marca}' en este artículo."
+        ref_prod.update({
+            f"variantes.{nueva_marca}": variantes[marca_key],
+            f"variantes.{marca_key}": firestore.DELETE_FIELD,  # type: ignore
+            "ultima_actualizacion": ahora
+        })
+        return True, "OK"
+
     mapa_campos = {
         "Descripción": "descripcion",
         "Vehículo": "vehiculo",
@@ -347,20 +378,25 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor):
         "Piso": "ubicacion.piso",
         "Módulo": "ubicacion.modulo",
         "Fila": "ubicacion.fila",
-        "Stock": f"variantes.{marca}.stock",
-        "Precio Final": f"variantes.{marca}.precio_venta"
+        "Stock": f"variantes.{marca_key}.stock",
+        "Precio Final": f"variantes.{marca_key}.precio_venta",
     }
-    
+
     campo_db = mapa_campos.get(campo)
     if not campo_db:
-        return False, f"Campo no editable."
-        
+        return False, "Campo no editable."
+
     if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Precio Final"]:
         nuevo_valor = int(nuevo_valor)
+    elif campo == "Vehículo":
+        nuevo_valor = str(nuevo_valor).upper()
     else:
-        nuevo_valor = str(nuevo_valor).upper() if campo in ["Vehículo"] else str(nuevo_valor)
-        
-    updates = {campo_db: nuevo_valor, "ultima_actualizacion": datetime.now(timezone.utc)}
+        nuevo_valor = str(nuevo_valor)
+
+    if campo in ("Stock", "Precio Final") and variantes and marca_key not in variantes:
+        return False, f"La variante '{marca_key}' no existe en este artículo."
+
+    updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
     ref_prod.update(updates)
     return True, "OK"
 
