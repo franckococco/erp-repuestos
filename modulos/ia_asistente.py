@@ -15,14 +15,12 @@ def normalizar_texto_basico(texto):
     texto = unicodedata.normalize('NFD', texto)
     return ''.join(c for c in texto if unicodedata.category(c) != 'Mn')
 
-
 def es_consulta_mayor_o_igual(texto):
     texto_norm = normalizar_texto_basico(texto)
     if re.search(r'\b(mas de|al menos|como minimo|mayores a|mayor a|superior a|por encima de|o mas|mayor o igual|mayor que|>=|\+)\b', texto_norm):
         if not re.search(r'\b(menos de|hasta|a lo sumo|como maximo|menor o igual|menor que|<=)\b', texto_norm):
             return True
     return False
-
 
 def preprocesar_texto_usuario(texto):
     """
@@ -50,22 +48,24 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     texto_procesado = preprocesar_texto_usuario(texto_usuario)
 
     prompt = f"""
-    Eres el asistente inteligente de depósito y mostrador de repuestos.
+    Eres el asistente inteligente del depósito "Hafid Repuestos".
     TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO, NORMALIZAR LA BÚSQUEDA Y DEFINIR OPERADORES MATEMÁTICOS.
 
     ORDEN DEL USUARIO: "{texto_procesado}"
 
-    REGLAS ESTRICTAS PARA ENTENDER LA ORDEN:
-    1. BÚSQUEDA Y CONSULTA (Vehículos, Marcas, Repuestos): Extrae todas las palabras clave relevantes. Ignora palabras de relleno como "para", "de", "el", "la", "un". 
-       Ej: "buscame filtro de aire para peugeot" -> el termino debe ser "filtro aire peugeot".
-    2. REPORTE DE STOCK (MATEMÁTICA ESTRICTA): 
-       - Si el usuario pide los que tienen una cantidad específica (ej: "los que tienen 3"), el operador es "exacto".
-       - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", el operador es "menor_o_igual".
-       - Si pide "3 o más", "al menos 3" o "más de 3", el operador es "mayor_o_igual".
-       - Si no especifica cantidad en un reporte de mínimos, asume 3.
-    3. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
-    4. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible (la raíz). Ej: "15 42 514 f g" -> "1542514".
-    5. PROVEEDORES: Si el usuario pide filtrar, mostrar o buscar repuestos de un proveedor específico, extrae solo el nombre del proveedor.
+    REGLAS ESTRICTAS PARA ENTENDER LA ORDEN (MUY IMPORTANTE):
+    1. Si el usuario pide buscar, consultar stock, o pregunta "¿cuánto hay de...?", la acción obligatoria es "buscar". NO uses "reporte_stock" a menos que pida un reporte general de cantidades.
+    2. LIMPIEZA DEL TÉRMINO: Extrae SOLO la raíz del repuesto o el código. ELIMINA TOTALMENTE palabras basura como: "buscame", "el", "código", "decime", "stock", "de", "cuanto", "hay", "para", "quiero", "saber".
+       Ejemplo 1: "decime el stock del código 1252t" -> termino: "1252t"
+       Ejemplo 2: "buscame rotula para ranger" -> termino: "rotula ranger"
+    3. REPORTE DE STOCK (MATEMÁTICA ESTRICTA): 
+       - Si pide los que tienen una cantidad específica (ej: "los que tienen 3"), operador: "exacto".
+       - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", operador: "menor_o_igual".
+       - Si pide "3 o más", "al menos 3" o "más de 3", operador: "mayor_o_igual".
+       - Si no especifica cantidad en un reporte, asume 3.
+    4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
+    5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
+    6. PROVEEDORES: Si el usuario pide filtrar, mostrar o buscar repuestos de un proveedor específico, extrae solo el nombre del proveedor.
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
@@ -103,8 +103,6 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
         )
         
         texto = chat_completion.choices[0].message.content.strip() # type: ignore
-        
-        # Limpieza segura para evitar errores de sintaxis al copiar/pegar
         texto = texto.replace("```json", "").replace("```", "").strip()
         resultado = json.loads(texto)
 
@@ -113,6 +111,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
             if operador not in {"exacto", "menor_o_igual", "mayor_o_igual"}:
                 operador = "menor_o_igual"
 
+            # Corrección del bug: Usamos directamente la validación sin llamar a la función inexistente
             if operador == "exacto":
                 resultado["operador"] = operador
             elif es_consulta_mayor_o_igual(texto_usuario):
