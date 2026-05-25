@@ -82,16 +82,16 @@ def preparar_item_inventario(item):
         return item
     ubi = item.get('ubicacion', {})
     if isinstance(ubi, dict):
-        item['Pasillo'] = ubi.get('pasillo', 0)
-        item['Piso'] = ubi.get('piso', 0)
-        item['Módulo'] = ubi.get('modulo', 0)
-        item['Fila'] = ubi.get('fila', 0)
+        item['Pasillo'] = int(ubi.get('pasillo', 0))
+        item['Piso'] = int(ubi.get('piso', 0))
+        item['Módulo'] = int(ubi.get('modulo', 0))
+        item['Fila'] = int(ubi.get('fila', 0))
     else:
         item['Pasillo'] = item['Piso'] = item['Módulo'] = item['Fila'] = 0
     item['Marca'] = item.get('marca', item.get('condicion', 'GENERICO'))
     item['Vehículo'] = item.get('vehiculo', 'UNIVERSAL')
     item['Stock'] = int(item.get('stock', 0))
-    item['Precio Final'] = item.get('precio_venta', 0)
+    item['Precio Final'] = int(item.get('precio_venta', 0) or 0)
     item['Descripción'] = item.get('descripcion', '')
     return item
 
@@ -450,7 +450,11 @@ with tab_inventario:
 
             st.divider()
             st.subheader("✏️ Edición detallada por variante (ID = CÓDIGO_MARCA)")
-            st.info("💡 Editá stock, precio o ubicación por variante. Los cambios de descripción/vehículo aplican al artículo maestro.")
+            st.info(
+                "💡 Podés editar descripción, vehículo, marca, stock, precio y ubicación. "
+                "El **código maestro** y el **ID variante** no se cambian acá (evita romper QR y facturas). "
+                "Después de editar, pulsá **Guardar Cambios Manuales**."
+            )
 
             df = pd.DataFrame(inv_filtrado)
             cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Marca', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
@@ -463,16 +467,23 @@ with tab_inventario:
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "id": st.column_config.TextColumn("ID Variante", disabled=True, width="small"),
-                    "codigo": st.column_config.TextColumn("Cód. Maestro", disabled=True, width="small"),
+                    "id": st.column_config.TextColumn(
+                        "ID Variante (referencia QR)", disabled=True, width="small"
+                    ),
+                    "codigo": st.column_config.TextColumn(
+                        "Cód. Maestro (no editable)", disabled=True, width="small"
+                    ),
                     "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
                     "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
-                    "Marca": st.column_config.TextColumn("Marca", disabled=True, width="small"),
-                    "Stock": st.column_config.NumberColumn("Stock", width="small"),
-                    "Precio Final": st.column_config.NumberColumn("Precio", width="small"),
-                    "Piso": st.column_config.NumberColumn("P", width="small"),
-                    "Módulo": st.column_config.NumberColumn("Mod", width="small"),
-                    "Fila": st.column_config.NumberColumn("F", width="small"),
+                    "Marca": st.column_config.TextColumn("Marca (variante)", width="small"),
+                    "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
+                    "Precio Final": st.column_config.NumberColumn(
+                        "Precio venta", min_value=0, step=10, width="small"
+                    ),
+                    "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
+                    "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
+                    "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
+                    "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
                 },
                 key="grilla_inv"
             )
@@ -480,12 +491,29 @@ with tab_inventario:
             if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
                 if st.button("💾 Guardar Cambios Manuales", type="primary"):
                     cambios = st.session_state.grilla_inv["edited_rows"]
+                    errores = []
+                    guardados = 0
                     for row_idx, dict_cambios in cambios.items():
-                        id_prod = df_filtrado.iloc[int(row_idx)]['id']
+                        fila = df_filtrado.iloc[int(row_idx)]
+                        id_prod = fila['id']
+                        id_m = fila.get('codigo') or str(id_prod).split('_')[0]
+                        marca_fila = fila.get('Marca', 'GENERICO')
                         for col_name, new_val in dict_cambios.items():
-                            actualizar_producto_desde_grilla(id_prod, col_name, new_val)
-                    st.success("Inventario actualizado en la base de datos.")
-                    st.rerun()
+                            ok, msj = actualizar_producto_desde_grilla(
+                                id_prod, col_name, new_val,
+                                id_maestro=id_m, marca=marca_fila
+                            )
+                            if ok:
+                                guardados += 1
+                            else:
+                                errores.append(f"{col_name}: {msj}")
+                    if errores:
+                        st.error("Algunos cambios no se guardaron:\n" + "\n".join(errores))
+                    if guardados:
+                        st.success(f"Inventario actualizado ({guardados} celda(s)).")
+                        st.rerun()
+                    elif not errores:
+                        st.info("No hubo cambios para guardar.")
 
             st.divider()
             opciones = {
