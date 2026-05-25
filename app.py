@@ -93,6 +93,7 @@ def preparar_item_inventario(item):
     item['Stock'] = int(item.get('stock', 0))
     item['Precio Final'] = int(item.get('precio_venta', 0) or 0)
     item['Descripción'] = item.get('descripcion', '')
+    item['id_maestro'] = item.get('id_maestro', item.get('codigo', ''))
     return item
 
 
@@ -495,9 +496,10 @@ with tab_inventario:
                     guardados = 0
                     for row_idx, dict_cambios in cambios.items():
                         fila = df_filtrado.iloc[int(row_idx)]
-                        id_prod = fila['id']
-                        id_m = fila.get('codigo') or str(id_prod).split('_')[0]
-                        marca_fila = fila.get('Marca', 'GENERICO')
+                        id_prod = str(fila['id'])
+                        id_m = str(fila.get('id_maestro') or fila.get('codigo') or '')
+                        # Marca original desde el ID (CODIGO_MARCA), no la celda ya editada
+                        marca_fila = id_prod[len(id_m) + 1:].upper() if id_m and id_prod.startswith(f"{id_m}_") else str(fila.get('Marca', 'GENERICO')).upper()
                         for col_name, new_val in dict_cambios.items():
                             ok, msj = actualizar_producto_desde_grilla(
                                 id_prod, col_name, new_val,
