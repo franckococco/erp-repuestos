@@ -13,8 +13,8 @@ import re
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
 from modulos.db_firebase import (
-    registrar_ingreso_inteligente, 
-    obtener_inventario_completo, 
+    registrar_ingreso_inteligente,
+    obtener_inventario_completo,
     obtener_proveedores,
     configurar_proveedor,
     eliminar_proveedor,
@@ -51,11 +51,11 @@ components.html(
     doc.addEventListener('keydown', function(e) {
         if (e.ctrlKey) {
             let tabIndex = -1;
-            if (e.key.toLowerCase() === 's') { tabIndex = 0; e.preventDefault(); } // Ctrl+S: Stock
-            else if (e.key.toLowerCase() === 'i') { tabIndex = 1; e.preventDefault(); } // Ctrl+I: Inventario
-            else if (e.key.toLowerCase() === 'm') { tabIndex = 2; e.preventDefault(); } // Ctrl+M: Mostrador
-            else if (e.key.toLowerCase() === 'a') { tabIndex = 3; e.preventDefault(); } // Ctrl+A: Asistente
-            
+            if (e.key.toLowerCase() === 's') { tabIndex = 0; e.preventDefault(); }
+            else if (e.key.toLowerCase() === 'i') { tabIndex = 1; e.preventDefault(); }
+            else if (e.key.toLowerCase() === 'm') { tabIndex = 2; e.preventDefault(); }
+            else if (e.key.toLowerCase() === 'a') { tabIndex = 3; e.preventDefault(); }
+            else if (e.key.toLowerCase() === 'c') { tabIndex = 4; e.preventDefault(); }
             if (tabIndex !== -1) {
                 const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
                 if (tabs.length > tabIndex) {
@@ -76,11 +76,93 @@ def normalizar_para_busqueda(texto):
     t = ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
     return re.sub(r'[^a-z0-9\s]', '', t.lower())
 
+
+def preparar_item_inventario(item):
+    if not isinstance(item, dict):
+        return item
+    ubi = item.get('ubicacion', {})
+    if isinstance(ubi, dict):
+        item['Pasillo'] = ubi.get('pasillo', 0)
+        item['Piso'] = ubi.get('piso', 0)
+        item['Módulo'] = ubi.get('modulo', 0)
+        item['Fila'] = ubi.get('fila', 0)
+    else:
+        item['Pasillo'] = item['Piso'] = item['Módulo'] = item['Fila'] = 0
+    item['Marca'] = item.get('marca', item.get('condicion', 'GENERICO'))
+    item['Vehículo'] = item.get('vehiculo', 'UNIVERSAL')
+    item['Stock'] = int(item.get('stock', 0))
+    item['Precio Final'] = item.get('precio_venta', 0)
+    item['Descripción'] = item.get('descripcion', '')
+    return item
+
+
+def agrupar_por_maestro(items):
+    grupos = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = item.get('id_maestro') or str(item.get('codigo', '')).strip()
+        if not key:
+            key = str(item.get('id', '')).split('_')[0]
+        if key not in grupos:
+            grupos[key] = {
+                'id_maestro': key,
+                'codigo': item.get('codigo', key),
+                'descripcion': item.get('descripcion', ''),
+                'vehiculo': item.get('vehiculo', 'UNIVERSAL'),
+                'ubicacion': item.get('ubicacion', {}),
+                'variantes': []
+            }
+        grupos[key]['variantes'].append(item)
+    return grupos
+
+
+def filtrar_inventario(items, termino_busqueda):
+    if not termino_busqueda:
+        return items
+    terminos = normalizar_para_busqueda(termino_busqueda).split()
+    resultado = []
+    for item in items:
+        texto = normalizar_para_busqueda(
+            f"{item.get('codigo', '')} {item.get('descripcion', '')} {item.get('vehiculo', '')} "
+            f"{item.get('marca', '')} {item.get('id', '')} {item.get('proveedor', '')}"
+        )
+        if all(t in texto for t in terminos):
+            resultado.append(item)
+    return resultado
+
+
+def texto_resultados_agrupados(encontrados, termino):
+    grupos = agrupar_por_maestro(encontrados)
+    if not grupos:
+        return f"No hay stock de nada relacionado con '{termino}'."
+    lista_txt = f"🔍 Resultados agrupados para '{termino}':\n\n"
+    for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
+        g = grupos[key]
+        ubi = g.get('ubicacion', {})
+        if not isinstance(ubi, dict):
+            ubi = {}
+        loc_str = (
+            f"Pasillo: {ubi.get('pasillo', 0)} | Piso: {ubi.get('piso', 0)} | "
+            f"Módulo: {ubi.get('modulo', 0)} | Fila: {ubi.get('fila', 0)}"
+        )
+        lista_txt += f"### {g['descripcion']} ({g['vehiculo']}) — Cód. {g['codigo']}\n"
+        lista_txt += f"📍 {loc_str}\n"
+        for v in g['variantes']:
+            marca_disp = v.get('marca', v.get('condicion', ''))
+            lista_txt += (
+                f"  - **Marca {marca_disp}:** {v.get('stock', 0)} u. | "
+                f"${v.get('precio_venta', 0):,.0f} | ID: `{v.get('id', '')}`\n"
+            )
+        lista_txt += "\n"
+    return lista_txt
+
+
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
 def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
     pdf = FPDF()
     pdf.add_page()
-    
+
     if os.path.exists("logo_hafid.jpeg"):
         pdf.image("logo_hafid.jpeg", x=85, y=10, w=40)
         pdf.ln(35)
@@ -93,19 +175,19 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
 
     pdf.set_font("Helvetica", "B", 16)
     pdf.cell(190, 10, "PRESUPUESTO - MAGNUM VALORES SAS", new_x="LMARGIN", new_y="NEXT", align="C")
-    
+
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(190, 10, f"Cliente: {cliente_nombre} | Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.cell(190, 10, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(10)
-    
+
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(40, 10, "Codigo", 1)
     pdf.cell(80, 10, "Descripcion", 1)
     pdf.cell(30, 10, "Cant.", 1)
     pdf.cell(40, 10, "Subtotal", 1)
     pdf.ln()
-    
+
     pdf.set_font("Helvetica", "", 10)
     for item in items:
         codigo_display = str(item.get('id', item.get('codigo', '')))
@@ -114,17 +196,17 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
         pdf.cell(30, 10, str(item.get('cantidad', 1)), 1)
         pdf.cell(40, 10, f"${item.get('subtotal', 0):,.2f}", 1)
         pdf.ln()
-    
+
     pdf.ln(5)
     if descuento_aplicado > 0:
         pdf.set_font("Helvetica", "I", 10)
         descuento_monto = total * (descuento_aplicado / 100)
         pdf.cell(190, 8, f"Descuento Cliente ({descuento_aplicado}%): -${descuento_monto:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-    
+
     pdf.set_font("Helvetica", "B", 12)
     total_final = total * (1 - descuento_aplicado / 100)
     pdf.cell(190, 10, f"TOTAL FINAL: ${total_final:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-    
+
     return bytes(pdf.output())
 
 if "temp_datos" not in st.session_state:
@@ -136,12 +218,15 @@ if "resultados_ia_mostrador" not in st.session_state:
 if "msg_ia_mostrador" not in st.session_state:
     st.session_state.msg_ia_mostrador = None
 
-tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"])
+tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(
+    ["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"]
+)
 
 # --- PESTAÑA 1: CARGA DE STOCK ---
 with tab_carga:
     st.header("Escanear Factura")
-    
+    st.caption("Atajo: Ctrl+S")
+
     st.write("**Condición de Pago de esta factura:**")
     condicion_pago = st.radio("Define el recargo financiero a aplicar:", ["Contado", "30 Días"], horizontal=True)
     st.divider()
@@ -157,13 +242,11 @@ with tab_carga:
                     datos = procesar_factura_con_ia(Image.open(img))
                     if datos:
                         for art in datos.get('articulos', []):
-                            cod = str(art.get('codigo', ''))
+                            cod = str(art.get('codigo', '')).strip()
                             prod_db = obtener_producto_por_codigo(cod)
                             if prod_db:
                                 art['descripcion'] = prod_db.get('descripcion', art.get('descripcion'))
-                                art['marca'] = prod_db.get('marca', prod_db.get('condicion', art.get('marca', 'GENERICO')))
                                 art['vehiculo'] = prod_db.get('vehiculo', art.get('vehiculo', 'UNIVERSAL'))
-                                
                         st.session_state.temp_datos = datos
                         st.rerun()
                 except Exception as e:
@@ -171,69 +254,76 @@ with tab_carga:
 
     if st.session_state.temp_datos:
         d = st.session_state.temp_datos or {}
-        if not isinstance(d, dict): d = {}
-            
+        if not isinstance(d, dict):
+            d = {}
+
         st.info("💡 **Revisá y Editá los datos de cabecera de la factura.**")
         col_prov, col_cuit = st.columns(2)
         prov_editado = col_prov.text_input("Proveedor detectado:", value=d.get('proveedor', 'DESCONOCIDO'))
         cuit_original = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
         cuit_editado = col_cuit.text_input("CUIT (11 dígitos):", value=cuit_original, max_chars=11)
-        
+
         d['proveedor'] = prov_editado
         d['cuit_proveedor'] = cuit_editado
         cuit_detectado = "".join(filter(str.isdigit, cuit_editado))
-        
+
         if len(cuit_detectado) != 11 and cuit_detectado != "0" and cuit_detectado != "":
             st.warning("⚠️ Atención: El CUIT ingresado no tiene 11 dígitos. Revisalo para evitar problemas contables.")
-        
+
+        provs_check = obtener_proveedores() or {}
+        if cuit_detectado and cuit_detectado not in provs_check:
+            st.error("⚠️ Este CUIT no está configurado. Registralo en Configuración → Proveedores antes de confirmar.")
+
         st.divider()
-        st.info("💡 **Revisá y Editá los artículos.** Podés moverte con las flechas, usar Enter para editar y Tab para saltar.")
-        
+        st.info("💡 **Código = artículo maestro. Marca = variante.** Misma pieza, otra marca → mismo código, distinta marca.")
+
         articulos = d.get('articulos', [])
         for art in articulos:
             art['marca'] = art.get('marca', art.get('condicion', 'GENERICO'))
             if 'condicion' in art:
                 del art['condicion']
-                
+
         df_articulos = pd.DataFrame(articulos)
-        
+
         if 'vehiculo' not in df_articulos.columns:
             df_articulos['vehiculo'] = "UNIVERSAL"
-            
+
         opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
 
         with st.form("form_confirmacion_factura"):
             df_editado = st.data_editor(
                 df_articulos,
                 column_config={
-                    "codigo": st.column_config.TextColumn("Código", width="small", required=True),
+                    "codigo": st.column_config.TextColumn("Código Maestro", width="small", required=True),
                     "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
                     "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
                     "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
-                    "marca": st.column_config.TextColumn("Marca", width="small", required=True),
+                    "marca": st.column_config.TextColumn("Marca (Variante)", width="small", required=True),
                     "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
                 },
                 use_container_width=True,
                 num_rows="dynamic",
                 key="grilla_validacion"
             )
-            
+
             st.divider()
             st.subheader("⚙️ Opciones de Etiquetas QR")
-            
+
             col1, col2 = st.columns([2, 1])
             with col1:
                 tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
             with col2:
                 if not df_editado.empty:
                     art_ejemplo = df_editado.iloc[0].to_dict() or {}
-                    if not isinstance(art_ejemplo, dict): art_ejemplo = {}
-                    
-                    cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip() or 'DEMO'
+                    if not isinstance(art_ejemplo, dict):
+                        art_ejemplo = {}
+
+                    cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
                     marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
                     desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
                     precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
-                    
+                    id_qr_ej = f"{cod_ej}_{marca_ej}"
+
                     provs = obtener_proveedores() or {}
                     recargo_prev = 0.0
                     descuento_prev = 0.0
@@ -242,28 +332,26 @@ with tab_carga:
                         if isinstance(datos_prov, dict):
                             recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
                             descuento_prev = float(datos_prov.get('descuento', 0.0))
-                    
+
                     calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
-                    qr_preview = generar_qr_producto(cod_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
-                    st.image(qr_preview, caption="Vista Previa Público", width=150)
-            
+                    qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
+                    st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
+
             submit_factura = st.form_submit_button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True)
 
         if submit_factura:
             nombre_prov = d.get('proveedor', 'DESCONOCIDO')
             articulos_lista = df_editado.to_dict('records')
-            
+
             for art in articulos_lista:
                 if isinstance(art, dict):
                     art['proveedor'] = nombre_prov
                     art['cuit_proveedor'] = cuit_detectado
-                    # Inyección retrocompatible para la db
-                    art['condicion'] = art.get('marca', 'GENERICO')
-                
+
             d['articulos'] = articulos_lista
-            
+
             exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
-            
+
             if exito:
                 prov_id = cuit_detectado
                 provs = obtener_proveedores() or {}
@@ -278,22 +366,23 @@ with tab_carga:
                 zip_buffer = BytesIO()
                 with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                     for art in d.get('articulos', []):
-                        if not isinstance(art, dict): continue
-                        
-                        codigo_base = str(art.get('codigo', '')).strip()
+                        if not isinstance(art, dict):
+                            continue
+
+                        codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
                         marca_rep = str(art.get('marca', 'GENERICO')).strip().upper()
                         if not codigo_base or codigo_base.lower() in ["null", "none"]:
                             desc_limpia = str(art.get('descripcion', '')).strip()
                             codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
-                        
+
                         id_producto = f"{codigo_base}_{marca_rep}"
                         precio_f = float(art.get('precio_unitario', 0))
                         calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
-                        
+
                         desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
                         qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
                         zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
-                
+
                 st.session_state.zip_listo = zip_buffer.getvalue()
                 st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
                 st.session_state.temp_datos = None
@@ -304,7 +393,14 @@ with tab_carga:
 
     if "zip_listo" in st.session_state:
         st.success("📦 Lote de etiquetas generado y Stock Actualizado.")
-        st.download_button(label="⬇️ DESCARGAR ZIP", data=st.session_state.zip_listo, file_name=st.session_state.zip_nombre, mime="application/zip", type="primary", use_container_width=True)
+        st.download_button(
+            label="⬇️ DESCARGAR ZIP",
+            data=st.session_state.zip_listo,
+            file_name=st.session_state.zip_nombre,
+            mime="application/zip",
+            type="primary",
+            use_container_width=True
+        )
         if st.button("Limpiar pantalla"):
             del st.session_state.zip_listo
             st.rerun()
@@ -312,81 +408,100 @@ with tab_carga:
 # --- PESTAÑA 2: INVENTARIO Y ALTA MANUAL ---
 with tab_inventario:
     st.header("📦 Gestión de Inventario")
-    
+    st.caption("Atajo: Ctrl+I")
+
     tab_lista, tab_alta = st.tabs(["📋 Listado Editable", "➕ Alta Manual de Producto"])
-    
+
     with tab_lista:
         inv = obtener_inventario_completo() or []
         if inv:
-            for item in inv:
-                if isinstance(item, dict):
-                    ubi = item.get('ubicacion', {})
-                    if isinstance(ubi, dict):
-                        item['Pasillo'] = ubi.get('pasillo', 0)
-                        item['Piso'] = ubi.get('piso', 0)
-                        item['Módulo'] = ubi.get('modulo', 0)
-                        item['Fila'] = ubi.get('fila', 0)
-                    else:
-                        item['Pasillo'] = 0
-                        item['Piso'] = 0
-                        item['Módulo'] = 0
-                        item['Fila'] = 0
-                        
-                    item['Marca'] = item.get('marca', item.get('condicion', 'GENERICO'))
-                    item['Vehículo'] = item.get('vehiculo', 'UNIVERSAL')
-                    item['Stock'] = int(item.get('stock', 0))
-                    item['Precio Final'] = item.get('precio_venta', 0)
-                    item['Descripción'] = item.get('descripcion', '')
+            inv = [preparar_item_inventario(item) for item in inv if isinstance(item, dict)]
 
-            df = pd.DataFrame(inv)
+            busqueda_inv = st.text_input(
+                "🔍 Buscar repuesto:",
+                placeholder="Ej: Correa, Bosch, 1234, Ranger, Proveedor..."
+            )
+            inv_filtrado = filtrar_inventario(inv, busqueda_inv)
+
+            st.subheader("📂 Vista por Artículo Maestro")
+            grupos = agrupar_por_maestro(inv_filtrado)
+            if grupos:
+                for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
+                    g = grupos[key]
+                    variantes = g['variantes']
+                    stock_total = sum(int(v.get('stock', 0)) for v in variantes)
+                    titulo = (
+                        f"{g['descripcion']} | {g['vehiculo']} | "
+                        f"Cód. {g['codigo']} | {len(variantes)} marca(s) | Stock total: {stock_total}"
+                    )
+                    with st.expander(titulo, expanded=bool(busqueda_inv)):
+                        filas_var = []
+                        for v in variantes:
+                            filas_var.append({
+                                "Marca": v.get('marca', ''),
+                                "Stock": int(v.get('stock', 0)),
+                                "Precio": f"${float(v.get('precio_venta', 0)):,.0f}",
+                                "Proveedor": v.get('proveedor', ''),
+                                "ID Variante": v.get('id', '')
+                            })
+                        st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
+            else:
+                st.info("Sin coincidencias para la búsqueda.")
+
+            st.divider()
+            st.subheader("✏️ Edición detallada por variante (ID = CÓDIGO_MARCA)")
+            st.info("💡 Editá stock, precio o ubicación por variante. Los cambios de descripción/vehículo aplican al artículo maestro.")
+
+            df = pd.DataFrame(inv_filtrado)
             cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Marca', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
             cols_existentes = [c for c in cols_deseadas if c in df.columns]
-            
-            st.info("💡 Hacé doble clic en cualquier celda para corregir inventario o ubicaciones rápidamente.")
-            busqueda_inv = st.text_input("🔍 Buscar repuesto:", placeholder="Ej: Correa, Bosch, 1234, o Nombre Proveedor...")
-            
-            if busqueda_inv:
-                terminos_busqueda = normalizar_para_busqueda(busqueda_inv).split()
-                def coincidencia_total(row):
-                    texto_fila = normalizar_para_busqueda(" ".join(str(val) for val in row.values))
-                    return all(t in texto_fila for t in terminos_busqueda)
-                
-                df_filtrado = df[df.apply(coincidencia_total, axis=1)]
-            else:
-                df_filtrado = df
-                
-            df_filtrado = df_filtrado.reset_index(drop=True)
-            
+
+            df_filtrado = df[cols_existentes].reset_index(drop=True)
+
             st.data_editor(
-                df_filtrado[cols_existentes], 
-                use_container_width=True, 
+                df_filtrado,
+                use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
-                        "codigo": st.column_config.TextColumn("Código", disabled=True, width="small"),
+                    "id": st.column_config.TextColumn("ID Variante", disabled=True, width="small"),
+                    "codigo": st.column_config.TextColumn("Cód. Maestro", disabled=True, width="small"),
+                    "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
+                    "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
+                    "Marca": st.column_config.TextColumn("Marca", disabled=True, width="small"),
+                    "Stock": st.column_config.NumberColumn("Stock", width="small"),
+                    "Precio Final": st.column_config.NumberColumn("Precio", width="small"),
                     "Piso": st.column_config.NumberColumn("P", width="small"),
                     "Módulo": st.column_config.NumberColumn("Mod", width="small"),
-                    "Fila": st.column_config.NumberColumn("F", width="small")
+                    "Fila": st.column_config.NumberColumn("F", width="small"),
                 },
                 key="grilla_inv"
             )
-            
+
             if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
                 if st.button("💾 Guardar Cambios Manuales", type="primary"):
                     cambios = st.session_state.grilla_inv["edited_rows"]
                     for row_idx, dict_cambios in cambios.items():
-                        id_prod = df_filtrado.iloc[row_idx]['id']
+                        id_prod = df_filtrado.iloc[int(row_idx)]['id']
                         for col_name, new_val in dict_cambios.items():
                             actualizar_producto_desde_grilla(id_prod, col_name, new_val)
                     st.success("Inventario actualizado en la base de datos.")
                     st.rerun()
-            
+
             st.divider()
-            opciones = {f"{item.get('id', '')} - {item.get('descripcion', '')}": item for item in inv if isinstance(item, dict)}
-            seleccion = st.selectbox("Buscar repuesto para etiqueta individual:", options=list(opciones.keys()))
+            opciones = {
+                f"{item.get('id', '')} - {item.get('descripcion', '')} ({item.get('marca', '')})": item
+                for item in inv_filtrado
+            }
+            seleccion = st.selectbox("Generar etiqueta QR individual:", options=list(opciones.keys()))
             if seleccion:
                 prod = opciones[seleccion]
-                qr_ind = generar_qr_producto(str(prod.get('id', '')), str(prod.get('descripcion','')), float(prod.get('precio_venta', 0.0)))
+                marca_qr = prod.get('marca', '')
+                desc_qr = f"{prod.get('descripcion', '')} ({marca_qr})"
+                qr_ind = generar_qr_producto(
+                    str(prod.get('id', '')),
+                    desc_qr,
+                    float(prod.get('precio_venta', 0.0))
+                )
                 st.image(qr_ind, width=150)
                 st.download_button("Descargar PNG", qr_ind, f"QR_{prod.get('id', 'N')}.png", "image/png")
         else:
@@ -394,6 +509,7 @@ with tab_inventario:
 
     with tab_alta:
         st.subheader("Ingresar Artículo sin Factura")
+        st.caption("El **código** identifica el artículo maestro. La **marca** es la variante.")
         provs = obtener_proveedores() or {}
 
         if not provs:
@@ -402,24 +518,39 @@ with tab_inventario:
             with st.form("form_alta_manual"):
                 st.write("#### 1. Origen y Costos")
                 col_prov, col_cond = st.columns(2)
-                
-                opciones_prov = {f"{datos.get('nombre', 'Desconocido')} (CUIT: {cuit})": cuit for cuit, datos in provs.items() if isinstance(datos, dict)}
+
+                opciones_prov = {
+                    f"{datos.get('nombre', 'Desconocido')} (CUIT: {cuit})": cuit
+                    for cuit, datos in provs.items() if isinstance(datos, dict)
+                }
                 sel_prov = col_prov.selectbox("Proveedor", options=list(opciones_prov.keys()))
                 cond_pago = col_cond.radio("Condición de Pago", ["Contado", "30 Días"], horizontal=True)
 
-                st.write("#### 2. Identidad del Repuesto")
+                st.write("#### 2. Identidad del Repuesto (Maestro + Variante)")
                 col_cod, col_marca, col_vehiculo = st.columns(3)
-                codigo_manual = col_cod.text_input("Código (Ref) (Obligatorio)")
-                marca_manual = col_marca.text_input("Marca", value="GENERICO")
-                veh_manual = col_vehiculo.selectbox("Vehículo", options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"])
+                codigo_manual = col_cod.text_input("Código Maestro (Obligatorio)")
+                marca_manual = col_marca.text_input("Marca / Variante", value="GENERICO")
+                veh_manual = col_vehiculo.selectbox(
+                    "Vehículo",
+                    options=["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
+                )
                 desc_manual = st.text_input("Descripción del Producto (Obligatorio)")
+
+                prod_existente = None
+                if codigo_manual:
+                    prod_existente = obtener_producto_por_codigo(codigo_manual)
+                    if prod_existente:
+                        st.success(
+                            f"Maestro existente: {prod_existente.get('descripcion', '')} — "
+                            f"Se agregará/actualizará la variante **{marca_manual.upper()}**."
+                        )
 
                 st.write("#### 3. Valores")
                 col_v1, col_v2 = st.columns(2)
                 precio_base_manual = col_v1.number_input("Precio Costo Base ($)", min_value=0.0, format="%.2f", step=100.0)
                 stock_manual = col_v2.number_input("Stock Inicial", min_value=1, step=1)
 
-                st.write("#### 4. Ubicación Exacta")
+                st.write("#### 4. Ubicación Exacta (del artículo maestro)")
                 col_u1, col_u2, col_u3, col_u4 = st.columns(4)
                 pasillo_manual = col_u1.number_input("Pasillo", min_value=0, step=1)
                 piso_manual = col_u2.number_input("Piso", min_value=0, step=1)
@@ -435,18 +566,20 @@ with tab_inventario:
                         llave_prov = str(sel_prov) if sel_prov else ""
                         cuit_seleccionado = str(opciones_prov.get(llave_prov, ""))
                         datos_prov = provs.get(cuit_seleccionado, {})
-                        
-                        if not isinstance(datos_prov, dict): datos_prov = {}
-                            
+
+                        if not isinstance(datos_prov, dict):
+                            datos_prov = {}
+
                         condiciones_prov = datos_prov.get("condiciones", {})
-                        if not isinstance(condiciones_prov, dict): condiciones_prov = {}
-                            
+                        if not isinstance(condiciones_prov, dict):
+                            condiciones_prov = {}
+
                         llave_cond = str(cond_pago) if cond_pago else "Contado"
                         recargo_financiero = float(condiciones_prov.get(llave_cond, 0.0))
 
                         exito, msj_alta = alta_manual_producto(
                             codigo=codigo_manual,
-                            condicion=marca_manual, 
+                            condicion=marca_manual,
                             vehiculo=veh_manual,
                             descripcion=desc_manual,
                             cuit_proveedor=cuit_seleccionado,
@@ -458,7 +591,7 @@ with tab_inventario:
                             modulo=modulo_manual,
                             fila=fila_manual
                         )
-                        
+
                         if exito:
                             st.success(f"✅ {msj_alta}")
                             st.rerun()
@@ -468,8 +601,9 @@ with tab_inventario:
 # --- PESTAÑA 3: MOSTRADOR ---
 with tab_mostrador:
     st.header("🛒 Punto de Venta / Presupuestos")
-    
-    col_cli1, col_cli2 = st.columns([3,1])
+    st.caption("Atajo: Ctrl+M")
+
+    col_cli1, col_cli2 = st.columns([3, 1])
     with col_cli1:
         st.subheader(f"👤 Cliente: {st.session_state.cliente_activo['nombre']}")
         if st.session_state.cliente_activo['descuento'] > 0:
@@ -478,14 +612,13 @@ with tab_mostrador:
         if st.button("❌ Limpiar Cliente", use_container_width=True):
             st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
             st.rerun()
-            
+
     vendedor = st.radio("Usuario / Dispositivo:", ["Caja Principal", "Celular Depósito"], horizontal=True)
-    
+
     st.write("### ➕ Agregar Productos")
-    
+
     t_buscar, t_manual, t_ia, t_qr = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
-    
-    # 1. BUSCADOR INTELIGENTE
+
     with t_buscar:
         inv_completo = obtener_inventario_completo() or []
         if inv_completo:
@@ -493,14 +626,17 @@ with tab_mostrador:
             for item in inv_completo:
                 if isinstance(item, dict):
                     marca_item = item.get('marca', item.get('condicion', ''))
-                    desc = f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - {marca_item} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
+                    desc = (
+                        f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - "
+                        f"{marca_item} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
+                    )
                     opciones_desc[desc] = item.get('id')
-            
-            sel_prod = st.selectbox("Escriba para buscar por nombre, código o vehículo:", options=[""] + list(opciones_desc.keys()))
-            
+
+            sel_prod = st.selectbox("Buscar por nombre, código, vehículo o marca:", options=[""] + list(opciones_desc.keys()))
+
             col_b1, col_b2 = st.columns([1, 3])
             cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
-            
+
             if col_b2.button("➕ Agregar al Presupuesto", use_container_width=True, type="primary"):
                 if sel_prod:
                     id_real = opciones_desc[sel_prod]
@@ -515,41 +651,42 @@ with tab_mostrador:
         else:
             st.info("El inventario está vacío. Agregue productos primero.")
 
-    # 2. PISTOLA / MANUAL
     with t_manual:
         with st.form("form_carga_rapida", clear_on_submit=True):
             col_scan1, col_scan2 = st.columns([4, 1])
-            codigo_manual = col_scan1.text_input("Ingreso Manual o Pistola de Código:", key=f"scan_{vendedor}")
+            codigo_manual_scan = col_scan1.text_input(
+                "Ingreso Manual o Pistola (ID variante CODIGO_MARCA):",
+                key=f"scan_{vendedor}"
+            )
             submit_btn = col_scan2.form_submit_button("➕ Agregar Artículo", use_container_width=True)
-            
-            if submit_btn and codigo_manual:
-                exito, msj = agregar_al_carrito(str(vendedor), codigo_manual)
-                if exito: 
+
+            if submit_btn and codigo_manual_scan:
+                exito, msj = agregar_al_carrito(str(vendedor), codigo_manual_scan)
+                if exito:
                     st.success(msj)
                     st.rerun()
-                else: 
+                else:
                     st.error(msj)
-                    
-    # 3. ASISTENTE IA (VOZ)
+
     with t_ia:
         with st.form("form_ia_mostrador", clear_on_submit=True):
             col_ia1, col_ia2 = st.columns([4, 1])
             orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
             submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
-            
+
             if submit_ia and orden_usuario_mostrador:
                 with st.spinner("Hafid IA procesando..."):
                     inventario = obtener_inventario_completo() or []
                     respuesta_json = procesar_orden_voz(orden_usuario_mostrador, inventario) or {}
                     accion = respuesta_json.get("accion")
-                    
+
                     if accion == "agregar_carrito":
                         termino = str(respuesta_json.get("termino", ""))
                         cant_raw = respuesta_json.get("cantidad")
                         cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-                        
+
                         terminos_busqueda = normalizar_para_busqueda(termino).split()
-                        
+
                         encontrados = []
                         for p in inventario:
                             marca_p = p.get('marca', p.get('condicion', ''))
@@ -557,7 +694,7 @@ with tab_mostrador:
                             texto_norm = normalizar_para_busqueda(texto_item)
                             if all(t in texto_norm for t in terminos_busqueda):
                                 encontrados.append(p)
-                                
+
                         if len(encontrados) == 1:
                             exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]['id'], cant)
                             if exito:
@@ -572,38 +709,47 @@ with tab_mostrador:
                             st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{termino}' querés agregar:"
                         else:
                             st.error(f"❌ No encontré ningún producto asociado a '{termino}'.")
-                            
+
                     elif accion == "set_cliente":
                         nombre_det = respuesta_json.get("nombre_cliente", "").upper()
                         clientes_db = obtener_clientes() or {}
-                        cliente_encontrado = next((c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()), None)
-                        
+                        cliente_encontrado = next(
+                            (c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()),
+                            None
+                        )
+
                         if cliente_encontrado:
-                            st.session_state.cliente_activo = {"nombre": cliente_encontrado['nombre'], "descuento": float(cliente_encontrado.get('descuento', 0.0))}
+                            st.session_state.cliente_activo = {
+                                "nombre": cliente_encontrado['nombre'],
+                                "descuento": float(cliente_encontrado.get('descuento', 0.0))
+                            }
                             st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
                             st.session_state.resultados_ia_mostrador = None
                             st.rerun()
                         else:
                             st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
-                            
+
                     elif accion == "buscar" or accion == "consulta":
                         termino = respuesta_json.get("termino", "")
                         if not termino:
                             termino = orden_usuario_mostrador
-                            
+
                         if termino:
                             terminos_busqueda = normalizar_para_busqueda(termino).split()
                             encontrados = []
                             for prod in inventario:
                                 if isinstance(prod, dict):
                                     marca_p = prod.get('marca', prod.get('condicion', ''))
-                                    texto_item = f"{prod.get('descripcion', '')} {marca_p} {prod.get('vehiculo', '')} {prod.get('codigo', '')}"
+                                    texto_item = (
+                                        f"{prod.get('descripcion', '')} {marca_p} "
+                                        f"{prod.get('vehiculo', '')} {prod.get('codigo', '')}"
+                                    )
                                     texto_norm = normalizar_para_busqueda(texto_item)
                                     if all(t in texto_norm for t in terminos_busqueda):
                                         encontrados.append(prod)
-                            
+
                             if encontrados:
-                                st.session_state.resultados_ia_mostrador = encontrados[:10] 
+                                st.session_state.resultados_ia_mostrador = encontrados[:10]
                                 st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
                             else:
                                 st.warning(f"No encontré coincidencias exactas para '{termino}'.")
@@ -617,26 +763,30 @@ with tab_mostrador:
 
         if st.session_state.resultados_ia_mostrador:
             st.markdown(f"### {st.session_state.msg_ia_mostrador}")
-            for res in st.session_state.resultados_ia_mostrador:
-                if isinstance(res, dict):
+            grupos_most = agrupar_por_maestro(st.session_state.resultados_ia_mostrador)
+            for key in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]['descripcion']):
+                g = grupos_most[key]
+                st.markdown(f"**{g['descripcion']}** ({g['vehiculo']}) — Cód. {g['codigo']}")
+                for res in g['variantes']:
                     precio_f = float(res.get('precio_venta', 0))
                     marca_res = res.get('marca', res.get('condicion', ''))
-                    btn_label = f"➕ Agregar: {res.get('descripcion', '')} ({res.get('vehiculo', '')}-{marca_res}) - ${precio_f:,.2f}"
-                    
+                    btn_label = (
+                        f"➕ {marca_res}: {res.get('stock', 0)} u. — "
+                        f"${precio_f:,.2f}"
+                    )
                     if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
                         exito, msj_db = agregar_al_carrito(str(vendedor), res.get('id'), 1)
                         if exito:
-                            st.success(f"🛒 Agregado al carrito!")
+                            st.success("🛒 Agregado al carrito!")
                             st.session_state.resultados_ia_mostrador = None
                             st.rerun()
                         else:
                             st.error(f"❌ Error: {msj_db}")
-                            
+
             if st.button("❌ Cancelar Búsqueda", key="btn_cancel_search_most"):
                 st.session_state.resultados_ia_mostrador = None
                 st.rerun()
 
-    # 4. CÁMARA QR
     with t_qr:
         foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
         if foto_qr:
@@ -644,10 +794,10 @@ with tab_mostrador:
             if cod_detectado:
                 id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
                 exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
-                if exito: 
+                if exito:
                     st.success(f"Añadido: {id_limpio}")
                     st.rerun()
-                else: 
+                else:
                     st.error(msj)
 
     st.divider()
@@ -656,23 +806,32 @@ with tab_mostrador:
         total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
         desc_porc = st.session_state.cliente_activo['descuento']
         total_final = total_bruto * (1 - desc_porc / 100)
-        
+
         st.table(carrito)
-        
+
         st.write(f"### Subtotal: ${total_bruto:,.2f}")
         if desc_porc > 0:
             st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
         st.write(f"## TOTAL: ${total_final:,.2f}")
-        
+
         col_cob, col_pdf, col_vac = st.columns(3)
         if col_cob.button("✅ Confirmar Venta", type="primary", use_container_width=True):
             exito, msj = confirmar_venta(str(vendedor))
-            if exito: st.success(msj); st.rerun()
-            else: st.error(msj)
-        
-        pdf_bytes = generar_pdf_presupuesto(str(vendedor), carrito, total_bruto, st.session_state.cliente_activo['nombre'], desc_porc)
-        col_pdf.download_button("📄 Imprimir PDF", pdf_bytes, f"Presupuesto_{vendedor}.pdf", "application/pdf", use_container_width=True)
-        
+            if exito:
+                st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
+
+        pdf_bytes = generar_pdf_presupuesto(
+            str(vendedor), carrito, total_bruto,
+            st.session_state.cliente_activo['nombre'], desc_porc
+        )
+        col_pdf.download_button(
+            "📄 Imprimir PDF", pdf_bytes, f"Presupuesto_{vendedor}.pdf", "application/pdf",
+            use_container_width=True
+        )
+
         if col_vac.button("🗑️ Vaciar", use_container_width=True):
             vaciar_carrito(str(vendedor))
             st.rerun()
@@ -680,39 +839,41 @@ with tab_mostrador:
 # --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
 with tab_asistente:
     st.header("🤖 Asistente de Depósito")
-    st.info("Escribí o dictá tu orden. Búsquedas por palabras sueltas, reportes exactos o actualizaciones de ubicación.")
-    
+    st.caption("Atajo: Ctrl+A")
+    st.info("Escribí o dictá tu orden. Búsquedas agrupadas por artículo maestro con variantes por marca.")
+
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
     if "ultima_respuesta" not in st.session_state:
         st.session_state.ultima_respuesta = None
     if "ultimo_estado" not in st.session_state:
-        st.session_state.ultimo_estado = None 
+        st.session_state.ultimo_estado = None
     if "df_reporte" not in st.session_state:
         st.session_state.df_reporte = None
 
     orden_usuario = st.chat_input("Dicte o escriba aquí...")
-    
+
     if orden_usuario:
         st.session_state.ultima_orden = orden_usuario
         st.session_state.df_reporte = None
-        
+
         with st.spinner("Procesando en el depósito..."):
             inventario = obtener_inventario_completo() or []
-            
+
             respuesta_json = procesar_orden_voz(orden_usuario, inventario) or {}
-            if not isinstance(respuesta_json, dict): respuesta_json = {}
-            
+            if not isinstance(respuesta_json, dict):
+                respuesta_json = {}
+
             accion = respuesta_json.get("accion")
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
-            
+
             if accion == "actualizar_ubicacion":
                 termino = str(respuesta_json.get("termino", ""))
                 pas = respuesta_json.get("pasillo")
                 pis = respuesta_json.get("piso")
                 mod = respuesta_json.get("modulo")
                 fil = respuesta_json.get("fila")
-                
+
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
                 encontrados = []
                 for p in inventario:
@@ -720,13 +881,19 @@ with tab_asistente:
                     texto_norm = normalizar_para_busqueda(texto_item)
                     if all(t in texto_norm for t in terminos_busqueda):
                         encontrados.append(p)
-                        
-                if len(encontrados) == 1:
-                    exito, msj_db = actualizar_ubicacion_relevamiento(encontrados[0]['id'], pas, pis, mod, fil)
+
+                maestros_unicos = {p.get('id_maestro', p.get('codigo')) for p in encontrados}
+
+                if len(maestros_unicos) == 1 and encontrados:
+                    id_ref = encontrados[0].get('id_maestro') or encontrados[0].get('codigo')
+                    exito, msj_db = actualizar_ubicacion_relevamiento(id_ref, pas, pis, mod, fil)
                     st.session_state.ultima_respuesta = f"✅ Ubicación guardada. {msj_db}" if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    st.session_state.ultima_respuesta = f"⚠️ Hay {len(encontrados)} productos similares para '{termino}'. Sé más específico (ej: dictá el código exacto)."
+                    st.session_state.ultima_respuesta = (
+                        f"⚠️ Hay {len(encontrados)} variantes para '{termino}'. "
+                        f"Dictá el código maestro exacto o el ID variante (CODIGO_MARCA)."
+                    )
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"❌ No encontré ningún producto que coincida con '{termino}'."
@@ -736,57 +903,81 @@ with tab_asistente:
                 raw_cant = respuesta_json.get("cantidad")
                 cant_limite = int(raw_cant) if raw_cant is not None and str(raw_cant).isdigit() else 3
                 operador = respuesta_json.get("operador", "menor_o_igual")
-                
+
+                texto_usuario_norm = normalizar_para_busqueda(orden_usuario)
+                if operador != "exacto" and re.search(r'\b(mas de|al menos|mayor que|mayor a|o mas|>=|\+)\b', texto_usuario_norm):
+                    operador = "mayor_o_igual"
+
                 if operador == "exacto":
                     bajo_stock = [p for p in inventario if int(p.get('stock', 0)) == cant_limite]
                     msg_op = f"exactamente {cant_limite}"
+                elif operador == "mayor_o_igual":
+                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) >= cant_limite]
+                    msg_op = f"{cant_limite} o más"
                 else:
                     bajo_stock = [p for p in inventario if int(p.get('stock', 0)) <= cant_limite]
                     msg_op = f"{cant_limite} o menos"
-                
+
                 if bajo_stock:
-                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** Hay {len(bajo_stock)} productos con {msg_op} unidades."
+                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** {len(bajo_stock)} variantes con {msg_op} unidades."
                     df_r = pd.DataFrame(bajo_stock)
-                    st.session_state.df_reporte = df_r[['codigo', 'descripcion', 'vehiculo', 'marca', 'stock']]
+                    cols_rep = ['codigo', 'descripcion', 'vehiculo', 'marca', 'stock']
+                    st.session_state.df_reporte = df_r[[c for c in cols_rep if c in df_r.columns]]
                     st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"✅ Excelente. No hay productos con {msg_op} unidades."
+                    st.session_state.ultima_respuesta = f"✅ Excelente. No hay variantes con {msg_op} unidades."
                     st.session_state.ultimo_estado = "success"
-            
+
             elif accion == "set_cliente":
                 nombre_det = respuesta_json.get("nombre_cliente", "").upper()
                 clientes_db = obtener_clientes() or {}
-                cliente_encontrado = next((c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()), None)
-                
+                cliente_encontrado = next(
+                    (c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()),
+                    None
+                )
+
                 if cliente_encontrado:
-                    st.session_state.cliente_activo = {"nombre": cliente_encontrado['nombre'], "descuento": float(cliente_encontrado.get('descuento', 0.0))}
-                    st.session_state.ultima_respuesta = f"✅ Listo. Cliente {cliente_encontrado['nombre']} activado ({cliente_encontrado['descuento']}% descuento)."
+                    st.session_state.cliente_activo = {
+                        "nombre": cliente_encontrado['nombre'],
+                        "descuento": float(cliente_encontrado.get('descuento', 0.0))
+                    }
+                    st.session_state.ultima_respuesta = (
+                        f"✅ Listo. Cliente {cliente_encontrado['nombre']} activado "
+                        f"({cliente_encontrado['descuento']}% descuento)."
+                    )
                     st.session_state.ultimo_estado = "success"
                 else:
                     st.session_state.cliente_activo = {"nombre": nombre_det, "descuento": 0.0}
-                    st.session_state.ultima_respuesta = f"⚠️ Activado. (Nota: '{nombre_det}' no está en la base de datos, aplicará 0% descuento)."
+                    st.session_state.ultima_respuesta = (
+                        f"⚠️ Activado. (Nota: '{nombre_det}' no está en la base de datos, aplicará 0% descuento)."
+                    )
                     st.session_state.ultimo_estado = "normal"
-            
+
             elif accion == "agregar_carrito":
                 termino = str(respuesta_json.get("termino", ""))
                 cant_raw = respuesta_json.get("cantidad")
                 cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
-                
+
                 encontrados = []
                 for p in inventario:
-                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
+                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('marca', '')}"
                     texto_norm = normalizar_para_busqueda(texto_item)
                     if all(t in texto_norm for t in terminos_busqueda):
                         encontrados.append(p)
-                        
+
                 if len(encontrados) == 1:
                     exito, msj_db = agregar_al_carrito("Caja Principal", encontrados[0]['id'], cant)
-                    st.session_state.ultima_respuesta = f"🛒 Listo. Agregado al carrito." if exito else f"❌ Error: {msj_db}"
+                    st.session_state.ultima_respuesta = "🛒 Listo. Agregado al carrito." if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    lista_alt = "\n".join([f"- {p.get('descripcion')} ({p.get('vehiculo')})" for p in encontrados])
-                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples opciones para '{termino}'. Sé más específico o usá la pestaña 'Mostrador'.\n{lista_alt}"
+                    lista_alt = "\n".join([
+                        f"- {p.get('descripcion')} | Marca {p.get('marca')} ({p.get('id')})"
+                        for p in encontrados
+                    ])
+                    st.session_state.ultima_respuesta = (
+                        f"⚠️ Hay múltiples variantes para '{termino}'. Indicá marca o ID CODIGO_MARCA:\n{lista_alt}"
+                    )
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"❌ No encontré ningún producto que coincida con '{termino}'."
@@ -797,54 +988,62 @@ with tab_asistente:
                 cant_raw = respuesta_json.get("cantidad")
                 cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
-                
+
                 encontrados = []
                 for p in inventario:
-                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
+                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('marca', '')} {p.get('id', '')}"
                     texto_norm = normalizar_para_busqueda(texto_item)
                     if all(t in texto_norm for t in terminos_busqueda):
                         encontrados.append(p)
-                        
+
                 if len(encontrados) == 1:
                     if accion == "alta":
                         exito, msj_db = registrar_aumento_stock(encontrados[0]['id'], cant)
                     else:
                         exito, msj_db = registrar_merma(encontrados[0]['id'], cant)
-                        
-                    st.session_state.ultima_respuesta = f"✅ Listo. Operación registrada." if exito else f"❌ Error: {msj_db}"
+
+                    st.session_state.ultima_respuesta = "✅ Listo. Operación registrada." if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
-                    st.session_state.ultima_respuesta = f"⚠️ Hay múltiples opciones para '{termino}'. Por seguridad, dictá el código exacto."
+                    st.session_state.ultima_respuesta = (
+                        f"⚠️ Hay {len(encontrados)} variantes para '{termino}'. "
+                        f"Dictá el ID exacto (ej: CODIGO_MARCA) para operar sobre una marca."
+                    )
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"❌ No existe '{termino}' en el sistema."
                     st.session_state.ultimo_estado = "error"
-                
+
             elif accion == "filtrar_proveedor":
                 prov_buscado = str(respuesta_json.get("proveedor", "")).lower()
                 terminos_prov = normalizar_para_busqueda(prov_buscado).split()
-                
+
                 encontrados = []
                 for p in inventario:
                     prov_db = normalizar_para_busqueda(str(p.get('proveedor', '')))
                     if prov_db and all(t in prov_db for t in terminos_prov):
                         encontrados.append(p)
-                
+
                 if encontrados:
-                    st.session_state.ultima_respuesta = f"🏭 **Filtro por proveedor:** Encontré {len(encontrados)} repuestos vinculados a '{prov_buscado}'."
+                    st.session_state.ultima_respuesta = (
+                        f"🏭 **Filtro por proveedor:** {len(encontrados)} variantes de '{prov_buscado}'."
+                    )
                     df_r = pd.DataFrame(encontrados)
                     cols_mostrar = ['codigo', 'descripcion', 'vehiculo', 'marca', 'stock', 'precio_venta']
                     cols_ok = [c for c in cols_mostrar if c in df_r.columns]
                     st.session_state.df_reporte = df_r[cols_ok]
                     st.session_state.ultimo_estado = "normal"
                 else:
-                    st.session_state.ultima_respuesta = f"⚠️ No encontré repuestos asociados al proveedor '{prov_buscado}'."
+                    st.session_state.ultima_respuesta = f"⚠️ No encontré repuestos del proveedor '{prov_buscado}'."
                     st.session_state.ultimo_estado = "normal"
 
             elif accion == "buscar" or accion == "consulta" or accion == "ubicacion":
                 termino = str(respuesta_json.get("termino", ""))
+                if not termino:
+                    termino = orden_usuario
+
                 terminos_busqueda = normalizar_para_busqueda(termino).split()
-                
+
                 encontrados = []
                 for p in inventario:
                     if isinstance(p, dict):
@@ -853,29 +1052,22 @@ with tab_asistente:
                         texto_norm = normalizar_para_busqueda(texto_item)
                         if all(t in texto_norm for t in terminos_busqueda):
                             encontrados.append(p)
-                
+
                 if encontrados:
-                    lista_txt = f"🔍 Resultados de stock para '{termino}':\n\n"
-                    for p in encontrados[:10]:
-                        ubi = p.get('ubicacion', {})
-                        if not isinstance(ubi, dict): ubi = {}
-                        loc_str = f"Pasillo: {ubi.get('pasillo',0)} | Piso: {ubi.get('piso',0)} | Módulo: {ubi.get('modulo',0)} | Fila: {ubi.get('fila',0)}"
-                        marca_disp = p.get('marca', p.get('condicion', ''))
-                        lista_txt += f"- **{p.get('codigo', '')} ({marca_disp})** | {p.get('descripcion', '')} | Stock: {p.get('stock', 0)} | ${p.get('precio_venta', 0)}\n  📍 {loc_str}\n\n"
-                    st.session_state.ultima_respuesta = lista_txt
+                    st.session_state.ultima_respuesta = texto_resultados_agrupados(encontrados, termino)
                     st.session_state.ultimo_estado = "normal"
                 else:
                     st.session_state.ultima_respuesta = f"No hay stock de nada relacionado con '{termino}'."
                     st.session_state.ultimo_estado = "error"
-            
-            else: 
+
+            else:
                 st.session_state.ultima_respuesta = texto_ia
                 st.session_state.ultimo_estado = "normal"
 
     if st.session_state.ultima_orden:
         with st.chat_message("user"):
             st.markdown(st.session_state.ultima_orden)
-            
+
         with st.chat_message("assistant"):
             if st.session_state.ultimo_estado == "success":
                 st.success(st.session_state.ultima_respuesta)
@@ -883,40 +1075,54 @@ with tab_asistente:
                 st.error(st.session_state.ultima_respuesta)
             else:
                 st.markdown(st.session_state.ultima_respuesta)
-                
+
             if st.session_state.get("df_reporte") is not None:
                 st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
 
 # --- PESTAÑA 5: CONFIGURACIÓN ---
 with tab_config:
     st.header("Configuración del Sistema")
-    
+    st.caption("Atajo: Ctrl+C")
+
     st.subheader("💾 Backup y Restauración de Stock")
     col_down, col_up = st.columns(2)
     with col_down:
         st.info("Descargar el inventario actual.")
         csv_data = exportar_inventario_csv()
         if csv_data:
-            st.download_button("⬇️ Descargar Stock (CSV)", data=csv_data, file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", type="primary")
+            st.download_button(
+                "⬇️ Descargar Stock (CSV)",
+                data=csv_data,
+                file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                type="primary"
+            )
         else:
-            st.download_button("⬇️ Descargar Stock (CSV)", data="", file_name="vacio.csv", disabled=True, help="El inventario está vacío")
-            
+            st.download_button(
+                "⬇️ Descargar Stock (CSV)", data="", file_name="vacio.csv",
+                disabled=True, help="El inventario está vacío"
+            )
+
     with col_up:
         st.info("Subir un archivo para restaurar o actualizar.")
         archivo_csv = st.file_uploader("Restaurar Stock (CSV)", type=["csv"])
         if archivo_csv:
             df_upload = pd.read_csv(archivo_csv)
             st.write(f"Vista previa: {len(df_upload)} productos detectados.")
-            modo_restauracion = st.radio("Modo de Restauración:", ["sumar_stock", "sobreescribir"], format_func=lambda x: "➕ Sumar Cantidades al Stock Existente" if x == "sumar_stock" else "⚠️ Sobreescribir Todo (Peligro)")
+            modo_restauracion = st.radio(
+                "Modo de Restauración:",
+                ["sumar_stock", "sobreescribir"],
+                format_func=lambda x: "➕ Sumar Cantidades al Stock Existente" if x == "sumar_stock" else "⚠️ Sobreescribir Todo (Peligro)"
+            )
             if st.button("Ejecutar Restauración", type="primary"):
                 with st.spinner("Procesando archivo..."):
                     exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
                     if exito:
                         st.success(msg_rest)
                         st.rerun()
-        
+
     st.divider()
-    
+
     with st.expander("⚠️ ZONA DE PELIGRO - Borrar Base de Datos"):
         st.warning("Esto borrará todo el inventario, carritos y el historial de facturas. Es irreversible.")
         if st.checkbox("Entiendo los riesgos, habilitar borrado"):
@@ -927,62 +1133,113 @@ with tab_config:
                     st.rerun()
                 else:
                     st.error(msg)
-    
+
     st.divider()
-    
+
     tab_prov, tab_marcas, tab_clientes = st.tabs(["🏭 Proveedores y Recargos", "🏷️ Marcas", "👥 Clientes"])
-    
+
     with tab_prov:
-        st.subheader("Alta y Edición de Proveedores")
-        with st.form("conf_prov"):
-            col1, col2 = st.columns(2)
-            nombre_prov = col1.text_input("Nombre Proveedor (Ej: Filtros Juan)").upper()
-            cuit_prov = col2.text_input("CUIT (Solo números)")
-            
-            st.write("Recargos Financieros y Descuentos (%)")
-            col3, col4, col5 = st.columns(3)
-            rec_contado = col3.number_input("Recargo Contado (%)", min_value=0.0, value=0.0, step=1.0)
-            rec_30 = col4.number_input("Recargo 30 Días (%)", min_value=0.0, value=15.0, step=1.0)
-            desc_prov = col5.number_input("Descuento Factura (%)", min_value=0.0, value=0.0, step=1.0)
-            
-            if st.form_submit_button("Guardar Proveedor"):
-                if nombre_prov and cuit_prov:
-                    configurar_proveedor(nombre_prov, cuit_prov, rec_contado, rec_30, desc_prov)
-                    st.success(f"Proveedor {nombre_prov} guardado.")
-                    st.rerun()
-                else:
-                    st.error("El nombre y el CUIT son obligatorios.")
-        
-        st.divider()
-        st.write("### Directorio de Proveedores")
+        st.subheader("Directorio de Proveedores")
+        st.caption("Editá recargos y descuentos en la grilla. Usá el formulario de abajo solo para **dar de alta** uno nuevo.")
+
         provs = obtener_proveedores() or {}
+
         if provs:
             datos_tabla = []
             for cuit, datos_prov in provs.items():
-                if not isinstance(datos_prov, dict): datos_prov = {}
+                if not isinstance(datos_prov, dict):
+                    datos_prov = {}
                 condiciones = datos_prov.get('condiciones', {})
-                if not isinstance(condiciones, dict): condiciones = {}
-                    
+                if not isinstance(condiciones, dict):
+                    condiciones = {}
+
                 datos_tabla.append({
                     "Proveedor": datos_prov.get("nombre", ""),
                     "CUIT": cuit,
-                    "Desc. Prov": f"{datos_prov.get('descuento', 0)}%",
-                    "Contado": f"{condiciones.get('Contado', 0)}%",
-                    "30 Días": f"{condiciones.get('30 Días', 0)}%"
+                    "Descuento (%)": float(datos_prov.get('descuento', 0)),
+                    "Recargo Contado (%)": float(condiciones.get('Contado', 0)),
+                    "Recargo 30 Días (%)": float(condiciones.get('30 Días', 0)),
                 })
-            st.dataframe(datos_tabla, use_container_width=True)
-            
+
+            df_prov = pd.DataFrame(datos_tabla)
+
+            df_prov_edit = st.data_editor(
+                df_prov,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Proveedor": st.column_config.TextColumn("Proveedor", disabled=True),
+                    "CUIT": st.column_config.TextColumn("CUIT", disabled=True),
+                    "Descuento (%)": st.column_config.NumberColumn("Descuento (%)", min_value=0.0, step=1.0),
+                    "Recargo Contado (%)": st.column_config.NumberColumn("Rec. Contado (%)", min_value=0.0, step=1.0),
+                    "Recargo 30 Días (%)": st.column_config.NumberColumn("Rec. 30 Días (%)", min_value=0.0, step=1.0),
+                },
+                key="grilla_proveedores"
+            )
+
+            if st.button("💾 Guardar Cambios de Proveedores", type="primary", use_container_width=True):
+                guardados = 0
+                filas = df_prov_edit.to_dict('records')
+                originales = {r['CUIT']: r for r in datos_tabla}
+
+                for fila in filas:
+                    cuit = str(fila.get('CUIT', ''))
+                    orig = originales.get(cuit, {})
+                    cambio = (
+                        float(fila.get('Descuento (%)', 0)) != float(orig.get('Descuento (%)', 0))
+                        or float(fila.get('Recargo Contado (%)', 0)) != float(orig.get('Recargo Contado (%)', 0))
+                        or float(fila.get('Recargo 30 Días (%)', 0)) != float(orig.get('Recargo 30 Días (%)', 0))
+                    )
+                    if cambio:
+                        configurar_proveedor(
+                            fila.get('Proveedor', orig.get('Proveedor', '')),
+                            cuit,
+                            float(fila.get('Recargo Contado (%)', 0)),
+                            float(fila.get('Recargo 30 Días (%)', 0)),
+                            float(fila.get('Descuento (%)', 0)),
+                        )
+                        guardados += 1
+
+                if guardados:
+                    st.success(f"✅ {guardados} proveedor(es) actualizado(s).")
+                    st.rerun()
+                else:
+                    st.info("No hubo cambios para guardar.")
+
             with st.expander("🗑️ Eliminar un Proveedor"):
                 prov_a_borrar = st.selectbox(
-                    "Seleccionar proveedor a eliminar:", 
-                    options=list(provs.keys()), 
+                    "Seleccionar proveedor a eliminar:",
+                    options=list(provs.keys()),
                     format_func=lambda x: f"{(provs.get(x) or {}).get('nombre', 'Desconocido')} (CUIT: {x})"
                 )
                 if st.button("Eliminar Proveedor", type="primary"):
                     eliminar_proveedor(str(prov_a_borrar))
                     st.success("Proveedor eliminado del sistema.")
                     st.rerun()
-            
+        else:
+            st.info("Aún no hay proveedores cargados.")
+
+        st.divider()
+        st.subheader("➕ Alta de Proveedor Nuevo")
+        with st.form("conf_prov"):
+            col1, col2 = st.columns(2)
+            nombre_prov = col1.text_input("Nombre Proveedor (Ej: Filtros Juan)").upper()
+            cuit_prov = col2.text_input("CUIT (Solo números)")
+
+            st.write("Recargos Financieros y Descuentos (%)")
+            col3, col4, col5 = st.columns(3)
+            rec_contado = col3.number_input("Recargo Contado (%)", min_value=0.0, value=0.0, step=1.0)
+            rec_30 = col4.number_input("Recargo 30 Días (%)", min_value=0.0, value=15.0, step=1.0)
+            desc_prov = col5.number_input("Descuento Factura (%)", min_value=0.0, value=0.0, step=1.0)
+
+            if st.form_submit_button("Guardar Proveedor Nuevo"):
+                if nombre_prov and cuit_prov:
+                    configurar_proveedor(nombre_prov, cuit_prov, rec_contado, rec_30, desc_prov)
+                    st.success(f"Proveedor {nombre_prov} guardado.")
+                    st.rerun()
+                else:
+                    st.error("El nombre y el CUIT son obligatorios.")
+
     with tab_marcas:
         st.subheader("Gestión de Marcas")
         col_m, col_b = st.columns([3, 1])
@@ -994,13 +1251,13 @@ with tab_config:
                     agregar_marca(nueva_marca)
                     st.success("Agregada")
                     st.rerun()
-        
+
         st.divider()
         marcas_actuales = obtener_marcas() or []
         if marcas_actuales:
             st.write("**Marcas registradas:**")
             st.write(", ".join(marcas_actuales))
-            
+
             with st.expander("🗑️ Eliminar una Marca"):
                 marca_a_borrar = st.selectbox("Seleccionar marca a eliminar:", options=marcas_actuales)
                 if st.button("Eliminar Marca", type="primary"):
@@ -1017,7 +1274,7 @@ with tab_config:
             nombre_cli = c1.text_input("Nombre / Razón Social").upper()
             cuit_cli = c2.text_input("DNI o CUIT")
             desc_cli = c3.number_input("% Descuento", min_value=0.0, step=1.0)
-            
+
             if st.form_submit_button("Guardar Cliente"):
                 if nombre_cli and cuit_cli:
                     configurar_cliente(nombre_cli, cuit_cli, desc_cli)
@@ -1025,7 +1282,7 @@ with tab_config:
                     st.rerun()
                 else:
                     st.error("El nombre y el DNI/CUIT son obligatorios.")
-        
+
         st.divider()
         st.write("### Directorio de Clientes")
         clis = obtener_clientes() or {}
@@ -1038,7 +1295,7 @@ with tab_config:
                     "Descuento": f"{d_cli.get('descuento', 0)}%"
                 })
             st.dataframe(datos_cli, use_container_width=True)
-            
+
             with st.expander("🗑️ Eliminar un Cliente"):
                 cli_borrar = st.selectbox(
                     "Seleccionar cliente a eliminar:",
