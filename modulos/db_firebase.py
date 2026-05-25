@@ -331,24 +331,63 @@ def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modu
         return True, "Ubicación de inventario actualizada."
     return False, "No se detectaron datos de ubicación válidos en la orden."
 
-def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro=None, marca=None):
+def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
+    """Resuelve el documento Firebase del artículo maestro (el ID del doc puede ≠ campo codigo)."""
+    vistos = set()
+    id_full = str(id_producto or "").strip().replace("/", "-")
+
+    def probar(id_cand):
+        id_c = str(id_cand or "").strip().replace("/", "-")
+        if not id_c or id_c in vistos:
+            return None, None
+        vistos.add(id_c)
+        ref = db.collection("productos").document(id_c)
+        if ref.get().exists:
+            return ref, id_c
+        return None, None
+
+    for candidato in (id_maestro, id_full):
+        ref, id_m = probar(candidato)
+        if ref:
+            return ref, id_m
+
+    if "_" in id_full:
+        ref, id_m = probar(id_full.rsplit("_", 1)[0])
+        if ref:
+            return ref, id_m
+
+    codigo_buscar = str(id_maestro or "").strip().replace("/", "-")
+    if not codigo_buscar and "_" in id_full:
+        codigo_buscar = id_full.rsplit("_", 1)[0]
+    if codigo_buscar:
+        docs = db.collection("productos").where("codigo", "==", codigo_buscar).limit(1).get()
+        if docs:
+            return db.collection("productos").document(docs[0].id), docs[0].id
+
+    return None, None
+
+
+def _extraer_marca_variante(id_producto, id_maestro):
+    id_full = str(id_producto or "").strip().replace("/", "-")
     id_m = str(id_maestro or "").strip().replace("/", "-")
-    marca_key = str(marca or "").strip().upper()
+    prefijo = f"{id_m}_"
+    if id_m and id_full.startswith(prefijo):
+        return id_full[len(prefijo):].upper()
+    if "_" in id_full:
+        return id_full.rsplit("_", 1)[1].upper()
+    return "GENERICO"
 
-    if not id_m:
-        partes = str(id_producto).replace("/", "-").split("_", 1)
-        id_m = partes[0]
-        if not marca_key:
-            marca_key = partes[1].upper() if len(partes) > 1 else "GENERICO"
 
-    if not marca_key:
-        partes = str(id_producto).replace("/", "-").split("_", 1)
-        marca_key = partes[1].upper() if len(partes) > 1 else "GENERICO"
-
-    ref_prod = db.collection("productos").document(id_m)
-    doc = ref_prod.get()
-    if not doc.exists:
+def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro=None, marca=None):
+    ref_prod, id_m = _obtener_ref_producto_maestro(id_producto, id_maestro)
+    if not ref_prod:
         return False, "Producto no encontrado."
+
+    marca_key = str(marca or "").strip().upper()
+    if not marca_key:
+        marca_key = _extraer_marca_variante(id_producto, id_m)
+
+    doc = ref_prod.get()
 
     datos = doc.to_dict() or {}
     variantes = datos.get("variantes", {})
