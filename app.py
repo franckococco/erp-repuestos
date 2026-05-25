@@ -275,6 +275,8 @@ with tab_carga:
         if cuit_detectado and cuit_detectado not in provs_check:
             st.error("⚠️ Este CUIT no está configurado. Registralo en Configuración → Proveedores antes de confirmar.")
 
+        cuit_valido = len(cuit_detectado) == 11 and cuit_detectado in provs_check
+
         st.divider()
         st.info("💡 **Código = artículo maestro. Marca = variante.** Misma pieza, otra marca → mismo código, distinta marca.")
 
@@ -338,59 +340,74 @@ with tab_carga:
                     qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
                     st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
 
-            submit_factura = st.form_submit_button("💾 Confirmar Ingreso y Generar TODOS los QR", type="primary", use_container_width=True)
+            submit_factura = st.form_submit_button(
+                "💾 Confirmar Ingreso y Generar TODOS los QR",
+                type="primary",
+                use_container_width=True,
+                disabled=not cuit_valido,
+                help=(
+                    "Registrá un CUIT de 11 dígitos en Configuración → Proveedores para habilitar la confirmación."
+                    if not cuit_valido
+                    else None
+                ),
+            )
 
         if submit_factura:
-            nombre_prov = d.get('proveedor', 'DESCONOCIDO')
-            articulos_lista = df_editado.to_dict('records')
-
-            for art in articulos_lista:
-                if isinstance(art, dict):
-                    art['proveedor'] = nombre_prov
-                    art['cuit_proveedor'] = cuit_detectado
-
-            d['articulos'] = articulos_lista
-
-            exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
-
-            if exito:
-                prov_id = cuit_detectado
-                provs = obtener_proveedores() or {}
-                recargo = 0.0
-                descuento_prov = 0.0
-                if prov_id in provs:
-                    datos_prov = provs[prov_id]
-                    if isinstance(datos_prov, dict):
-                        recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                        descuento_prov = float(datos_prov.get('descuento', 0.0))
-
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                    for art in d.get('articulos', []):
-                        if not isinstance(art, dict):
-                            continue
-
-                        codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
-                        marca_rep = str(art.get('marca', 'GENERICO')).strip().upper()
-                        if not codigo_base or codigo_base.lower() in ["null", "none"]:
-                            desc_limpia = str(art.get('descripcion', '')).strip()
-                            codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
-
-                        id_producto = f"{codigo_base}_{marca_rep}"
-                        precio_f = float(art.get('precio_unitario', 0))
-                        calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
-
-                        desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
-                        qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
-                        zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
-
-                st.session_state.zip_listo = zip_buffer.getvalue()
-                st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
-                st.session_state.temp_datos = None
-                st.success(msg)
-                st.rerun()
+            if not cuit_valido:
+                st.error(
+                    "No se puede confirmar: el CUIT debe tener 11 dígitos y estar registrado en Proveedores."
+                )
             else:
-                st.error(msg)
+                nombre_prov = d.get('proveedor', 'DESCONOCIDO')
+                articulos_lista = df_editado.to_dict('records')
+
+                for art in articulos_lista:
+                    if isinstance(art, dict):
+                        art['proveedor'] = nombre_prov
+                        art['cuit_proveedor'] = cuit_detectado
+
+                d['articulos'] = articulos_lista
+
+                exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
+
+                if exito:
+                    prov_id = cuit_detectado
+                    provs = obtener_proveedores() or {}
+                    recargo = 0.0
+                    descuento_prov = 0.0
+                    if prov_id in provs:
+                        datos_prov = provs[prov_id]
+                        if isinstance(datos_prov, dict):
+                            recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                            descuento_prov = float(datos_prov.get('descuento', 0.0))
+
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                        for art in d.get('articulos', []):
+                            if not isinstance(art, dict):
+                                continue
+
+                            codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
+                            marca_rep = str(art.get('marca', 'GENERICO')).strip().upper()
+                            if not codigo_base or codigo_base.lower() in ["null", "none"]:
+                                desc_limpia = str(art.get('descripcion', '')).strip()
+                                codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
+
+                            id_producto = f"{codigo_base}_{marca_rep}"
+                            precio_f = float(art.get('precio_unitario', 0))
+                            calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
+
+                            desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
+                            qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
+                            zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
+
+                    st.session_state.zip_listo = zip_buffer.getvalue()
+                    st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
+                    st.session_state.temp_datos = None
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     if "zip_listo" in st.session_state:
         st.success("📦 Lote de etiquetas generado y Stock Actualizado.")
@@ -458,7 +475,10 @@ with tab_inventario:
             )
 
             df = pd.DataFrame(inv_filtrado)
-            cols_deseadas = ['id', 'codigo', 'Descripción', 'Vehículo', 'Marca', 'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila']
+            cols_deseadas = [
+                'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
+                'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
+            ]
             cols_existentes = [c for c in cols_deseadas if c in df.columns]
 
             df_filtrado = df[cols_existentes].reset_index(drop=True)
@@ -470,6 +490,9 @@ with tab_inventario:
                 column_config={
                     "id": st.column_config.TextColumn(
                         "ID Variante (referencia QR)", disabled=True, width="small"
+                    ),
+                    "id_maestro": st.column_config.TextColumn(
+                        "ID Maestro (Firebase)", disabled=True, width="small"
                     ),
                     "codigo": st.column_config.TextColumn(
                         "Cód. Maestro (no editable)", disabled=True, width="small"
@@ -497,9 +520,12 @@ with tab_inventario:
                     for row_idx, dict_cambios in cambios.items():
                         fila = df_filtrado.iloc[int(row_idx)]
                         id_prod = str(fila['id'])
-                        id_m = str(fila.get('id_maestro') or fila.get('codigo') or '')
-                        # Marca original desde el ID (CODIGO_MARCA), no la celda ya editada
-                        marca_fila = id_prod[len(id_m) + 1:].upper() if id_m and id_prod.startswith(f"{id_m}_") else str(fila.get('Marca', 'GENERICO')).upper()
+                        id_m = str(fila.get('id_maestro') or fila.get('codigo') or '').strip()
+                        prefijo = f"{id_m}_"
+                        if id_m and id_prod.startswith(prefijo):
+                            marca_fila = id_prod[len(prefijo):].upper()
+                        else:
+                            marca_fila = str(fila.get('Marca', 'GENERICO')).upper()
                         for col_name, new_val in dict_cambios.items():
                             ok, msj = actualizar_producto_desde_grilla(
                                 id_prod, col_name, new_val,
