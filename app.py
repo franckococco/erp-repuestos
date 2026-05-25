@@ -77,6 +77,46 @@ def normalizar_para_busqueda(texto):
     return re.sub(r'[^a-z0-9\s]', '', t.lower())
 
 
+_STOPWORDS_PROV = frozenset({
+    "de", "del", "la", "las", "el", "los", "y", "e", "en", "por", "para", "con", "un", "una", "productos", "repuestos",
+})
+_SUFIJOS_PROV = frozenset({"sa", "sas", "srl", "ltda", "inc", "cia", "co", "corp", "ltd", "sau"})
+
+
+def _palabras_clave_proveedor(texto):
+    """Raíz útil del nombre: 'expoyer' desde 'EXPOYER S.A.' o 'filtrame productos de expoyer'."""
+    palabras = []
+    for w in normalizar_para_busqueda(texto).split():
+        if len(w) < 2 or w in _STOPWORDS_PROV or w in _SUFIJOS_PROV:
+            continue
+        palabras.append(w)
+    return palabras
+
+
+def _proveedor_coincide_busqueda(terminos_clave, nombre_proveedor):
+    if not terminos_clave:
+        return False
+    palabras = _palabras_clave_proveedor(nombre_proveedor)
+    if not palabras:
+        return False
+    texto = " ".join(palabras)
+    for t in terminos_clave:
+        if t in texto:
+            continue
+        if not any(t in p or p.startswith(t) for p in palabras):
+            return False
+    return True
+
+
+def _cuits_proveedor_en_catalogo(termino, provs_catalogo):
+    terminos_clave = _palabras_clave_proveedor(termino)
+    cuits = set()
+    for cuit, datos in (provs_catalogo or {}).items():
+        if isinstance(datos, dict) and _proveedor_coincide_busqueda(terminos_clave, datos.get("nombre", "")):
+            cuits.add(str(cuit))
+    return cuits, terminos_clave
+
+
 def preparar_item_inventario(item):
     if not isinstance(item, dict):
         return item
@@ -1071,13 +1111,21 @@ with tab_asistente:
                     st.session_state.ultimo_estado = "error"
 
             elif accion == "filtrar_proveedor":
-                prov_buscado = str(respuesta_json.get("proveedor", "")).lower()
-                terminos_prov = normalizar_para_busqueda(prov_buscado).split()
+                prov_buscado = str(respuesta_json.get("proveedor", "")).strip()
+                provs_catalogo = obtener_proveedores() or {}
+                cuits_match, terminos_clave = _cuits_proveedor_en_catalogo(prov_buscado, provs_catalogo)
 
                 encontrados = []
                 for p in inventario:
-                    prov_db = normalizar_para_busqueda(str(p.get('proveedor', '')))
-                    if prov_db and all(t in prov_db for t in terminos_prov):
+                    if not isinstance(p, dict):
+                        continue
+                    cuit_p = "".join(filter(str.isdigit, str(p.get("cuit_proveedor", ""))))
+                    if cuit_p and cuit_p in cuits_match:
+                        encontrados.append(p)
+                        continue
+                    if terminos_clave and _proveedor_coincide_busqueda(
+                        terminos_clave, str(p.get("proveedor", ""))
+                    ):
                         encontrados.append(p)
 
                 if encontrados:
