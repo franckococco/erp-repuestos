@@ -378,6 +378,48 @@ def _extraer_marca_variante(id_producto, id_maestro):
     return "GENERICO"
 
 
+def _resolver_producto_y_stock(id_producto):
+    """
+    Resuelve documento Firebase y stock disponible para un ID variante (CODIGO_MARCA).
+    Retorna (ref_prod, id_m, marca, stock, error). error es None si todo OK.
+    """
+    partes = str(id_producto).strip().upper().replace("/", "-").split("_", 1)
+    id_m = partes[0]
+    marca_req = partes[1] if len(partes) > 1 else None
+
+    ref_prod = db.collection("productos").document(id_m)
+    doc = ref_prod.get()
+
+    if not doc.exists:
+        docs_codigo = db.collection("productos").where("codigo", "==", id_m).get()
+        if docs_codigo:
+            ref_prod = db.collection("productos").document(docs_codigo[0].id)
+            doc = ref_prod.get()
+            id_m = doc.id
+        else:
+            return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
+
+    datos = doc.to_dict() or {}
+    variantes = datos.get("variantes", {})
+
+    if not variantes:
+        marca_ant = datos.get("marca", datos.get("condicion", "GENERICO"))
+        return ref_prod, id_m, marca_ant, int(datos.get("stock", 0)), None
+
+    if not marca_req:
+        if len(variantes) == 1:
+            marca_req = list(variantes.keys())[0]
+        else:
+            return None, None, None, None, (
+                "Múltiples marcas para este repuesto. Indicá el ID exacto (CODIGO_MARCA)."
+            )
+
+    if marca_req not in variantes:
+        return None, None, None, None, f"La marca '{marca_req}' no se encontró en este repuesto."
+
+    return ref_prod, id_m, marca_req, int(variantes[marca_req].get("stock", 0)), None
+
+
 def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro=None, marca=None):
     ref_prod, id_m = _obtener_ref_producto_maestro(id_producto, id_maestro)
     if not ref_prod:
@@ -441,58 +483,45 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
 
 # --- ASISTENTE DE DEPÓSITO ---
 def registrar_merma(id_producto, cantidad):
-    partes = str(id_producto).strip().upper().replace("/", "-").split("_", 1)
-    id_m = partes[0]
-    marca_req = partes[1] if len(partes) > 1 else None
-    
-    ref_prod = db.collection("productos").document(id_m)
-    doc = ref_prod.get()
-    
-    if not doc.exists:
-        docs_codigo = db.collection("productos").where("codigo", "==", id_m).get()
-        if docs_codigo:
-            ref_prod = db.collection("productos").document(docs_codigo[0].id)
-            doc = ref_prod.get()
-            id_m = doc.id
-        else:
-            return False, f"El código '{id_m}' no se encontró en el inventario."
-            
-    datos = doc.to_dict() or {}
-    variantes = datos.get("variantes", {})
-    
-    if not variantes:
-        # Retrocompatibilidad para repuestos viejos sin variantes
-        batch = db.batch()
-        batch.update(ref_prod, {"stock": firestore.Increment(-int(cantidad)), "ultima_actualizacion": datetime.now(timezone.utc)}) # type: ignore
-        batch.commit()
-        return True, f"Baja de {cantidad} unidades registrada."
+    cant = int(cantidad)
+    if cant <= 0:
+        return False, "La cantidad debe ser mayor a cero."
 
-    if not marca_req:
-        if len(variantes) == 1:
-            marca_req = list(variantes.keys())[0]
-        else:
-            return False, f"Múltiples marcas para este repuesto. Por favor, dictá el código exacto desde la pantalla o usá ingreso manual."
-            
-    if marca_req not in variantes:
-        return False, f"La marca '{marca_req}' no se encontró en este repuesto."
-        
+    ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto)
+    if err:
+        return False, err
+    if cant > stock_disp:
+        return False, (
+            f"Stock insuficiente para dar de baja {cant} u. "
+            f"(disponible: {stock_disp}, marca {marca_req})."
+        )
+
+    datos = ref_prod.get().to_dict() or {}
+    variantes = datos.get("variantes", {})
+
+    if not variantes:
+        batch = db.batch()
+        batch.update(ref_prod, {"stock": firestore.Increment(-cant), "ultima_actualizacion": datetime.now(timezone.utc)}) # type: ignore
+        batch.commit()
+        return True, f"Baja de {cant} unidades registrada."
+
     batch = db.batch()
     batch.update(ref_prod, {
-        f"variantes.{marca_req}.stock": firestore.Increment(-int(cantidad)), # type: ignore
+        f"variantes.{marca_req}.stock": firestore.Increment(-cant), # type: ignore
         "ultima_actualizacion": datetime.now(timezone.utc)
     })
-    
+
     ref_baja = db.collection("auditoria_mermas").document()
     batch.set(ref_baja, {
         "id_producto": id_m,
         "marca": marca_req,
-        "cantidad_baja": int(cantidad),
+        "cantidad_baja": cant,
         "fecha": datetime.now(timezone.utc),
         "motivo": "Ajuste reportado vía Asistente de Voz"
     })
-    
+
     batch.commit()
-    return True, f"Baja de {cantidad} unidades en marca {marca_req} registrada."
+    return True, f"Baja de {cant} unidades en marca {marca_req} registrada."
 
 def registrar_aumento_stock(id_producto, cantidad):
     partes = str(id_producto).strip().upper().replace("/", "-").split("_", 1)
@@ -597,57 +626,51 @@ def obtener_inventario_completo() -> list:
     return inventario
 
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):
-    partes = str(id_producto).strip().upper().replace("/", "-").split("_", 1)
-    id_m = partes[0]
-    marca_req = partes[1] if len(partes) > 1 else None
-    
-    ref_prod = db.collection("productos").document(id_m)
-    doc = ref_prod.get()
+    cant = int(cantidad)
+    if cant <= 0:
+        return False, "La cantidad debe ser mayor a cero."
 
-    if not doc.exists:
-        docs_codigo = db.collection("productos").where("codigo", "==", id_m).get()
-        if docs_codigo:
-            doc = docs_codigo[0]
-            id_m = doc.id
-        else:
-            return False, f"El código '{id_m}' no se encontró en el inventario."
-            
-    datos = doc.to_dict() or {}
+    ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto)
+    if err:
+        return False, err
+
+    datos = ref_prod.get().to_dict() or {}
     variantes = datos.get("variantes", {})
-    
+    id_item = f"{id_m}_{marca_req}"
+    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(id_item)
+
+    qty_carrito = 0
+    doc_carrito = ref_item.get()
+    if doc_carrito.exists:
+        qty_carrito = int((doc_carrito.to_dict() or {}).get("cantidad", 0))
+
+    if qty_carrito + cant > stock_disp:
+        libre = max(0, stock_disp - qty_carrito)
+        return False, (
+            f"Stock insuficiente. Disponible para agregar: {libre} u. "
+            f"(en carrito: {qty_carrito}, stock total: {stock_disp})."
+        )
+
     if not variantes:
-        # Modo viejo
         precio = float(datos.get('precio_venta', 0.0))
         marca_mostrar = datos.get('marca', datos.get('condicion', ''))
-        ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(f"{id_m}_{marca_mostrar}")
         ref_item.set({
             "id_maestro": id_m, "marca": marca_mostrar,
             "descripcion": f"{datos.get('descripcion')} ({marca_mostrar})",
             "precio_unitario": precio,
-            "cantidad": firestore.Increment(int(cantidad)) # type: ignore
+            "cantidad": firestore.Increment(cant) # type: ignore
         }, merge=True)
         return True, f"Agregado: {datos.get('descripcion')}"
-        
-    if not marca_req:
-        if len(variantes) == 1:
-            marca_req = list(variantes.keys())[0]
-        else:
-            return False, f"Múltiples marcas disponibles. Selecciona una específica."
-            
-    if marca_req not in variantes:
-        return False, f"Marca '{marca_req}' sin stock."
-        
+
     precio = float(variantes[marca_req].get('precio_venta', 0.0))
-    ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(f"{id_m}_{marca_req}")
-    
     ref_item.set({
         "id_maestro": id_m,
         "marca": marca_req,
         "descripcion": f"{datos.get('descripcion')} ({marca_req})",
         "precio_unitario": precio,
-        "cantidad": firestore.Increment(int(cantidad)) # type: ignore
+        "cantidad": firestore.Increment(cant) # type: ignore
     }, merge=True)
-    
+
     return True, f"Agregado: {datos.get('descripcion')} ({marca_req})"
 
 def obtener_carrito(vendedor) -> list:
@@ -669,33 +692,66 @@ def vaciar_carrito(vendedor):
 
 def confirmar_venta(vendedor):
     items = obtener_carrito(vendedor)
-    
+
     if not items:
         return False, "Vacío."
-        
-    batch = db.batch()
-    
+
+    lineas_ok = []
+    errores = []
+
     for item in items:
-        id_completo = item['id'].replace("/", "-")
-        partes = id_completo.split("_", 1)
-        id_m = item.get('id_maestro') or partes[0]
-        marca = item.get('marca') or (partes[1] if len(partes) > 1 else 'GENERICO')
-        
-        ref_prod = db.collection("productos").document(id_m)
-        ref_item = db.collection("presupuestos_activos").document(vendedor).collection("items").document(item['id'])
-        
+        cant = int(item.get("cantidad", 0))
+        id_item = str(item.get("id", "")).replace("/", "-")
+        ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item)
+        if err:
+            errores.append(f"{id_item}: {err}")
+            continue
+        if cant <= 0:
+            errores.append(f"{id_item}: cantidad inválida.")
+            continue
+        if cant > stock_disp:
+            errores.append(
+                f"{item.get('descripcion', id_item)}: stock insuficiente "
+                f"(pedido {cant}, disponible {stock_disp})."
+            )
+            continue
+        lineas_ok.append({
+            "item": item,
+            "ref_prod": ref_prod,
+            "id_m": id_m,
+            "marca": marca,
+            "cantidad": cant,
+        })
+
+    if errores:
+        return False, "No se confirmó la venta:\n" + "\n".join(errores)
+
+    batch = db.batch()
+
+    for linea in lineas_ok:
+        item = linea["item"]
+        ref_prod = linea["ref_prod"]
+        marca = linea["marca"]
+        cant = linea["cantidad"]
+        ref_item = (
+            db.collection("presupuestos_activos")
+            .document(vendedor)
+            .collection("items")
+            .document(item["id"])
+        )
+
         doc_prod = ref_prod.get()
         if doc_prod.exists and "variantes" in (doc_prod.to_dict() or {}):
             batch.update(ref_prod, {
-                f"variantes.{marca}.stock": firestore.Increment(-item['cantidad']) # type: ignore
+                f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
             })
         else:
             batch.update(ref_prod, {
-                "stock": firestore.Increment(-item['cantidad']) # type: ignore
+                "stock": firestore.Increment(-cant)  # type: ignore
             })
-            
+
         batch.delete(ref_item)
-        
+
     batch.commit()
     return True, "Venta confirmada."
 
