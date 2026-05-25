@@ -65,7 +65,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
        - Si no especifica cantidad en un reporte, asume 3.
     4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
     5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
-    6. PROVEEDORES: Si el usuario pide filtrar, mostrar o buscar repuestos de un proveedor específico, extrae solo el nombre del proveedor.
+    6. PROVEEDORES: Si pide filtrar por proveedor, extrae solo la raíz del nombre (ej: "expoyer", no "EXPOYER S.A." ni "productos de").
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
