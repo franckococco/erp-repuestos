@@ -69,6 +69,16 @@ def _agrupar_por_clave(lineas):
     return grupos
 
 
+def _indice_por_codigo_origen(lineas):
+    """Índice codigo_origen → lista de claves (para emparejar códigos distintos al maestro)."""
+    idx = {}
+    for linea in lineas:
+        cod = linea.get("codigo_origen")
+        if cod:
+            idx.setdefault(cod, []).append(linea["clave"])
+    return idx
+
+
 def comparar_factura_remito(articulos_factura, articulos_remito, cuit, buscar_equivalencia_fn, normalizar_codigo_fn):
     fac_lineas = preparar_articulos_comparacion(
         articulos_factura, cuit, buscar_equivalencia_fn, normalizar_codigo_fn
@@ -79,13 +89,33 @@ def comparar_factura_remito(articulos_factura, articulos_remito, cuit, buscar_eq
     fac = _agrupar_por_clave(fac_lineas)
     rem = _agrupar_por_clave(rem_lineas)
 
+    # Emparejar por código de origen cuando el maestro difiere (ej. OCR vs equivalencia)
+    idx_rem_cod = _indice_por_codigo_origen(rem_lineas)
+    claves_rem_usadas = set()
+    alias_fac_a_rem = {}
+    for clave_f, f in list(fac.items()):
+        if clave_f in alias_fac_a_rem:
+            continue
+        for cod in f.get("codigos_origen") or []:
+            for clave_r in idx_rem_cod.get(cod, []):
+                if clave_r in claves_rem_usadas or clave_r == clave_f:
+                    continue
+                if clave_r in fac:
+                    continue
+                alias_fac_a_rem[clave_f] = clave_r
+                claves_rem_usadas.add(clave_r)
+                break
+            if clave_f in alias_fac_a_rem:
+                break
+
     coinciden = []
     dif_cantidad = []
     faltan_en_remito = []
     sobran_en_remito = []
 
     for clave, f in fac.items():
-        r = rem.get(clave)
+        clave_rem = alias_fac_a_rem.get(clave, clave)
+        r = rem.get(clave_rem)
         base = {
             "id_maestro": f["id_maestro"],
             "marca": f["marca"],
@@ -107,7 +137,10 @@ def comparar_factura_remito(articulos_factura, articulos_remito, cuit, buscar_eq
             faltan_en_remito.append({**base, "estado": "falta_remito"})
 
     for clave, r in rem.items():
-        if clave not in fac:
+        if clave in claves_rem_usadas:
+            continue
+        clave_fac_directa = clave
+        if clave_fac_directa not in fac and clave not in alias_fac_a_rem.values():
             sobran_en_remito.append({
                 "id_maestro": r["id_maestro"],
                 "marca": r["marca"],

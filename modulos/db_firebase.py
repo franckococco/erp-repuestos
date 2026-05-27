@@ -261,6 +261,77 @@ def normalizar_codigo_proveedor(codigo):
     return c if c and c not in ("NONE", "NULL", "NAN") else ""
 
 
+def clave_linea_factura(codigo_o_art, marca=None):
+    """Clave estable para emparejar filas de factura con metadatos de vinculación."""
+    if isinstance(codigo_o_art, dict):
+        cod = normalizar_codigo_proveedor(
+            codigo_o_art.get("codigo_proveedor") or codigo_o_art.get("codigo", "")
+        )
+        marca = str(codigo_o_art.get("marca", "GENERICO")).strip().upper()
+    else:
+        cod = normalizar_codigo_proveedor(codigo_o_art)
+        marca = str(marca or "GENERICO").strip().upper()
+    return f"{cod}|{marca}"
+
+
+def formatear_id_variante(id_maestro, marca):
+    return f"{str(id_maestro).strip().upper().replace('/', '-')}_{str(marca).strip().upper()}"
+
+
+def _descomponer_id_variante(id_producto):
+    """
+    Separa ID variante (CODIGO_MARCA) probando prefijos contra Firebase.
+    Soporta códigos maestros que contienen guion bajo (ej: ABC_123 + SKF).
+    Retorna (id_maestro, marca_o_None, ref_prod_o_None).
+    """
+    id_full = str(id_producto or "").strip().upper().replace("/", "-")
+    if not id_full:
+        return None, None, None
+
+    def doc_existe(id_cand):
+        ref = get_db().collection("productos").document(id_cand)
+        return ref, ref.get().exists
+
+    ref, ok = doc_existe(id_full)
+    if ok:
+        return id_full, None, ref
+
+    if "_" not in id_full:
+        docs = get_db().collection("productos").where("codigo", "==", id_full).limit(1).get()
+        if docs:
+            ref = get_db().collection("productos").document(docs[0].id)
+            return docs[0].id, None, ref
+        return id_full, None, None
+
+    partes = id_full.split("_")
+    for i in range(len(partes) - 1, 0, -1):
+        id_cand = "_".join(partes[:i])
+        marca_cand = "_".join(partes[i:])
+        ref, ok = doc_existe(id_cand)
+        if ok:
+            datos = ref.get().to_dict() or {}
+            variantes = datos.get("variantes", {})
+            if variantes and marca_cand in variantes:
+                return id_cand, marca_cand, ref
+            if not variantes:
+                return id_cand, marca_cand, ref
+
+        docs = get_db().collection("productos").where("codigo", "==", id_cand).limit(1).get()
+        if docs:
+            ref = get_db().collection("productos").document(docs[0].id)
+            datos = ref.get().to_dict() or {}
+            variantes = datos.get("variantes", {})
+            if not variantes or marca_cand in variantes:
+                return docs[0].id, marca_cand, ref
+
+    id_m = partes[0]
+    marca = "_".join(partes[1:]) if len(partes) > 1 else None
+    ref, ok = doc_existe(id_m)
+    if ok:
+        return id_m, marca, ref
+    return id_m, marca, None
+
+
 def id_equivalencia(cuit, codigo_proveedor):
     cuit_l = "".join(filter(str.isdigit, str(cuit)))
     cod = normalizar_codigo_proveedor(codigo_proveedor)
@@ -391,7 +462,24 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     condiciones = datos_prov.get("condiciones", {})
     recargo = float(condiciones.get(condicion_pago, 0.0))
     descuento_prov = float(datos_prov.get("descuento", 0.0))
-    
+
+    articulos = datos_ia.get('articulos', [])
+    sin_vincular = []
+    for art in articulos:
+        if not isinstance(art, dict):
+            continue
+        id_m = normalizar_codigo_proveedor(art.get('id_maestro', ''))
+        if not id_m:
+            sin_vincular.append(
+                str(art.get('codigo_proveedor') or art.get('codigo') or art.get('descripcion', 'Sin datos'))
+            )
+    if sin_vincular:
+        return False, (
+            "Hay artículos sin vincular al maestro interno. "
+            f"Revisá: {', '.join(sin_vincular[:5])}"
+            + (f" y {len(sin_vincular) - 5} más." if len(sin_vincular) > 5 else ".")
+        )
+
     ahora = datetime.now(timezone.utc)
     batch = get_db().batch()
     operaciones = 0
@@ -573,13 +661,14 @@ def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
 
 
 def _extraer_marca_variante(id_producto, id_maestro):
-    id_full = str(id_producto or "").strip().replace("/", "-")
-    id_m = str(id_maestro or "").strip().replace("/", "-")
-    prefijo = f"{id_m}_"
-    if id_m and id_full.startswith(prefijo):
-        return id_full[len(prefijo):].upper()
-    if "_" in id_full:
-        return id_full.rsplit("_", 1)[1].upper()
+    id_m, marca, _ = _descomponer_id_variante(id_producto)
+    if id_maestro:
+        prefijo = f"{str(id_maestro).strip().replace('/', '-')}_"
+        id_full = str(id_producto or "").strip().replace("/", "-")
+        if id_full.startswith(prefijo):
+            return id_full[len(prefijo):].upper()
+    if marca:
+        return str(marca).upper()
     return "GENERICO"
 
 
@@ -588,21 +677,19 @@ def _resolver_producto_y_stock(id_producto):
     Resuelve documento Firebase y stock disponible para un ID variante (CODIGO_MARCA).
     Retorna (ref_prod, id_m, marca, stock, error). error es None si todo OK.
     """
-    partes = str(id_producto).strip().upper().replace("/", "-").split("_", 1)
-    id_m = partes[0]
-    marca_req = partes[1] if len(partes) > 1 else None
+    id_m, marca_req, ref_prod = _descomponer_id_variante(id_producto)
 
-    ref_prod = get_db().collection("productos").document(id_m)
-    doc = ref_prod.get()
-
-    if not doc.exists:
-        docs_codigo = get_db().collection("productos").where("codigo", "==", id_m).get()
+    if not ref_prod:
+        docs_codigo = get_db().collection("productos").where("codigo", "==", id_m).limit(1).get()
         if docs_codigo:
             ref_prod = get_db().collection("productos").document(docs_codigo[0].id)
-            doc = ref_prod.get()
-            id_m = doc.id
+            id_m = docs_codigo[0].id
         else:
             return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
+
+    doc = ref_prod.get()
+    if not doc.exists:
+        return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
 
     datos = doc.to_dict() or {}
     variantes = datos.get("variantes", {})
@@ -921,69 +1008,101 @@ def confirmar_venta(vendedor):
     if not items:
         return False, "Vacío."
 
-    lineas_ok = []
-    errores = []
+    db = get_db()
 
-    for item in items:
-        cant = int(item.get("cantidad", 0))
-        id_item = str(item.get("id", "")).replace("/", "-")
-        ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item)
-        err_val = _validar_resolucion_producto(ref_prod, id_m, marca, stock_disp, err)
-        if err_val:
-            errores.append(f"{id_item}: {err_val}")
-            continue
-        assert ref_prod is not None and stock_disp is not None
-        if cant <= 0:
-            errores.append(f"{id_item}: cantidad inválida.")
-            continue
-        if cant > stock_disp:
-            errores.append(
-                f"{item.get('descripcion', id_item)}: stock insuficiente "
-                f"(pedido {cant}, disponible {stock_disp})."
+    @firestore.transactional
+    def _venta_en_transaccion(transaction):
+        errores = []
+        lineas = []
+        for item in items:
+            cant = int(item.get("cantidad", 0))
+            id_item = str(item.get("id", "")).replace("/", "-")
+            if cant <= 0:
+                errores.append(f"{id_item}: cantidad inválida.")
+                continue
+
+            id_m, marca_req, ref_prod = _descomponer_id_variante(id_item)
+            if not ref_prod:
+                docs_codigo = db.collection("productos").where("codigo", "==", id_m).limit(1).get(
+                    transaction=transaction
+                )
+                if docs_codigo:
+                    ref_prod = docs_codigo[0].reference
+                    id_m = docs_codigo[0].id
+                else:
+                    errores.append(f"{id_item}: producto no encontrado.")
+                    continue
+
+            snap = ref_prod.get(transaction=transaction)
+            if not snap.exists:
+                errores.append(f"{id_item}: producto no encontrado.")
+                continue
+
+            datos = snap.to_dict() or {}
+            variantes = datos.get("variantes", {})
+            if variantes:
+                if not marca_req:
+                    if len(variantes) == 1:
+                        marca_req = list(variantes.keys())[0]
+                    else:
+                        errores.append(f"{id_item}: indicá marca en el ID.")
+                        continue
+                if marca_req not in variantes:
+                    errores.append(f"{id_item}: marca '{marca_req}' inexistente.")
+                    continue
+                stock_disp = int(variantes[marca_req].get("stock", 0))
+            else:
+                marca_req = datos.get("marca", datos.get("condicion", "GENERICO"))
+                stock_disp = int(datos.get("stock", 0))
+
+            if cant > stock_disp:
+                errores.append(
+                    f"{item.get('descripcion', id_item)}: stock insuficiente "
+                    f"(pedido {cant}, disponible {stock_disp})."
+                )
+                continue
+
+            ref_item = (
+                db.collection("presupuestos_activos")
+                .document(vendedor)
+                .collection("items")
+                .document(item["id"])
             )
-            continue
-        lineas_ok.append({
-            "item": item,
-            "ref_prod": ref_prod,
-            "id_m": id_m,
-            "marca": marca,
-            "cantidad": cant,
-        })
-
-    if errores:
-        return False, "No se confirmó la venta:\n" + "\n".join(errores)
-
-    batch = get_db().batch()
-    operaciones = 0
-
-    for linea in lineas_ok:
-        item = linea["item"]
-        ref_prod = linea["ref_prod"]
-        marca = linea["marca"]
-        cant = linea["cantidad"]
-        ref_item = (
-            get_db().collection("presupuestos_activos")
-            .document(vendedor)
-            .collection("items")
-            .document(item["id"])
-        )
-
-        doc_prod = ref_prod.get()
-        if doc_prod.exists and "variantes" in (doc_prod.to_dict() or {}):
-            batch.update(ref_prod, {
-                f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
-            })
-        else:
-            batch.update(ref_prod, {
-                "stock": firestore.Increment(-cant)  # type: ignore
+            lineas.append({
+                "item": item,
+                "ref_prod": ref_prod,
+                "marca": marca_req,
+                "cantidad": cant,
+                "variantes": variantes,
+                "ref_item": ref_item,
             })
 
-        batch.delete(ref_item)
-        operaciones += 2
-        batch = _commit_batch_si_lleno(batch, operaciones)
+        if errores:
+            raise ValueError("\n".join(errores))
 
-    if operaciones % _BATCH_LIMIT != 0:
-        batch.commit()
+        for linea in lineas:
+            ref_prod = linea["ref_prod"]
+            marca = linea["marca"]
+            cant = linea["cantidad"]
+            variantes = linea["variantes"]
+            if variantes:
+                transaction.update(ref_prod, {
+                    f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
+                })
+            else:
+                transaction.update(ref_prod, {
+                    "stock": firestore.Increment(-cant)  # type: ignore
+                })
+            transaction.delete(linea["ref_item"])
+
+    try:
+        transaction = db.transaction()
+        _venta_en_transaccion(transaction)
+    except ValueError as e:
+        return False, "No se confirmó la venta:\n" + str(e)
+    except Exception as e:
+        return False, f"Error al confirmar venta: {e}"
+
     invalidar_cache_datos()
     return True, "Venta confirmada."
 

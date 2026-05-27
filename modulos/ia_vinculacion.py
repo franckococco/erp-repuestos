@@ -168,7 +168,7 @@ def _texto_vinculado(id_maestro, marca, descripcion=""):
     return base
 
 
-def resolver_articulo_factura(cuit, articulo, inventario, buscar_equivalencia_fn, usar_groq=True):
+def resolver_articulo_factura(cuit, articulo, inventario, buscar_equivalencia_fn, usar_groq=False):
     from modulos.db_firebase import normalizar_codigo_proveedor
 
     codigo_prov = normalizar_codigo_proveedor(
@@ -215,7 +215,7 @@ def resolver_articulo_factura(cuit, articulo, inventario, buscar_equivalencia_fn
     return articulo
 
 
-def resolver_articulos_factura(cuit, articulos, inventario, buscar_equivalencia_fn, usar_groq=True):
+def resolver_articulos_factura(cuit, articulos, inventario, buscar_equivalencia_fn, usar_groq=False):
     resueltos = []
     for art in articulos or []:
         if not isinstance(art, dict):
@@ -224,6 +224,81 @@ def resolver_articulos_factura(cuit, articulos, inventario, buscar_equivalencia_
             resolver_articulo_factura(cuit, dict(art), inventario, buscar_equivalencia_fn, usar_groq)
         )
     return resueltos
+
+
+def sugerir_articulo_con_groq(articulo, inventario):
+    """Ejecuta sugerencia Groq bajo demanda para un solo artículo."""
+    candidatos = prefiltrar_candidatos(articulo, inventario)
+    sugerencias = sugerir_equivalencias_groq(articulo, candidatos)
+    articulo = dict(articulo)
+    if sugerencias:
+        articulo["estado_vinculacion"] = "sugerido"
+        articulo["sugerencias"] = sugerencias
+        articulo["id_maestro"] = None
+        articulo["marca_variante"] = None
+        top = sugerencias[0]
+        articulo["vinculado_a"] = (
+            f"Sugerido: {_texto_vinculado(top['id_maestro'], top['marca'], top.get('descripcion', ''))} "
+            f"({top.get('score', 0)}%)"
+        )
+    else:
+        articulo["estado_vinculacion"] = "pendiente"
+        articulo["sugerencias"] = []
+        articulo["vinculado_a"] = "Sin coincidencias IA — vincular manualmente"
+    return articulo
+
+
+def sugerir_pendientes_con_groq(articulos, inventario):
+    """Sugerencias Groq solo para ítems pendientes (no auto-vinculados)."""
+    resultado = []
+    for art in articulos or []:
+        if not isinstance(art, dict):
+            continue
+        art = dict(art)
+        if art.get("estado_vinculacion") == "auto" and art.get("id_maestro"):
+            resultado.append(art)
+            continue
+        if art.get("id_maestro"):
+            resultado.append(art)
+            continue
+        resultado.append(sugerir_articulo_con_groq(art, inventario))
+    return resultado
+
+
+def mapa_vinculacion_articulos(articulos):
+    """Índice clave → metadatos de vinculación para fusionar con la grilla editada."""
+    mapa = {}
+    for art in articulos or []:
+        if not isinstance(art, dict):
+            continue
+        from modulos.db_firebase import clave_linea_factura
+        k = clave_linea_factura(art)
+        mapa[k] = {
+            "estado_vinculacion": art.get("estado_vinculacion"),
+            "id_maestro": art.get("id_maestro"),
+            "marca_variante": art.get("marca_variante"),
+            "vinculado_a": art.get("vinculado_a"),
+            "sugerencias": art.get("sugerencias", []),
+            "codigo_proveedor": art.get("codigo_proveedor"),
+        }
+    return mapa
+
+
+def fusionar_grilla_con_vinculacion(df_editado, mapa_vinc):
+    """Fusiona filas editadas con vinculación usando clave codigo|marca (no índice)."""
+    from modulos.db_firebase import clave_linea_factura, normalizar_codigo_proveedor
+    filas = []
+    for _, row in df_editado.iterrows():
+        art = row.to_dict()
+        art["marca"] = str(art.get("marca", "GENERICO")).strip().upper()
+        art["codigo_proveedor"] = normalizar_codigo_proveedor(art.get("codigo", ""))
+        k = clave_linea_factura(art)
+        meta = mapa_vinc.get(k, {})
+        for campo in ("estado_vinculacion", "id_maestro", "marca_variante", "vinculado_a", "sugerencias"):
+            if campo in meta:
+                art[campo] = meta[campo]
+        filas.append(art)
+    return filas
 
 
 def aplicar_vinculacion_manual(articulo, id_maestro, marca_variante, descripcion_maestro=""):

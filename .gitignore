@@ -2,9 +2,12 @@
 .env
 *.json
 
+# Streamlit: permitir config.toml, ignorar secretos locales
+.streamlit/*
+!.streamlit/config.toml
+
 # Carpetas temporales de Python
 __pycache__/
-.streamlit/
 *.pyc
 
 # Archivos del sistema

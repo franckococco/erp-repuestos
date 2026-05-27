@@ -28,8 +28,8 @@ if _faltantes:
     for nombre in _ARCHIVOS_MODULOS:
         st.write(f"- `modulos/{nombre}`")
     st.info(
-        "Copiá la carpeta `modulos` completa desde tu PC "
-        "(d:\\carpeta escritorio\\CARGA FACTURA IA\\modulos) al repositorio y hacé redeploy."
+        "Copiá la carpeta `modulos/` completa desde tu entorno local al repositorio "
+        "**erp-repuestos** (rama `main`) y hacé redeploy en Streamlit Cloud."
     )
     st.stop()
 
@@ -51,6 +51,10 @@ from modulos.ia_vinculacion import (
     aplicar_vinculacion_sugerida,
     aplicar_vinculacion_manual,
     aplicar_articulo_nuevo,
+    mapa_vinculacion_articulos,
+    fusionar_grilla_con_vinculacion,
+    sugerir_pendientes_con_groq,
+    sugerir_articulo_con_groq,
 )
 from modulos.db_firebase import (
     registrar_ingreso_inteligente,
@@ -80,6 +84,7 @@ from modulos.db_firebase import (
     restaurar_inventario_csv,
     buscar_equivalencia,
     listar_maestros_para_busqueda,
+    clave_linea_factura,
 )
 from modulos.generador_qr import generar_qr_producto
 from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
@@ -87,26 +92,21 @@ from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_
 st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
 aplicar_estilos_globales()
 
-# --- MOTOR DE ATAJOS DE TECLADO (JavaScript Invisible) ---
+# --- MOTOR DE ATAJOS DE TECLADO (sidebar radio) ---
 components.html(
     """
     <script>
     const doc = window.parent.document;
     doc.addEventListener('keydown', function(e) {
-        if (e.ctrlKey) {
-            let tabIndex = -1;
-            if (e.key.toLowerCase() === 's') { tabIndex = 0; e.preventDefault(); }
-            else if (e.key.toLowerCase() === 'i') { tabIndex = 1; e.preventDefault(); }
-            else if (e.key.toLowerCase() === 'm') { tabIndex = 2; e.preventDefault(); }
-            else if (e.key.toLowerCase() === 'a') { tabIndex = 3; e.preventDefault(); }
-            else if (e.key.toLowerCase() === 'c') { tabIndex = 4; e.preventDefault(); }
-            if (tabIndex !== -1) {
-                const tabs = doc.querySelectorAll('button[data-baseweb="tab"]');
-                if (tabs.length > tabIndex) {
-                    tabs[tabIndex].click();
-                }
-            }
-        }
+        if (!e.ctrlKey) return;
+        const map = { s: 0, i: 1, m: 2, a: 3, c: 4 };
+        const idx = map[e.key.toLowerCase()];
+        if (idx === undefined) return;
+        e.preventDefault();
+        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+        if (!sidebar) return;
+        const radios = sidebar.querySelectorAll('div[role="radiogroup"] label');
+        if (radios.length > idx) radios[idx].click();
     });
     </script>
     """,
@@ -359,7 +359,8 @@ if pagina == "carga":
                                 if "condicion" in art:
                                     del art["condicion"]
                             datos["articulos"] = resolver_articulos_factura(
-                                cuit_tmp, datos.get("articulos", []), inventario, buscar_equivalencia
+                                cuit_tmp, datos.get("articulos", []), inventario, buscar_equivalencia,
+                                usar_groq=False,
                             )
                             st.session_state.temp_datos = datos
                             st.rerun()
@@ -418,42 +419,60 @@ if pagina == "carga":
             ])
             st.dataframe(df_vinc, hide_index=True, use_container_width=True)
 
-            pendientes_idx = [
-                (i, a) for i, a in enumerate(articulos)
+            mapa_vinc = mapa_vinculacion_articulos(articulos)
+            pendientes = [
+                (clave_linea_factura(a), a)
+                for a in articulos
                 if isinstance(a, dict) and a.get("estado_vinculacion") in ("pendiente", "sugerido")
             ]
-            if pendientes_idx:
+            if pendientes:
                 st.subheader("Vinculación de artículos")
-                for idx, art in pendientes_idx:
+                col_groq_all, _ = st.columns([2, 3])
+                if col_groq_all.button("🤖 Sugerir pendientes con IA", type="secondary"):
+                    with st.spinner("Consultando Groq para artículos pendientes..."):
+                        inventario_ia = obtener_inventario_completo() or []
+                        d["articulos"] = sugerir_pendientes_con_groq(articulos, inventario_ia)
+                        st.session_state.temp_datos = d
+                        st.rerun()
+
+                for clave, art in pendientes:
                     titulo = f"🔗 {art.get('codigo_proveedor', art.get('codigo', ''))} — {str(art.get('descripcion', ''))[:50]}"
                     with st.expander(titulo, expanded=(art.get("estado_vinculacion") == "sugerido")):
+                        if st.button("🤖 Sugerir con IA", key=f"groq_{clave}"):
+                            with st.spinner("Buscando equivalencias..."):
+                                inventario_ia = obtener_inventario_completo() or []
+                                sugerir_articulo_con_groq(art, inventario_ia)
+                                d["articulos"] = articulos
+                                st.session_state.temp_datos = d
+                                st.rerun()
+
                         for j, sug in enumerate(art.get("sugerencias") or []):
                             sc1, sc2 = st.columns([4, 1])
                             sc1.caption(
                                 f"**{sug.get('score', 0)}%** — {sug.get('descripcion', '')} "
                                 f"→ `{sug.get('id_maestro')}_{sug.get('marca')}` · {sug.get('motivo', '')}"
                             )
-                            if sc2.button("✅ Vincular", key=f"vinc_sug_{idx}_{j}"):
-                                aplicar_vinculacion_sugerida(articulos[idx], sug)
+                            if sc2.button("✅ Vincular", key=f"vinc_sug_{clave}_{j}"):
+                                aplicar_vinculacion_sugerida(art, sug)
                                 d["articulos"] = articulos
                                 st.session_state.temp_datos = d
                                 st.rerun()
 
-                        busq = st.text_input("Buscar artículo en stock", key=f"busq_vinc_{idx}", placeholder="Código, descripción, marca…")
+                        busq = st.text_input("Buscar artículo en stock", key=f"busq_vinc_{clave}", placeholder="Código, descripción, marca…")
                         if busq:
                             for m in listar_maestros_para_busqueda(busq):
                                 for marca_m in m.get("marcas", ["GENERICO"]):
                                     lbl = f"{m['descripcion']} | {m['vehiculo']} | {marca_m} | Cód. {m['codigo']}"
-                                    if st.button(f"🔗 {lbl}", key=f"vinc_man_{idx}_{m['id_maestro']}_{marca_m}"):
+                                    if st.button(f"🔗 {lbl}", key=f"vinc_man_{clave}_{m['id_maestro']}_{marca_m}"):
                                         aplicar_vinculacion_manual(
-                                            articulos[idx], m["id_maestro"], marca_m, m.get("descripcion", "")
+                                            art, m["id_maestro"], marca_m, m.get("descripcion", "")
                                         )
                                         d["articulos"] = articulos
                                         st.session_state.temp_datos = d
                                         st.rerun()
 
-                        if st.button("➕ Crear como artículo nuevo", key=f"vinc_nuevo_{idx}"):
-                            aplicar_articulo_nuevo(articulos[idx])
+                        if st.button("➕ Crear como artículo nuevo", key=f"vinc_nuevo_{clave}"):
+                            aplicar_articulo_nuevo(art)
                             d["articulos"] = articulos
                             st.session_state.temp_datos = d
                             st.rerun()
@@ -504,9 +523,12 @@ if pagina == "carga":
                         if not isinstance(art_ejemplo, dict):
                             art_ejemplo = {}
 
+                        meta_ej = mapa_vinc.get(clave_linea_factura(art_ejemplo), {})
                         cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
-                        marca_ej = str(art_ejemplo.get('marca_variante') or art_ejemplo.get('marca', 'GENERICO')).strip().upper()
-                        id_maestro_ej = str(art_ejemplo.get('id_maestro') or cod_ej).strip().upper().replace("/", "-")
+                        marca_ej = str(
+                            meta_ej.get('marca_variante') or art_ejemplo.get('marca', 'GENERICO')
+                        ).strip().upper()
+                        id_maestro_ej = str(meta_ej.get('id_maestro') or cod_ej).strip().upper().replace("/", "-")
                         desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
                         precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
                         id_qr_ej = f"{id_maestro_ej}_{marca_ej}"
@@ -547,17 +569,13 @@ if pagina == "carga":
                     st.error("Hay artículos sin vincular. Revisá la sección de vinculación.")
                 else:
                     nombre_prov = d.get('proveedor', 'DESCONOCIDO')
-                    articulos_lista = df_editado.to_dict('records')
-                    articulos_base = d.get("articulos", [])
+                    mapa_vinc = mapa_vinculacion_articulos(d.get("articulos", []))
+                    articulos_lista = fusionar_grilla_con_vinculacion(df_editado, mapa_vinc)
 
-                    for i, art in enumerate(articulos_lista):
+                    for art in articulos_lista:
                         if not isinstance(art, dict):
                             continue
-                        base = articulos_base[i] if i < len(articulos_base) else {}
-                        for key in ("estado_vinculacion", "id_maestro", "marca_variante", "vinculado_a", "sugerencias"):
-                            if key in base:
-                                art[key] = base[key]
-                        art["codigo_proveedor"] = str(art.get("codigo", base.get("codigo_proveedor", ""))).strip()
+                        art["codigo_proveedor"] = str(art.get("codigo", art.get("codigo_proveedor", ""))).strip()
                         art['proveedor'] = nombre_prov
                         art['cuit_proveedor'] = cuit_detectado
 
