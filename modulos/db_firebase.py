@@ -1008,101 +1008,68 @@ def confirmar_venta(vendedor):
     if not items:
         return False, "Vacío."
 
-    db = get_db()
+    lineas_ok = []
+    errores = []
 
-    @firestore.transactional
-    def _venta_en_transaccion(transaction):
-        errores = []
-        lineas = []
-        for item in items:
-            cant = int(item.get("cantidad", 0))
-            id_item = str(item.get("id", "")).replace("/", "-")
-            if cant <= 0:
-                errores.append(f"{id_item}: cantidad inválida.")
-                continue
-
-            id_m, marca_req, ref_prod = _descomponer_id_variante(id_item)
-            if not ref_prod:
-                docs_codigo = db.collection("productos").where("codigo", "==", id_m).limit(1).get(
-                    transaction=transaction
-                )
-                if docs_codigo:
-                    ref_prod = docs_codigo[0].reference
-                    id_m = docs_codigo[0].id
-                else:
-                    errores.append(f"{id_item}: producto no encontrado.")
-                    continue
-
-            snap = ref_prod.get(transaction=transaction)
-            if not snap.exists:
-                errores.append(f"{id_item}: producto no encontrado.")
-                continue
-
-            datos = snap.to_dict() or {}
-            variantes = datos.get("variantes", {})
-            if variantes:
-                if not marca_req:
-                    if len(variantes) == 1:
-                        marca_req = list(variantes.keys())[0]
-                    else:
-                        errores.append(f"{id_item}: indicá marca en el ID.")
-                        continue
-                if marca_req not in variantes:
-                    errores.append(f"{id_item}: marca '{marca_req}' inexistente.")
-                    continue
-                stock_disp = int(variantes[marca_req].get("stock", 0))
-            else:
-                marca_req = datos.get("marca", datos.get("condicion", "GENERICO"))
-                stock_disp = int(datos.get("stock", 0))
-
-            if cant > stock_disp:
-                errores.append(
-                    f"{item.get('descripcion', id_item)}: stock insuficiente "
-                    f"(pedido {cant}, disponible {stock_disp})."
-                )
-                continue
-
-            ref_item = (
-                db.collection("presupuestos_activos")
-                .document(vendedor)
-                .collection("items")
-                .document(item["id"])
+    for item in items:
+        cant = int(item.get("cantidad", 0))
+        id_item = str(item.get("id", "")).replace("/", "-")
+        ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item)
+        err_val = _validar_resolucion_producto(ref_prod, id_m, marca, stock_disp, err)
+        if err_val:
+            errores.append(f"{id_item}: {err_val}")
+            continue
+        assert ref_prod is not None and stock_disp is not None
+        if cant <= 0:
+            errores.append(f"{id_item}: cantidad inválida.")
+            continue
+        if cant > stock_disp:
+            errores.append(
+                f"{item.get('descripcion', id_item)}: stock insuficiente "
+                f"(pedido {cant}, disponible {stock_disp})."
             )
-            lineas.append({
-                "item": item,
-                "ref_prod": ref_prod,
-                "marca": marca_req,
-                "cantidad": cant,
-                "variantes": variantes,
-                "ref_item": ref_item,
+            continue
+        lineas_ok.append({
+            "item": item,
+            "ref_prod": ref_prod,
+            "marca": marca,
+            "cantidad": cant,
+        })
+
+    if errores:
+        return False, "No se confirmó la venta:\n" + "\n".join(errores)
+
+    batch = get_db().batch()
+    operaciones = 0
+
+    for linea in lineas_ok:
+        item = linea["item"]
+        ref_prod = linea["ref_prod"]
+        marca = linea["marca"]
+        cant = linea["cantidad"]
+        ref_item = (
+            get_db().collection("presupuestos_activos")
+            .document(vendedor)
+            .collection("items")
+            .document(item["id"])
+        )
+
+        doc_prod = ref_prod.get()
+        if doc_prod.exists and "variantes" in (doc_prod.to_dict() or {}):
+            batch.update(ref_prod, {
+                f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
+            })
+        else:
+            batch.update(ref_prod, {
+                "stock": firestore.Increment(-cant)  # type: ignore
             })
 
-        if errores:
-            raise ValueError("\n".join(errores))
+        batch.delete(ref_item)
+        operaciones += 2
+        batch = _commit_batch_si_lleno(batch, operaciones)
 
-        for linea in lineas:
-            ref_prod = linea["ref_prod"]
-            marca = linea["marca"]
-            cant = linea["cantidad"]
-            variantes = linea["variantes"]
-            if variantes:
-                transaction.update(ref_prod, {
-                    f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
-                })
-            else:
-                transaction.update(ref_prod, {
-                    "stock": firestore.Increment(-cant)  # type: ignore
-                })
-            transaction.delete(linea["ref_item"])
-
-    try:
-        transaction = db.transaction()
-        _venta_en_transaccion(transaction)
-    except ValueError as e:
-        return False, "No se confirmó la venta:\n" + str(e)
-    except Exception as e:
-        return False, f"Error al confirmar venta: {e}"
-
+    if operaciones % _BATCH_LIMIT != 0:
+        batch.commit()
     invalidar_cache_datos()
     return True, "Venta confirmada."
 
