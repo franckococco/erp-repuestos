@@ -1,4 +1,38 @@
 import streamlit as st
+import importlib.util
+
+_ARCHIVOS_MODULOS = (
+    "__init__.py",
+    "ia_vision.py",
+    "ia_asistente.py",
+    "ia_vinculacion.py",
+    "db_firebase.py",
+    "generador_qr.py",
+    "ui_estilos.py",
+    "control_remito.py",
+    "ui_control_remito.py",
+)
+
+_faltantes = [
+    nombre for nombre in _ARCHIVOS_MODULOS
+    if importlib.util.find_spec(f"modulos.{nombre[:-3]}") is None
+    and nombre != "__init__.py"
+]
+if importlib.util.find_spec("modulos") is None:
+    _faltantes = list(_ARCHIVOS_MODULOS)
+
+if _faltantes:
+    st.set_page_config(page_title="Hafid Repuestos — Error de despliegue", layout="wide")
+    st.error("Faltan archivos en la carpeta `modulos/` del repositorio (GitHub / Streamlit Cloud).")
+    st.markdown("Subí **todos** estos archivos juntos a `modulos/` en el repo **erp-repuestos**:")
+    for nombre in _ARCHIVOS_MODULOS:
+        st.write(f"- `modulos/{nombre}`")
+    st.info(
+        "Copiá la carpeta `modulos` completa desde tu PC "
+        "(d:\\carpeta escritorio\\CARGA FACTURA IA\\modulos) al repositorio y hacé redeploy."
+    )
+    st.stop()
+
 import streamlit.components.v1 as components
 import pandas as pd
 from PIL import Image
