@@ -25,17 +25,55 @@ def pil_a_base64(imagen_pil):
     imagen_pil.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-def procesar_factura_con_ia(imagen_pil):
+def _extraer_json_respuesta(texto_limpio):
+    if "```json" in texto_limpio:
+        texto_limpio = texto_limpio.split("```json")[1].split("```")[0]
+    elif "```" in texto_limpio:
+        texto_limpio = texto_limpio.split("```")[1].split("```")[0]
+    return json.loads(texto_limpio.strip())
+
+
+def _procesar_documento_ia(imagen_pil, prompt):
     if not cliente:
         raise Exception("Falta la API Key de Anthropic.")
+    imagen_b64 = pil_a_base64(imagen_pil)
+    respuesta = cliente.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        temperature=0.0,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": imagen_b64,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+    texto_limpio = ""
+    for bloque in respuesta.content:
+        if isinstance(bloque, TextBlock):
+            texto_limpio = bloque.text.strip()
+            break
+    return _extraer_json_respuesta(texto_limpio)
 
+
+def procesar_factura_con_ia(imagen_pil):
     prompt = """
     Eres un experto en facturación argentina. Extrae:
     1. CUIT del emisor (11 dígitos).
     2. Punto de Venta (los dígitos antes del guion).
     3. Número de factura (los dígitos después del guion).
     4. Nombre del Proveedor.
-    5. Tabla de artículos (Cantidad, Código, Precio Unitario Neto).
+    5. Tabla de artículos (Cantidad, Código, Descripción, Marca si aparece, Precio Unitario Neto).
 
     Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
     {
@@ -43,48 +81,37 @@ def procesar_factura_con_ia(imagen_pil):
       "cuit_proveedor": "str",
       "punto_venta": "str",
       "numero_comprobante": "str",
-      "articulos": [{"codigo": "str", "descripcion": "str", "cantidad": int, "precio_unitario": float}]
+      "articulos": [{"codigo": "str", "descripcion": "str", "marca": "str", "cantidad": int, "precio_unitario": float}]
     }
     """
     try:
-        imagen_b64 = pil_a_base64(imagen_pil)
-        respuesta = cliente.messages.create(
-            model="claude-sonnet-4-6", 
-            max_tokens=2048,
-            temperature=0.0,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": imagen_b64,
-                            },
-                        },
-                        {"type": "text", "text": prompt}
-                    ],
-                }
-            ],
-        )
-        
-        texto_limpio = ""
-        for bloque in respuesta.content:
-            if isinstance(bloque, TextBlock):
-                texto_limpio = bloque.text.strip()
-                break
-        
-        if "```json" in texto_limpio:
-            texto_limpio = texto_limpio.split("```json")[1].split("```")[0]
-        elif "```" in texto_limpio:
-            texto_limpio = texto_limpio.split("```")[1].split("```")[0]
-        
-        return json.loads(texto_limpio.strip())
-        
+        return _procesar_documento_ia(imagen_pil, prompt)
     except Exception as e:
         raise Exception(f"Error en lectura de IA: {str(e)}")
+
+
+def procesar_remito_con_ia(imagen_pil):
+    prompt = """
+    Eres un experto en documentos logísticos argentinos (remitos de entrega).
+    Extrae:
+    1. CUIT del emisor (11 dígitos).
+    2. Nombre del Proveedor / transportista que entrega.
+    3. Número de remito.
+    4. Tabla de artículos entregados: Cantidad, Código, Descripción, Marca (si aparece).
+    NO incluyas precios — los remitos no tienen precio de venta.
+
+    Devuelve ÚNICAMENTE un JSON con esta estructura exacta:
+    {
+      "proveedor": "NOMBRE",
+      "cuit_proveedor": "str",
+      "numero_remito": "str",
+      "articulos": [{"codigo": "str", "descripcion": "str", "marca": "str", "cantidad": int}]
+    }
+    """
+    try:
+        return _procesar_documento_ia(imagen_pil, prompt)
+    except Exception as e:
+        raise Exception(f"Error en lectura de remito: {str(e)}")
 
 def decodificar_qr_desde_imagen(imagen_pil):
     """Función restaurada para la lectura de códigos QR si es necesario"""
