@@ -12,6 +12,12 @@ import re
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
+from modulos.ia_vinculacion import (
+    resolver_articulos_factura,
+    aplicar_vinculacion_sugerida,
+    aplicar_vinculacion_manual,
+    aplicar_articulo_nuevo,
+)
 from modulos.db_firebase import (
     registrar_ingreso_inteligente,
     obtener_inventario_completo,
@@ -37,11 +43,15 @@ from modulos.db_firebase import (
     actualizar_producto_desde_grilla,
     obtener_producto_por_codigo,
     exportar_inventario_csv,
-    restaurar_inventario_csv
+    restaurar_inventario_csv,
+    buscar_equivalencia,
+    listar_maestros_para_busqueda,
 )
 from modulos.generador_qr import generar_qr_producto
+from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
 
-st.set_page_config(page_title="Gestión de Inventario", layout="wide")
+st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
+aplicar_estilos_globales()
 
 # --- MOTOR DE ATAJOS DE TECLADO (JavaScript Invisible) ---
 components.html(
@@ -258,217 +268,328 @@ if "resultados_ia_mostrador" not in st.session_state:
     st.session_state.resultados_ia_mostrador = None
 if "msg_ia_mostrador" not in st.session_state:
     st.session_state.msg_ia_mostrador = None
+if "pagina" not in st.session_state:
+    st.session_state.pagina = "carga"
 
-tab_carga, tab_inventario, tab_mostrador, tab_asistente, tab_config = st.tabs(
-    ["📸 Carga Stock", "📦 Inventario & QR", "🛒 Mostrador", "🤖 Asistente", "⚙️ Configuración"]
-)
+pagina = render_sidebar(st.session_state.cliente_activo)
 
-# --- PESTAÑA 1: CARGA DE STOCK ---
-with tab_carga:
-    st.header("Escanear Factura")
-    st.caption("Atajo: Ctrl+S")
+# --- CARGA DE STOCK ---
+if pagina == "carga":
+    titulo_seccion("Carga y control", "Ctrl+S")
+    vista_carga = st.radio(
+        "Sección",
+        ["📸 Carga factura", "📋 Factura vs Remito"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    st.write("**Condición de Pago de esta factura:**")
-    condicion_pago = st.radio("Define el recargo financiero a aplicar:", ["Contado", "30 Días"], horizontal=True)
-    st.divider()
+    if vista_carga.startswith("📋"):
+        from modulos.ui_control_remito import render_control_factura_remito
+        render_control_factura_remito()
 
-    foto = st.camera_input("Tomar foto", key="camara")
-    archivo = st.file_uploader("O subir imagen", type=["png", "jpg", "jpeg"])
-    img = foto if foto else archivo
+    elif vista_carga.startswith("📸"):
+        st.subheader("Escanear factura")
+        ayuda(
+            "Ayuda — Carga de factura",
+            "**Código proveedor** = lo que trae la factura · **Vinculación** = artículo maestro interno. "
+            "Las equivalencias guardadas se aplican solas en futuras facturas. "
+            "El CUIT debe estar en *Configuración → Proveedores* antes de confirmar.",
+        )
 
-    if img:
-        if st.button("Procesar Factura", type="primary"):
-            with st.spinner("Leyendo factura con IA y revisando memoria del inventario..."):
-                try:
-                    datos = procesar_factura_con_ia(Image.open(img))
-                    if datos:
-                        for art in datos.get('articulos', []):
-                            cod = str(art.get('codigo', '')).strip()
-                            prod_db = obtener_producto_por_codigo(cod)
-                            if prod_db:
-                                art['descripcion'] = prod_db.get('descripcion', art.get('descripcion'))
-                                art['vehiculo'] = prod_db.get('vehiculo', art.get('vehiculo', 'UNIVERSAL'))
-                        st.session_state.temp_datos = datos
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error al procesar la factura: {e}")
-
-    if st.session_state.temp_datos:
-        d = st.session_state.temp_datos or {}
-        if not isinstance(d, dict):
-            d = {}
-
-        st.info("💡 **Revisá y Editá los datos de cabecera de la factura.**")
-        col_prov, col_cuit = st.columns(2)
-        prov_editado = col_prov.text_input("Proveedor detectado:", value=d.get('proveedor', 'DESCONOCIDO'))
-        cuit_original = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
-        cuit_editado = col_cuit.text_input("CUIT (11 dígitos):", value=cuit_original, max_chars=11)
-
-        d['proveedor'] = prov_editado
-        d['cuit_proveedor'] = cuit_editado
-        cuit_detectado = "".join(filter(str.isdigit, cuit_editado))
-
-        if len(cuit_detectado) != 11 and cuit_detectado != "0" and cuit_detectado != "":
-            st.warning("⚠️ Atención: El CUIT ingresado no tiene 11 dígitos. Revisalo para evitar problemas contables.")
-
-        provs_check = obtener_proveedores() or {}
-        if cuit_detectado and cuit_detectado not in provs_check:
-            st.error("⚠️ Este CUIT no está configurado. Registralo en Configuración → Proveedores antes de confirmar.")
-
-        cuit_valido = len(cuit_detectado) == 11 and cuit_detectado in provs_check
-
+        st.write("**Condición de pago**")
+        condicion_pago = st.radio("Define el recargo financiero a aplicar:", ["Contado", "30 Días"], horizontal=True)
         st.divider()
-        st.info("💡 **Código = artículo maestro. Marca = variante.** Misma pieza, otra marca → mismo código, distinta marca.")
 
-        articulos = d.get('articulos', [])
-        for art in articulos:
-            art['marca'] = art.get('marca', art.get('condicion', 'GENERICO'))
-            if 'condicion' in art:
-                del art['condicion']
+        foto = st.camera_input("Tomar foto", key="camara")
+        archivo = st.file_uploader("O subir imagen", type=["png", "jpg", "jpeg"])
+        img = foto if foto else archivo
 
-        df_articulos = pd.DataFrame(articulos)
+        if img:
+            if st.button("Procesar Factura", type="primary"):
+                with st.spinner("Leyendo factura con IA y revisando memoria del inventario..."):
+                    try:
+                        datos = procesar_factura_con_ia(Image.open(img))
+                        if datos:
+                            inventario = obtener_inventario_completo() or []
+                            cuit_tmp = "".join(filter(str.isdigit, str(datos.get("cuit_proveedor", ""))))
+                            for art in datos.get("articulos", []):
+                                if not isinstance(art, dict):
+                                    continue
+                                cod = str(art.get("codigo", "")).strip()
+                                art["codigo_proveedor"] = cod
+                                prod_db = obtener_producto_por_codigo(cod)
+                                if prod_db:
+                                    art["descripcion"] = prod_db.get("descripcion", art.get("descripcion"))
+                                    art["vehiculo"] = prod_db.get("vehiculo", art.get("vehiculo", "UNIVERSAL"))
+                                art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
+                                if "condicion" in art:
+                                    del art["condicion"]
+                            datos["articulos"] = resolver_articulos_factura(
+                                cuit_tmp, datos.get("articulos", []), inventario, buscar_equivalencia
+                            )
+                            st.session_state.temp_datos = datos
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error al procesar la factura: {e}")
 
-        if 'vehiculo' not in df_articulos.columns:
-            df_articulos['vehiculo'] = "UNIVERSAL"
+        if st.session_state.temp_datos:
+            d = st.session_state.temp_datos or {}
+            if not isinstance(d, dict):
+                d = {}
 
-        opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
+            col_prov, col_cuit = st.columns(2)
+            prov_editado = col_prov.text_input("Proveedor detectado:", value=d.get('proveedor', 'DESCONOCIDO'))
+            cuit_original = "".join(filter(str.isdigit, str(d.get('cuit_proveedor', '0'))))
+            cuit_editado = col_cuit.text_input("CUIT (11 dígitos):", value=cuit_original, max_chars=11)
 
-        with st.form("form_confirmacion_factura"):
-            df_editado = st.data_editor(
-                df_articulos,
-                column_config={
-                    "codigo": st.column_config.TextColumn("Código Maestro", width="small", required=True),
-                    "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
-                    "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
-                    "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
-                    "marca": st.column_config.TextColumn("Marca (Variante)", width="small", required=True),
-                    "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
-                },
-                use_container_width=True,
-                num_rows="dynamic",
-                key="grilla_validacion"
-            )
+            d['proveedor'] = prov_editado
+            d['cuit_proveedor'] = cuit_editado
+            cuit_detectado = "".join(filter(str.isdigit, cuit_editado))
+
+            if len(cuit_detectado) != 11 and cuit_detectado != "0" and cuit_detectado != "":
+                st.warning("⚠️ Atención: El CUIT ingresado no tiene 11 dígitos. Revisalo para evitar problemas contables.")
+
+            provs_check = obtener_proveedores() or {}
+            if cuit_detectado and cuit_detectado not in provs_check:
+                st.error("⚠️ Este CUIT no está configurado. Registralo en Configuración → Proveedores antes de confirmar.")
+
+            cuit_valido = len(cuit_detectado) == 11 and cuit_detectado in provs_check
+
+            articulos = d.get("articulos", [])
+            for art in articulos:
+                if not isinstance(art, dict):
+                    continue
+                art.setdefault("codigo_proveedor", art.get("codigo", ""))
+                art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
+
+            n_auto = sum(1 for a in articulos if a.get("estado_vinculacion") == "auto")
+            n_sug = sum(1 for a in articulos if a.get("estado_vinculacion") == "sugerido")
+            n_pend = sum(1 for a in articulos if a.get("estado_vinculacion") == "pendiente")
+            n_ok = sum(1 for a in articulos if a.get("id_maestro"))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Vinculados auto", n_auto)
+            c2.metric("Con sugerencia IA", n_sug)
+            c3.metric("Pendientes", n_pend)
+            c4.metric("Listos p/ ingreso", n_ok)
+
+            df_vinc = pd.DataFrame([
+                {
+                    "Cód. proveedor": a.get("codigo_proveedor", a.get("codigo", "")),
+                    "Descripción": a.get("descripcion", ""),
+                    "Marca": a.get("marca", ""),
+                    "Estado": a.get("estado_vinculacion", "—"),
+                    "Vinculado a": a.get("vinculado_a", "—"),
+                }
+                for a in articulos if isinstance(a, dict)
+            ])
+            st.dataframe(df_vinc, hide_index=True, use_container_width=True)
+
+            pendientes_idx = [
+                (i, a) for i, a in enumerate(articulos)
+                if isinstance(a, dict) and a.get("estado_vinculacion") in ("pendiente", "sugerido")
+            ]
+            if pendientes_idx:
+                st.subheader("Vinculación de artículos")
+                for idx, art in pendientes_idx:
+                    titulo = f"🔗 {art.get('codigo_proveedor', art.get('codigo', ''))} — {str(art.get('descripcion', ''))[:50]}"
+                    with st.expander(titulo, expanded=(art.get("estado_vinculacion") == "sugerido")):
+                        for j, sug in enumerate(art.get("sugerencias") or []):
+                            sc1, sc2 = st.columns([4, 1])
+                            sc1.caption(
+                                f"**{sug.get('score', 0)}%** — {sug.get('descripcion', '')} "
+                                f"→ `{sug.get('id_maestro')}_{sug.get('marca')}` · {sug.get('motivo', '')}"
+                            )
+                            if sc2.button("✅ Vincular", key=f"vinc_sug_{idx}_{j}"):
+                                aplicar_vinculacion_sugerida(articulos[idx], sug)
+                                d["articulos"] = articulos
+                                st.session_state.temp_datos = d
+                                st.rerun()
+
+                        busq = st.text_input("Buscar artículo en stock", key=f"busq_vinc_{idx}", placeholder="Código, descripción, marca…")
+                        if busq:
+                            for m in listar_maestros_para_busqueda(busq):
+                                for marca_m in m.get("marcas", ["GENERICO"]):
+                                    lbl = f"{m['descripcion']} | {m['vehiculo']} | {marca_m} | Cód. {m['codigo']}"
+                                    if st.button(f"🔗 {lbl}", key=f"vinc_man_{idx}_{m['id_maestro']}_{marca_m}"):
+                                        aplicar_vinculacion_manual(
+                                            articulos[idx], m["id_maestro"], marca_m, m.get("descripcion", "")
+                                        )
+                                        d["articulos"] = articulos
+                                        st.session_state.temp_datos = d
+                                        st.rerun()
+
+                        if st.button("➕ Crear como artículo nuevo", key=f"vinc_nuevo_{idx}"):
+                            aplicar_articulo_nuevo(articulos[idx])
+                            d["articulos"] = articulos
+                            st.session_state.temp_datos = d
+                            st.rerun()
 
             st.divider()
-            st.subheader("⚙️ Opciones de Etiquetas QR")
+            df_articulos = pd.DataFrame(articulos)
 
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
-            with col2:
-                if not df_editado.empty:
-                    art_ejemplo = df_editado.iloc[0].to_dict() or {}
-                    if not isinstance(art_ejemplo, dict):
-                        art_ejemplo = {}
+            if 'vehiculo' not in df_articulos.columns:
+                df_articulos['vehiculo'] = "UNIVERSAL"
 
-                    cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
-                    marca_ej = str(art_ejemplo.get('marca', 'GENERICO')).strip().upper()
-                    desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
-                    precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
-                    id_qr_ej = f"{cod_ej}_{marca_ej}"
+            opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
 
-                    provs = obtener_proveedores() or {}
-                    recargo_prev = 0.0
-                    descuento_prev = 0.0
-                    if cuit_detectado in provs:
-                        datos_prov = provs[cuit_detectado]
-                        if isinstance(datos_prov, dict):
-                            recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                            descuento_prev = float(datos_prov.get('descuento', 0.0))
+            cols_editor = [c for c in df_articulos.columns if c not in (
+                "estado_vinculacion", "id_maestro", "marca_variante", "vinculado_a", "sugerencias", "codigo_proveedor"
+            )]
+            df_editor = df_articulos[cols_editor] if cols_editor else df_articulos
 
-                    calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
-                    qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
-                    st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
-
-            submit_factura = st.form_submit_button(
-                "💾 Confirmar Ingreso y Generar TODOS los QR",
-                type="primary",
-                use_container_width=True,
-                disabled=not cuit_valido,
-                help=(
-                    "Registrá un CUIT de 11 dígitos en Configuración → Proveedores para habilitar la confirmación."
-                    if not cuit_valido
-                    else None
-                ),
+            hay_sin_vincular = any(
+                isinstance(a, dict) and not a.get("id_maestro")
+                for a in articulos
             )
 
-        if submit_factura:
-            if not cuit_valido:
-                st.error(
-                    "No se puede confirmar: el CUIT debe tener 11 dígitos y estar registrado en Proveedores."
+            with st.form("form_confirmacion_factura"):
+                df_editado = st.data_editor(
+                    df_editor,
+                    column_config={
+                        "codigo": st.column_config.TextColumn("Cód. proveedor", width="small", required=True),
+                        "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
+                        "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
+                        "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
+                        "marca": st.column_config.TextColumn("Marca (Variante)", width="small", required=True),
+                        "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
+                    },
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    key="grilla_validacion"
                 )
-            else:
-                nombre_prov = d.get('proveedor', 'DESCONOCIDO')
-                articulos_lista = df_editado.to_dict('records')
 
-                for art in articulos_lista:
-                    if isinstance(art, dict):
+                st.divider()
+                st.subheader("⚙️ Opciones de Etiquetas QR")
+
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
+                with col2:
+                    if not df_editado.empty:
+                        art_ejemplo = df_editado.iloc[0].to_dict() or {}
+                        if not isinstance(art_ejemplo, dict):
+                            art_ejemplo = {}
+
+                        cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
+                        marca_ej = str(art_ejemplo.get('marca_variante') or art_ejemplo.get('marca', 'GENERICO')).strip().upper()
+                        id_maestro_ej = str(art_ejemplo.get('id_maestro') or cod_ej).strip().upper().replace("/", "-")
+                        desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
+                        precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
+                        id_qr_ej = f"{id_maestro_ej}_{marca_ej}"
+
+                        provs = obtener_proveedores() or {}
+                        recargo_prev = 0.0
+                        descuento_prev = 0.0
+                        if cuit_detectado in provs:
+                            datos_prov = provs[cuit_detectado]
+                            if isinstance(datos_prov, dict):
+                                recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                                descuento_prev = float(datos_prov.get('descuento', 0.0))
+
+                        calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
+                        qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
+                        st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
+
+                submit_factura = st.form_submit_button(
+                    "💾 Confirmar Ingreso y Generar TODOS los QR",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not cuit_valido or hay_sin_vincular,
+                    help=(
+                        "Registrá un CUIT de 11 dígitos en Configuración → Proveedores para habilitar la confirmación."
+                        if not cuit_valido
+                        else "Vinculá todos los artículos pendientes antes de confirmar."
+                        if hay_sin_vincular
+                        else None
+                    ),
+                )
+
+            if submit_factura:
+                if not cuit_valido:
+                    st.error(
+                        "No se puede confirmar: el CUIT debe tener 11 dígitos y estar registrado en Proveedores."
+                    )
+                elif hay_sin_vincular:
+                    st.error("Hay artículos sin vincular. Revisá la sección de vinculación.")
+                else:
+                    nombre_prov = d.get('proveedor', 'DESCONOCIDO')
+                    articulos_lista = df_editado.to_dict('records')
+                    articulos_base = d.get("articulos", [])
+
+                    for i, art in enumerate(articulos_lista):
+                        if not isinstance(art, dict):
+                            continue
+                        base = articulos_base[i] if i < len(articulos_base) else {}
+                        for key in ("estado_vinculacion", "id_maestro", "marca_variante", "vinculado_a", "sugerencias"):
+                            if key in base:
+                                art[key] = base[key]
+                        art["codigo_proveedor"] = str(art.get("codigo", base.get("codigo_proveedor", ""))).strip()
                         art['proveedor'] = nombre_prov
                         art['cuit_proveedor'] = cuit_detectado
 
-                d['articulos'] = articulos_lista
+                    d['articulos'] = articulos_lista
 
-                exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
+                    exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
 
-                if exito:
-                    prov_id = cuit_detectado
-                    provs = obtener_proveedores() or {}
-                    recargo = 0.0
-                    descuento_prov = 0.0
-                    if prov_id in provs:
-                        datos_prov = provs[prov_id]
-                        if isinstance(datos_prov, dict):
-                            recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                            descuento_prov = float(datos_prov.get('descuento', 0.0))
+                    if exito:
+                        prov_id = cuit_detectado
+                        provs = obtener_proveedores() or {}
+                        recargo = 0.0
+                        descuento_prov = 0.0
+                        if prov_id in provs:
+                            datos_prov = provs[prov_id]
+                            if isinstance(datos_prov, dict):
+                                recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                                descuento_prov = float(datos_prov.get('descuento', 0.0))
 
-                    zip_buffer = BytesIO()
-                    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                        for art in d.get('articulos', []):
-                            if not isinstance(art, dict):
-                                continue
+                        zip_buffer = BytesIO()
+                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                            for art in d.get('articulos', []):
+                                if not isinstance(art, dict):
+                                    continue
 
-                            codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
-                            marca_rep = str(art.get('marca', 'GENERICO')).strip().upper()
-                            if not codigo_base or codigo_base.lower() in ["null", "none"]:
-                                desc_limpia = str(art.get('descripcion', '')).strip()
-                                codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
+                                codigo_prov = str(art.get('codigo_proveedor') or art.get('codigo', '')).strip().upper().replace("/", "-")
+                                marca_rep = str(art.get('marca_variante') or art.get('marca', 'GENERICO')).strip().upper()
+                                id_maestro = str(art.get('id_maestro') or codigo_prov).strip().upper().replace("/", "-")
+                                if not id_maestro:
+                                    desc_limpia = str(art.get('descripcion', '')).strip()
+                                    id_maestro = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
 
-                            id_producto = f"{codigo_base}_{marca_rep}"
-                            precio_f = float(art.get('precio_unitario', 0))
-                            calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
+                                id_producto = f"{id_maestro}_{marca_rep}"
+                                precio_f = float(art.get('precio_unitario', 0))
+                                calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
 
-                            desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
-                            qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
-                            zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
+                                desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
+                                qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
+                                zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
 
-                    st.session_state.zip_listo = zip_buffer.getvalue()
-                    st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
-                    st.session_state.temp_datos = None
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+                        st.session_state.zip_listo = zip_buffer.getvalue()
+                        st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
+                        st.session_state.temp_datos = None
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
-    if "zip_listo" in st.session_state:
-        st.success("📦 Lote de etiquetas generado y Stock Actualizado.")
-        st.download_button(
-            label="⬇️ DESCARGAR ZIP",
-            data=st.session_state.zip_listo,
-            file_name=st.session_state.zip_nombre,
-            mime="application/zip",
-            type="primary",
-            use_container_width=True
-        )
-        if st.button("Limpiar pantalla"):
-            del st.session_state.zip_listo
-            st.rerun()
+        if "zip_listo" in st.session_state:
+            st.success("📦 Lote de etiquetas generado y Stock Actualizado.")
+            st.download_button(
+                label="⬇️ DESCARGAR ZIP",
+                data=st.session_state.zip_listo,
+                file_name=st.session_state.zip_nombre,
+                mime="application/zip",
+                type="primary",
+                use_container_width=True
+            )
+            if st.button("Limpiar pantalla"):
+                del st.session_state.zip_listo
+                st.rerun()
 
-# --- PESTAÑA 2: INVENTARIO Y ALTA MANUAL ---
-with tab_inventario:
-    st.header("📦 Gestión de Inventario")
-    st.caption("Atajo: Ctrl+I")
+# --- INVENTARIO Y ALTA MANUAL ---
+elif pagina == "inventario":
+    titulo_seccion("Inventario", "Ctrl+I")
 
-    tab_lista, tab_alta = st.tabs(["📋 Listado Editable", "➕ Alta Manual de Producto"])
+    tab_lista, tab_alta = st.tabs(["Listado", "Alta manual"])
 
     with tab_lista:
         inv = obtener_inventario_completo() or []
@@ -476,130 +597,129 @@ with tab_inventario:
             inv = [preparar_item_inventario(item) for item in inv if isinstance(item, dict)]
 
             busqueda_inv = st.text_input(
-                "🔍 Buscar repuesto:",
-                placeholder="Ej: Correa, Bosch, 1234, Ranger, Proveedor..."
+                "Buscar repuesto",
+                placeholder="Código, descripción, marca, vehículo, proveedor…",
+                label_visibility="collapsed",
             )
             inv_filtrado = filtrar_inventario(inv, busqueda_inv)
+            metricas_inventario(inv_filtrado)
 
-            st.subheader("📂 Vista por Artículo Maestro")
-            grupos = agrupar_por_maestro(inv_filtrado)
-            if grupos:
-                for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
-                    g = grupos[key]
-                    variantes = g['variantes']
-                    stock_total = sum(int(v.get('stock', 0)) for v in variantes)
-                    titulo = (
-                        f"{g['descripcion']} | {g['vehiculo']} | "
-                        f"Cód. {g['codigo']} | {len(variantes)} marca(s) | Stock total: {stock_total}"
-                    )
-                    with st.expander(titulo, expanded=bool(busqueda_inv)):
-                        filas_var = []
-                        for v in variantes:
-                            filas_var.append({
-                                "Marca": v.get('marca', ''),
-                                "Stock": int(v.get('stock', 0)),
-                                "Precio": f"${float(v.get('precio_venta', 0)):,.0f}",
-                                "Proveedor": v.get('proveedor', ''),
-                                "ID Variante": v.get('id', '')
-                            })
-                        st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
-            else:
-                st.info("Sin coincidencias para la búsqueda.")
-
-            st.divider()
-            st.subheader("✏️ Edición detallada por variante (ID = CÓDIGO_MARCA)")
-            st.info(
-                "💡 Podés editar descripción, vehículo, marca, stock, precio y ubicación. "
-                "El **código maestro** y el **ID variante** no se cambian acá (evita romper QR y facturas). "
-                "Después de editar, pulsá **Guardar Cambios Manuales**."
+            vista_inv = st.radio(
+                "Vista",
+                ["Resumen por artículo", "Editar variantes", "Etiqueta QR"],
+                horizontal=True,
+                label_visibility="collapsed",
             )
 
-            df = pd.DataFrame(inv_filtrado)
-            cols_deseadas = [
-                'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
-                'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
-            ]
-            cols_existentes = [c for c in cols_deseadas if c in df.columns]
+            if vista_inv == "Resumen por artículo":
+                grupos = agrupar_por_maestro(inv_filtrado)
+                if grupos:
+                    for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
+                        g = grupos[key]
+                        variantes = g['variantes']
+                        stock_total = sum(int(v.get('stock', 0)) for v in variantes)
+                        titulo = (
+                            f"{g['descripcion']} | {g['vehiculo']} | "
+                            f"Cód. {g['codigo']} | {len(variantes)} marca(s) | Stock: {stock_total}"
+                        )
+                        with st.expander(titulo, expanded=bool(busqueda_inv)):
+                            filas_var = []
+                            for v in variantes:
+                                filas_var.append({
+                                    "Marca": v.get('marca', ''),
+                                    "Stock": int(v.get('stock', 0)),
+                                    "Precio": f"${float(v.get('precio_venta', 0)):,.0f}",
+                                    "Proveedor": v.get('proveedor', ''),
+                                    "ID": v.get('id', '')
+                                })
+                            st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
+                else:
+                    st.info("Sin coincidencias para la búsqueda.")
 
-            df_filtrado = df[cols_existentes].reset_index(drop=True)
-
-            st.data_editor(
-                df_filtrado,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "id": st.column_config.TextColumn(
-                        "ID Variante (referencia QR)", disabled=True, width="small"
-                    ),
-                    "id_maestro": st.column_config.TextColumn(
-                        "ID Maestro (Firebase)", disabled=True, width="small"
-                    ),
-                    "codigo": st.column_config.TextColumn(
-                        "Cód. Maestro (no editable)", disabled=True, width="small"
-                    ),
-                    "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
-                    "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
-                    "Marca": st.column_config.TextColumn("Marca (variante)", width="small"),
-                    "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
-                    "Precio Final": st.column_config.NumberColumn(
-                        "Precio venta", min_value=0, step=10, width="small"
-                    ),
-                    "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
-                    "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
-                    "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
-                    "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
-                },
-                key="grilla_inv"
-            )
-
-            if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
-                if st.button("💾 Guardar Cambios Manuales", type="primary"):
-                    cambios = st.session_state.grilla_inv["edited_rows"]
-                    errores = []
-                    guardados = 0
-                    for row_idx, dict_cambios in cambios.items():
-                        fila = df_filtrado.iloc[int(row_idx)]
-                        id_prod = str(fila['id'])
-                        id_m = str(fila.get('id_maestro') or fila.get('codigo') or '').strip()
-                        prefijo = f"{id_m}_"
-                        if id_m and id_prod.startswith(prefijo):
-                            marca_fila = id_prod[len(prefijo):].upper()
-                        else:
-                            marca_fila = str(fila.get('Marca', 'GENERICO')).upper()
-                        for col_name, new_val in dict_cambios.items():
-                            ok, msj = actualizar_producto_desde_grilla(
-                                id_prod, col_name, new_val,
-                                id_maestro=id_m, marca=marca_fila
-                            )
-                            if ok:
-                                guardados += 1
-                            else:
-                                errores.append(f"{col_name}: {msj}")
-                    if errores:
-                        st.error("Algunos cambios no se guardaron:\n" + "\n".join(errores))
-                    if guardados:
-                        st.success(f"Inventario actualizado ({guardados} celda(s)).")
-                        st.rerun()
-                    elif not errores:
-                        st.info("No hubo cambios para guardar.")
-
-            st.divider()
-            opciones = {
-                f"{item.get('id', '')} - {item.get('descripcion', '')} ({item.get('marca', '')})": item
-                for item in inv_filtrado
-            }
-            seleccion = st.selectbox("Generar etiqueta QR individual:", options=list(opciones.keys()))
-            if seleccion:
-                prod = opciones[seleccion]
-                marca_qr = prod.get('marca', '')
-                desc_qr = f"{prod.get('descripcion', '')} ({marca_qr})"
-                qr_ind = generar_qr_producto(
-                    str(prod.get('id', '')),
-                    desc_qr,
-                    float(prod.get('precio_venta', 0.0))
+            elif vista_inv == "Editar variantes":
+                ayuda(
+                    "Ayuda — Edición",
+                    "Editá descripción, vehículo, marca, stock, precio y ubicación. "
+                    "Código maestro e ID variante no se modifican acá. Luego **Guardar cambios**.",
                 )
-                st.image(qr_ind, width=150)
-                st.download_button("Descargar PNG", qr_ind, f"QR_{prod.get('id', 'N')}.png", "image/png")
+                df = pd.DataFrame(inv_filtrado)
+                cols_deseadas = [
+                    'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
+                    'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
+                ]
+                cols_existentes = [c for c in cols_deseadas if c in df.columns]
+                df_filtrado = df[cols_existentes].reset_index(drop=True)
+
+                st.data_editor(
+                    df_filtrado,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "id": st.column_config.TextColumn("ID variante", disabled=True, width="small"),
+                        "id_maestro": st.column_config.TextColumn("ID maestro", disabled=True, width="small"),
+                        "codigo": st.column_config.TextColumn("Cód. maestro", disabled=True, width="small"),
+                        "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
+                        "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
+                        "Marca": st.column_config.TextColumn("Marca", width="small"),
+                        "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
+                        "Precio Final": st.column_config.NumberColumn("Precio", min_value=0, step=10, width="small"),
+                        "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
+                        "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
+                        "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
+                        "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
+                    },
+                    key="grilla_inv"
+                )
+
+                if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
+                    if st.button("Guardar cambios", type="primary"):
+                        cambios = st.session_state.grilla_inv["edited_rows"]
+                        errores = []
+                        guardados = 0
+                        for row_idx, dict_cambios in cambios.items():
+                            fila = df_filtrado.iloc[int(row_idx)]
+                            id_prod = str(fila['id'])
+                            id_m = str(fila.get('id_maestro') or fila.get('codigo') or '').strip()
+                            prefijo = f"{id_m}_"
+                            if id_m and id_prod.startswith(prefijo):
+                                marca_fila = id_prod[len(prefijo):].upper()
+                            else:
+                                marca_fila = str(fila.get('Marca', 'GENERICO')).upper()
+                            for col_name, new_val in dict_cambios.items():
+                                ok, msj = actualizar_producto_desde_grilla(
+                                    id_prod, col_name, new_val,
+                                    id_maestro=id_m, marca=marca_fila
+                                )
+                                if ok:
+                                    guardados += 1
+                                else:
+                                    errores.append(f"{col_name}: {msj}")
+                        if errores:
+                            st.error("Algunos cambios no se guardaron:\n" + "\n".join(errores))
+                        if guardados:
+                            st.success(f"Inventario actualizado ({guardados} celda(s)).")
+                            st.rerun()
+                        elif not errores:
+                            st.info("No hubo cambios para guardar.")
+
+            else:
+                opciones = {
+                    f"{item.get('id', '')} - {item.get('descripcion', '')} ({item.get('marca', '')})": item
+                    for item in inv_filtrado
+                }
+                seleccion = st.selectbox("Producto para etiqueta QR", options=list(opciones.keys()))
+                if seleccion:
+                    prod = opciones[seleccion]
+                    marca_qr = prod.get('marca', '')
+                    desc_qr = f"{prod.get('descripcion', '')} ({marca_qr})"
+                    col_qr1, col_qr2 = st.columns([1, 2])
+                    qr_ind = generar_qr_producto(
+                        str(prod.get('id', '')),
+                        desc_qr,
+                        float(prod.get('precio_venta', 0.0))
+                    )
+                    col_qr1.image(qr_ind, width=140)
+                    col_qr2.download_button("Descargar PNG", qr_ind, f"QR_{prod.get('id', 'N')}.png", "image/png")
         else:
             st.info("El inventario está vacío.")
 
@@ -694,24 +814,21 @@ with tab_inventario:
                         else:
                             st.error(f"❌ {msj_alta}")
 
-# --- PESTAÑA 3: MOSTRADOR ---
-with tab_mostrador:
-    st.header("🛒 Punto de Venta / Presupuestos")
-    st.caption("Atajo: Ctrl+M")
+# --- MOSTRADOR ---
+elif pagina == "mostrador":
+    titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
 
     col_cli1, col_cli2 = st.columns([3, 1])
     with col_cli1:
-        st.subheader(f"👤 Cliente: {st.session_state.cliente_activo['nombre']}")
+        st.markdown(f"**Cliente:** {st.session_state.cliente_activo['nombre']}")
         if st.session_state.cliente_activo['descuento'] > 0:
-            st.caption(f"Descuento especial aplicado: {st.session_state.cliente_activo['descuento']}%")
+            st.caption(f"Descuento: {st.session_state.cliente_activo['descuento']}%")
     with col_cli2:
-        if st.button("❌ Limpiar Cliente", use_container_width=True):
+        if st.button("Limpiar cliente", use_container_width=True):
             st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
             st.rerun()
 
-    vendedor = st.radio("Usuario / Dispositivo:", ["Caja Principal", "Celular Depósito"], horizontal=True)
-
-    st.write("### ➕ Agregar Productos")
+    vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
 
     t_buscar, t_manual, t_ia, t_qr = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
 
@@ -932,11 +1049,14 @@ with tab_mostrador:
             vaciar_carrito(str(vendedor))
             st.rerun()
 
-# --- PESTAÑA 4: ASISTENTE DE VOZ (Consultas y Stock) ---
-with tab_asistente:
-    st.header("🤖 Asistente de Depósito")
-    st.caption("Atajo: Ctrl+A")
-    st.info("Escribí o dictá tu orden. Búsquedas agrupadas por artículo maestro con variantes por marca.")
+# --- ASISTENTE ---
+elif pagina == "asistente":
+    titulo_seccion("Asistente de depósito", "Ctrl+A")
+    ayuda(
+        "Ayuda — Comandos",
+        "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor. "
+        "Resultados agrupados por artículo maestro.",
+    )
 
     if "ultima_orden" not in st.session_state:
         st.session_state.ultima_orden = None
@@ -1183,51 +1303,51 @@ with tab_asistente:
             if st.session_state.get("df_reporte") is not None:
                 st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
 
-# --- PESTAÑA 5: CONFIGURACIÓN ---
-with tab_config:
-    st.header("Configuración del Sistema")
-    st.caption("Atajo: Ctrl+C")
+# --- CONFIGURACIÓN ---
+elif pagina == "config":
+    titulo_seccion("Configuración", "Ctrl+C")
 
-    st.subheader("💾 Backup y Restauración de Stock")
-    col_down, col_up = st.columns(2)
-    with col_down:
-        st.info("Descargar el inventario actual.")
-        csv_data = exportar_inventario_csv()
-        if csv_data:
-            st.download_button(
-                "⬇️ Descargar Stock (CSV)",
-                data=csv_data,
-                file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                type="primary"
-            )
-        else:
-            st.download_button(
-                "⬇️ Descargar Stock (CSV)", data="", file_name="vacio.csv",
-                disabled=True, help="El inventario está vacío"
-            )
+    with st.expander("Backup y restauración de stock", expanded=False):
+        col_down, col_up = st.columns(2)
+        with col_down:
+            st.caption("Descargar inventario actual (CSV).")
+            csv_data = exportar_inventario_csv()
+            if csv_data:
+                st.download_button(
+                    "Descargar CSV",
+                    data=csv_data,
+                    file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                )
+            else:
+                st.download_button(
+                    "Descargar CSV",
+                    data="",
+                    file_name="vacio.csv",
+                    disabled=True,
+                    help="El inventario está vacío",
+                )
 
-    with col_up:
-        st.info("Subir un archivo para restaurar o actualizar.")
-        archivo_csv = st.file_uploader("Restaurar Stock (CSV)", type=["csv"])
-        if archivo_csv:
-            df_upload = pd.read_csv(archivo_csv)
-            st.write(f"Vista previa: {len(df_upload)} productos detectados.")
-            modo_restauracion = st.radio(
-                "Modo de Restauración:",
-                ["sumar_stock", "sobreescribir"],
-                format_func=lambda x: "➕ Sumar Cantidades al Stock Existente" if x == "sumar_stock" else "⚠️ Sobreescribir Todo (Peligro)"
-            )
-            if st.button("Ejecutar Restauración", type="primary"):
-                with st.spinner("Procesando archivo..."):
-                    exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
-                    if exito:
-                        st.success(msg_rest)
-                        st.rerun()
+        with col_up:
+            st.caption("Restaurar o sumar stock desde CSV.")
+            archivo_csv = st.file_uploader("Restaurar stock (CSV)", type=["csv"])
+            if archivo_csv:
+                df_upload = pd.read_csv(archivo_csv)
+                st.write(f"Vista previa: {len(df_upload)} filas.")
+                modo_restauracion = st.radio(
+                    "Modo",
+                    ["sumar_stock", "sobreescribir"],
+                    format_func=lambda x: "Sumar stock" if x == "sumar_stock" else "Sobreescribir todo (peligro)",
+                )
+                if st.button("Ejecutar restauración", type="primary"):
+                    with st.spinner("Procesando archivo..."):
+                        exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
+                        if exito:
+                            st.success(msg_rest)
+                            st.rerun()
 
-    st.divider()
-
-    with st.expander("⚠️ ZONA DE PELIGRO - Borrar Base de Datos"):
+    with st.expander("Zona de peligro — borrar base de datos"):
         st.warning("Esto borrará todo el inventario, carritos y el historial de facturas. Es irreversible.")
         if st.checkbox("Entiendo los riesgos, habilitar borrado"):
             if st.button("💥 BORRAR TODA LA BASE DE DATOS", type="primary"):
