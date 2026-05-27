@@ -1,0 +1,12 @@
+# Archivos de configuración local (SECRETOS)
+.env
+*.json
+
+# Carpetas temporales de Python
+__pycache__/
+.streamlit/
+*.pyc
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db

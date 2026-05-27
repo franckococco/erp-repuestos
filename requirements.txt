@@ -1,0 +1,11 @@
+streamlit
+python-dotenv
+anthropic
+opencv-python-headless
+numpy
+pillow
+pandas
+firebase-admin
+fpdf2
+qrcode
+groq
