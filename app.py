@@ -1,5 +1,9 @@
 import streamlit as st
 import os
+import traceback
+
+# Debe ser la primera llamada a Streamlit (evita pantalla genérica "Oh, no")
+st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
 
 _ARCHIVOS_MODULOS = (
     "__init__.py",
@@ -27,7 +31,6 @@ if not os.path.isdir(_modulos_dir):
     _faltantes = list(_ARCHIVOS_MODULOS)
 
 if _faltantes:
-    st.set_page_config(page_title="Hafid Repuestos — Error de despliegue", layout="wide")
     st.error("Faltan archivos en la carpeta `modulos/` del repositorio (GitHub / Streamlit Cloud).")
     st.markdown("Subí **todos** estos archivos juntos a `modulos/` en el repo **erp-repuestos**:")
     for nombre in _ARCHIVOS_MODULOS:
@@ -38,22 +41,21 @@ if _faltantes:
     )
     st.stop()
 
-import streamlit.components.v1 as components
-import pandas as pd
-from PIL import Image
-import zipfile
-from io import BytesIO
-from fpdf import FPDF
-from datetime import datetime
-import os
-import unicodedata
-import re
-
-from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
-from modulos.ia_asistente import procesar_orden_voz
-
 try:
+    import streamlit.components.v1 as components
+    import pandas as pd
+    from PIL import Image
+    import zipfile
+    from io import BytesIO
+    from fpdf import FPDF
+    from datetime import datetime
+    import unicodedata
+    import re
+
+    from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
+    from modulos.ia_asistente import procesar_orden_voz
     from modulos.db_firebase import (
+        get_db,
         registrar_ingreso_inteligente,
         obtener_inventario_completo,
         obtener_proveedores,
@@ -83,17 +85,22 @@ try:
         sanitizar_clave_marca,
         formatear_id_variante,
     )
-except ImportError as e:
-    st.error(f"No se pudo cargar `modulos/db_firebase.py`: {e}")
-    st.info(
-        "Verificá que el repo tenga la última versión de `db_firebase.py` y que "
-        "`firebase-admin` esté en requirements.txt. Revisá los logs en Manage app."
-    )
-    st.stop()
-from modulos.generador_qr import generar_qr_producto
-from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
+    from modulos.generador_qr import generar_qr_producto
+    from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
 
-st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
+    get_db()
+
+except Exception as e:
+    st.error("Error al iniciar la aplicación")
+    st.exception(e)
+    st.markdown(
+        "**Streamlit Cloud:** entrá a [share.streamlit.io](https://share.streamlit.io) → tu app → "
+        "**⋮** (menú arriba a la derecha) → **Manage app** → pestaña **Logs**. "
+        "Verificá que en **Settings → Secrets** estén `firebase_key`, `GROQ_API_KEY` y `ANTHROPIC_API_KEY`."
+    )
+    st.code(traceback.format_exc())
+    st.stop()
+
 aplicar_estilos_globales()
 
 # --- MOTOR DE ATAJOS DE TECLADO (sidebar radio) ---

@@ -20,8 +20,9 @@ def inicializar_firebase():
         else:
             ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase_claves.json")
             if not os.path.isfile(ruta_json):
-                raise FileNotFoundError(
-                    f"No se encontró el archivo de credenciales Firebase: {ruta_json}"
+                raise RuntimeError(
+                    "Firebase no configurado. En Streamlit Cloud agregá `firebase_key` en "
+                    "Settings → Secrets. En local, colocá `firebase_claves.json` en la raíz."
                 )
             cred = credentials.Certificate(ruta_json)
         firebase_admin.initialize_app(cred)
