@@ -80,6 +80,38 @@ def _limpiar_cache_streamlit(func):
         limpiar()
 
 
+def normalizar_codigo_proveedor(codigo):
+    c = str(codigo or "").strip().upper().replace("/", "-")
+    return c if c and c not in ("NONE", "NULL", "NAN") else ""
+
+
+def sanitizar_clave_marca(marca):
+    """Clave válida para Firestore dentro de variantes.{marca}."""
+    m = str(marca or "GENERICO").strip().upper()
+    m = re.sub(r'[\.\/\[\]\*]', "_", m)
+    m = re.sub(r"_+", "_", m).strip("_")
+    if not m or m.startswith("__"):
+        m = "GENERICO"
+    return m[:60]
+
+
+def clave_linea_factura(codigo_o_art, marca=None):
+    """Clave estable para emparejar filas de factura con metadatos de vinculación."""
+    if isinstance(codigo_o_art, dict):
+        cod = normalizar_codigo_proveedor(
+            codigo_o_art.get("codigo_proveedor") or codigo_o_art.get("codigo", "")
+        )
+        marca = sanitizar_clave_marca(codigo_o_art.get("marca", "GENERICO"))
+    else:
+        cod = normalizar_codigo_proveedor(codigo_o_art)
+        marca = sanitizar_clave_marca(str(marca or "GENERICO"))
+    return f"{cod}|{marca}"
+
+
+def formatear_id_variante(id_maestro, marca):
+    return f"{str(id_maestro).strip().upper().replace('/', '-')}_{sanitizar_clave_marca(marca)}"
+
+
 # --- BACKUP Y RESTAURACIÓN ---
 def exportar_inventario_csv():
     inv = obtener_inventario_completo()
@@ -254,39 +286,6 @@ def obtener_producto_por_codigo(codigo_base):
         datos['id'] = docs[0].id
         return datos
     return None
-
-
-def normalizar_codigo_proveedor(codigo):
-    c = str(codigo or "").strip().upper().replace("/", "-")
-    return c if c and c not in ("NONE", "NULL", "NAN") else ""
-
-
-def sanitizar_clave_marca(marca):
-    """Clave válida para Firestore dentro de variantes.{marca}."""
-    m = str(marca or "GENERICO").strip().upper()
-    m = re.sub(r'[\.\/\[\]\*]', "_", m)
-    m = re.sub(r"_+", "_", m).strip("_")
-    if not m or m.startswith("__"):
-        m = "GENERICO"
-    return m[:60]
-
-
-def clave_linea_factura(codigo_o_art, marca=None):
-    """Clave estable para emparejar filas de factura con metadatos de vinculación."""
-    if isinstance(codigo_o_art, dict):
-        cod = normalizar_codigo_proveedor(
-            codigo_o_art.get("codigo_proveedor") or codigo_o_art.get("codigo", "")
-        )
-        marca = str(codigo_o_art.get("marca", "GENERICO")).strip().upper()
-        marca = sanitizar_clave_marca(marca)
-    else:
-        cod = normalizar_codigo_proveedor(codigo_o_art)
-        marca = sanitizar_clave_marca(str(marca or "GENERICO"))
-    return f"{cod}|{marca}"
-
-
-def formatear_id_variante(id_maestro, marca):
-    return f"{str(id_maestro).strip().upper().replace('/', '-')}_{sanitizar_clave_marca(marca)}"
 
 
 def _descomponer_id_variante(id_producto):
@@ -635,7 +634,7 @@ def agregar_texto_descripcion(codigo, texto_a_sumar):
         "ultima_actualizacion": datetime.now(timezone.utc),
     })
     invalidar_cache_datos()
-    return True, f"Descripción de {id_m or cod} actualizada: «{nueva[:100]}{'…' if len(nueva) > 100 else ''}»"
+    return True, f"Descripción de {id_m or cod} actualizada: \"{nueva[:100]}{'...' if len(nueva) > 100 else ''}\""
 
 
 def _obtener_ref_producto_maestro(id_producto, id_maestro=None):

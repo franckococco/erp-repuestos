@@ -1,5 +1,5 @@
 import streamlit as st
-import importlib.util
+import os
 
 _ARCHIVOS_MODULOS = (
     "__init__.py",
@@ -17,12 +17,13 @@ _ARCHIVOS_MODULOS = (
     "ui_vinculacion.py",
 )
 
+_modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
 _faltantes = [
     nombre for nombre in _ARCHIVOS_MODULOS
-    if importlib.util.find_spec(f"modulos.{nombre[:-3]}") is None
-    and nombre != "__init__.py"
+    if nombre != "__init__.py"
+    and not os.path.isfile(os.path.join(_modulos_dir, nombre))
 ]
-if importlib.util.find_spec("modulos") is None:
+if not os.path.isdir(_modulos_dir):
     _faltantes = list(_ARCHIVOS_MODULOS)
 
 if _faltantes:
@@ -50,36 +51,45 @@ import re
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
-from modulos.db_firebase import (
-    registrar_ingreso_inteligente,
-    obtener_inventario_completo,
-    obtener_proveedores,
-    configurar_proveedor,
-    eliminar_proveedor,
-    obtener_marcas,
-    agregar_marca,
-    eliminar_marca,
-    agregar_al_carrito,
-    obtener_carrito,
-    vaciar_carrito,
-    confirmar_venta,
-    borrar_toda_la_base_de_datos,
-    calcular_cascada_precios,
-    registrar_merma,
-    registrar_aumento_stock,
-    alta_manual_producto,
-    obtener_clientes,
-    configurar_cliente,
-    eliminar_cliente,
-    actualizar_ubicacion_relevamiento,
-    actualizar_producto_desde_grilla,
-    obtener_producto_por_codigo,
-    exportar_inventario_csv,
-    restaurar_inventario_csv,
-    agregar_texto_descripcion,
-    sanitizar_clave_marca,
-    formatear_id_variante,
-)
+
+try:
+    from modulos.db_firebase import (
+        registrar_ingreso_inteligente,
+        obtener_inventario_completo,
+        obtener_proveedores,
+        configurar_proveedor,
+        eliminar_proveedor,
+        obtener_marcas,
+        agregar_marca,
+        eliminar_marca,
+        agregar_al_carrito,
+        obtener_carrito,
+        vaciar_carrito,
+        confirmar_venta,
+        borrar_toda_la_base_de_datos,
+        calcular_cascada_precios,
+        registrar_merma,
+        registrar_aumento_stock,
+        alta_manual_producto,
+        obtener_clientes,
+        configurar_cliente,
+        eliminar_cliente,
+        actualizar_ubicacion_relevamiento,
+        actualizar_producto_desde_grilla,
+        obtener_producto_por_codigo,
+        exportar_inventario_csv,
+        restaurar_inventario_csv,
+        agregar_texto_descripcion,
+        sanitizar_clave_marca,
+        formatear_id_variante,
+    )
+except ImportError as e:
+    st.error(f"No se pudo cargar `modulos/db_firebase.py`: {e}")
+    st.info(
+        "Verificá que el repo tenga la última versión de `db_firebase.py` y que "
+        "`firebase-admin` esté en requirements.txt. Revisá los logs en Manage app."
+    )
+    st.stop()
 from modulos.generador_qr import generar_qr_producto
 from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
 
