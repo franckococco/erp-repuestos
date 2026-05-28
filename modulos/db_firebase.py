@@ -117,7 +117,7 @@ def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
             continue
             
         id_m = id_original.split("_")[0] # Extraemos la raíz (código maestro)
-        marca = str(row.get('marca', 'GENERICO')).strip().upper()
+        marca = sanitizar_clave_marca(row.get('marca', 'GENERICO'))
         
         if id_m not in maestros:
             ubi = _ubicacion_desde_fila(row)
@@ -261,6 +261,16 @@ def normalizar_codigo_proveedor(codigo):
     return c if c and c not in ("NONE", "NULL", "NAN") else ""
 
 
+def sanitizar_clave_marca(marca):
+    """Clave válida para Firestore dentro de variantes.{marca}."""
+    m = str(marca or "GENERICO").strip().upper()
+    m = re.sub(r'[\.\/\[\]\*]', "_", m)
+    m = re.sub(r"_+", "_", m).strip("_")
+    if not m or m.startswith("__"):
+        m = "GENERICO"
+    return m[:60]
+
+
 def clave_linea_factura(codigo_o_art, marca=None):
     """Clave estable para emparejar filas de factura con metadatos de vinculación."""
     if isinstance(codigo_o_art, dict):
@@ -268,14 +278,15 @@ def clave_linea_factura(codigo_o_art, marca=None):
             codigo_o_art.get("codigo_proveedor") or codigo_o_art.get("codigo", "")
         )
         marca = str(codigo_o_art.get("marca", "GENERICO")).strip().upper()
+        marca = sanitizar_clave_marca(marca)
     else:
         cod = normalizar_codigo_proveedor(codigo_o_art)
-        marca = str(marca or "GENERICO").strip().upper()
+        marca = sanitizar_clave_marca(str(marca or "GENERICO"))
     return f"{cod}|{marca}"
 
 
 def formatear_id_variante(id_maestro, marca):
-    return f"{str(id_maestro).strip().upper().replace('/', '-')}_{str(marca).strip().upper()}"
+    return f"{str(id_maestro).strip().upper().replace('/', '-')}_{sanitizar_clave_marca(marca)}"
 
 
 def _descomponer_id_variante(id_producto):
@@ -464,36 +475,24 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     descuento_prov = float(datos_prov.get("descuento", 0.0))
 
     articulos = datos_ia.get('articulos', [])
-    sin_vincular = []
-    for art in articulos:
-        if not isinstance(art, dict):
-            continue
-        id_m = normalizar_codigo_proveedor(art.get('id_maestro', ''))
-        if not id_m:
-            sin_vincular.append(
-                str(art.get('codigo_proveedor') or art.get('codigo') or art.get('descripcion', 'Sin datos'))
-            )
-    if sin_vincular:
-        return False, (
-            "Hay artículos sin vincular al maestro interno. "
-            f"Revisá: {', '.join(sin_vincular[:5])}"
-            + (f" y {len(sin_vincular) - 5} más." if len(sin_vincular) > 5 else ".")
-        )
+    if not articulos:
+        return False, "La factura no tiene artículos."
 
     ahora = datetime.now(timezone.utc)
     batch = get_db().batch()
     operaciones = 0
 
-    for art in datos_ia.get('articulos', []):
-        codigo_prov = normalizar_codigo_proveedor(art.get('codigo_proveedor') or art.get('codigo', ''))
-        id_maestro = normalizar_codigo_proveedor(art.get('id_maestro', ''))
-        if not id_maestro:
-            id_maestro = codigo_prov
-        if not id_maestro:
-            id_maestro = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15].replace("/", "-")
+    for art in articulos:
+        if not isinstance(art, dict):
+            continue
+        codigo_prov = normalizar_codigo_proveedor(art.get('codigo', ''))
+        codigo_base = codigo_prov
+        if not codigo_base:
+            codigo_base = str(art.get('descripcion', 'ART')).replace(' ', '_').upper()[:15].replace("/", "-")
+        if not codigo_base:
+            return False, "Hay artículos sin código ni descripción."
 
-        codigo_base = id_maestro
-        marca_rep = str(art.get('marca_variante') or art.get('marca', art.get('condicion', 'GENERICO'))).strip().upper()
+        marca_rep = sanitizar_clave_marca(art.get('marca', art.get('condicion', 'GENERICO')))
         vehiculo_rep = str(art.get('vehiculo', 'UNIVERSAL')).strip().upper()
         proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
         cuit_proveedor = prov_id
@@ -522,24 +521,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         operaciones += 1
         batch = _commit_batch_si_lleno(batch, operaciones)
 
-        if codigo_prov:
-            origen = str(art.get('estado_vinculacion', 'manual'))
-            if origen == 'auto':
-                origen_eq = 'auto'
-            elif origen == 'sugerido':
-                origen_eq = 'sugerencia_ia'
-            else:
-                origen_eq = origen
-            guardar_equivalencia(
-                prov_id,
-                codigo_prov,
-                codigo_base,
-                marca_rep,
-                descripcion_proveedor=str(art.get('descripcion', '')),
-                marca_proveedor=marca_rep,
-                origen=origen_eq,
-            )
-
     batch.set(get_db().collection("facturas_procesadas").document(id_factura), {
         "proveedor_id": prov_id,
         "pv": pv,
@@ -556,7 +537,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 
 def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper().replace("/", "-")
-    marca_limpia = str(condicion).strip().upper()
+    marca_limpia = sanitizar_clave_marca(condicion)
     veh_limpio = str(vehiculo).strip().upper()
 
     if not codigo_base: return False, "Código de producto inválido."
@@ -623,6 +604,39 @@ def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modu
         invalidar_cache_datos()
         return True, "Ubicación de inventario actualizada."
     return False, "No se detectaron datos de ubicación válidos en la orden."
+
+
+def agregar_texto_descripcion(codigo, texto_a_sumar):
+    """Concatena texto a la descripción del artículo maestro."""
+    cod = normalizar_codigo_proveedor(codigo)
+    if not cod:
+        return False, "Código inválido."
+    texto = str(texto_a_sumar or "").strip()
+    if not texto:
+        return False, "No hay texto para agregar."
+
+    ref_prod, id_m = _obtener_ref_producto_maestro(cod, id_maestro=cod)
+    if not ref_prod:
+        docs = get_db().collection("productos").where("codigo", "==", cod).limit(1).get()
+        if docs:
+            ref_prod = get_db().collection("productos").document(docs[0].id)
+            id_m = docs[0].id
+        else:
+            return False, f"No encontré el código '{cod}' en el inventario."
+
+    snap = ref_prod.get()
+    if not snap.exists:
+        return False, f"No encontré el código '{cod}' en el inventario."
+
+    desc_actual = str((snap.to_dict() or {}).get("descripcion", "")).strip()
+    nueva = f"{desc_actual} {texto}".strip() if desc_actual else texto
+    ref_prod.update({
+        "descripcion": nueva,
+        "ultima_actualizacion": datetime.now(timezone.utc),
+    })
+    invalidar_cache_datos()
+    return True, f"Descripción de {id_m or cod} actualizada: «{nueva[:100]}{'…' if len(nueva) > 100 else ''}»"
+
 
 def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
     """Resuelve el documento Firebase del artículo maestro (el ID del doc puede ≠ campo codigo)."""
@@ -1075,6 +1089,10 @@ def confirmar_venta(vendedor):
 
 def borrar_toda_la_base_de_datos():
     for doc in get_db().collection("presupuestos_activos").stream():
+        _borrar_subcoleccion(doc.reference, "items")
+        doc.reference.delete()
+
+    for doc in get_db().collection("pedidos").stream():
         _borrar_subcoleccion(doc.reference, "items")
         doc.reference.delete()
 

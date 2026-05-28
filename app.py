@@ -11,6 +11,10 @@ _ARCHIVOS_MODULOS = (
     "ui_estilos.py",
     "control_remito.py",
     "ui_control_remito.py",
+    "pedidos_db.py",
+    "comparar_pedido.py",
+    "ui_pedidos.py",
+    "ui_vinculacion.py",
 )
 
 _faltantes = [
@@ -46,16 +50,6 @@ import re
 
 from modulos.ia_vision import procesar_factura_con_ia, decodificar_qr_desde_imagen
 from modulos.ia_asistente import procesar_orden_voz
-from modulos.ia_vinculacion import (
-    resolver_articulos_factura,
-    aplicar_vinculacion_sugerida,
-    aplicar_vinculacion_manual,
-    aplicar_articulo_nuevo,
-    mapa_vinculacion_articulos,
-    fusionar_grilla_con_vinculacion,
-    sugerir_pendientes_con_groq,
-    sugerir_articulo_con_groq,
-)
 from modulos.db_firebase import (
     registrar_ingreso_inteligente,
     obtener_inventario_completo,
@@ -82,9 +76,9 @@ from modulos.db_firebase import (
     obtener_producto_por_codigo,
     exportar_inventario_csv,
     restaurar_inventario_csv,
-    buscar_equivalencia,
-    listar_maestros_para_busqueda,
-    clave_linea_factura,
+    agregar_texto_descripcion,
+    sanitizar_clave_marca,
+    formatear_id_variante,
 )
 from modulos.generador_qr import generar_qr_producto
 from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
@@ -312,12 +306,16 @@ if pagina == "carga":
     titulo_seccion("Carga y control", "Ctrl+S")
     vista_carga = st.radio(
         "Sección",
-        ["📸 Carga factura", "📋 Factura vs Remito"],
+        ["📸 Carga factura", "📋 Factura vs Remito", "📦 Pedidos"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if vista_carga.startswith("📋"):
+    if vista_carga.startswith("📦"):
+        from modulos.ui_pedidos import render_pedidos
+        render_pedidos()
+
+    elif vista_carga.startswith("📋"):
         from modulos.ui_control_remito import render_control_factura_remito
         render_control_factura_remito()
 
@@ -325,9 +323,9 @@ if pagina == "carga":
         st.subheader("Escanear factura")
         ayuda(
             "Ayuda — Carga de factura",
-            "**Código proveedor** = lo que trae la factura · **Vinculación** = artículo maestro interno. "
-            "Las equivalencias guardadas se aplican solas en futuras facturas. "
-            "El CUIT debe estar en *Configuración → Proveedores* antes de confirmar.",
+            "Revisá y editá los datos detectados por la IA antes de confirmar. "
+            "El **código** de cada línea es el que trae la factura del proveedor. "
+            "El CUIT debe estar en *Configuración → Proveedores*.",
         )
 
         st.write("**Condición de pago**")
@@ -340,12 +338,10 @@ if pagina == "carga":
 
         if img:
             if st.button("Procesar Factura", type="primary"):
-                with st.spinner("Leyendo factura con IA y revisando memoria del inventario..."):
+                with st.spinner("Leyendo factura con IA..."):
                     try:
                         datos = procesar_factura_con_ia(Image.open(img))
                         if datos:
-                            inventario = obtener_inventario_completo() or []
-                            cuit_tmp = "".join(filter(str.isdigit, str(datos.get("cuit_proveedor", ""))))
                             for art in datos.get("articulos", []):
                                 if not isinstance(art, dict):
                                     continue
@@ -358,10 +354,6 @@ if pagina == "carga":
                                 art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
                                 if "condicion" in art:
                                     del art["condicion"]
-                            datos["articulos"] = resolver_articulos_factura(
-                                cuit_tmp, datos.get("articulos", []), inventario, buscar_equivalencia,
-                                usar_groq=False,
-                            )
                             st.session_state.temp_datos = datos
                             st.rerun()
                     except Exception as e:
@@ -397,231 +389,138 @@ if pagina == "carga":
                 art.setdefault("codigo_proveedor", art.get("codigo", ""))
                 art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
 
-            n_auto = sum(1 for a in articulos if a.get("estado_vinculacion") == "auto")
-            n_sug = sum(1 for a in articulos if a.get("estado_vinculacion") == "sugerido")
-            n_pend = sum(1 for a in articulos if a.get("estado_vinculacion") == "pendiente")
-            n_ok = sum(1 for a in articulos if a.get("id_maestro"))
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Vinculados auto", n_auto)
-            c2.metric("Con sugerencia IA", n_sug)
-            c3.metric("Pendientes", n_pend)
-            c4.metric("Listos p/ ingreso", n_ok)
+            st.caption(f"**{len(articulos)}** artículos detectados — editá la grilla antes de confirmar.")
 
-            df_vinc = pd.DataFrame([
-                {
-                    "Cód. proveedor": a.get("codigo_proveedor", a.get("codigo", "")),
-                    "Descripción": a.get("descripcion", ""),
-                    "Marca": a.get("marca", ""),
-                    "Estado": a.get("estado_vinculacion", "—"),
-                    "Vinculado a": a.get("vinculado_a", "—"),
-                }
-                for a in articulos if isinstance(a, dict)
-            ])
-            st.dataframe(df_vinc, hide_index=True, use_container_width=True)
-
-            mapa_vinc = mapa_vinculacion_articulos(articulos)
-            pendientes = [
-                (clave_linea_factura(a), a)
-                for a in articulos
-                if isinstance(a, dict) and a.get("estado_vinculacion") in ("pendiente", "sugerido")
-            ]
-            if pendientes:
-                st.subheader("Vinculación de artículos")
-                col_groq_all, _ = st.columns([2, 3])
-                if col_groq_all.button("🤖 Sugerir pendientes con IA", type="secondary"):
-                    with st.spinner("Consultando Groq para artículos pendientes..."):
-                        inventario_ia = obtener_inventario_completo() or []
-                        d["articulos"] = sugerir_pendientes_con_groq(articulos, inventario_ia)
-                        st.session_state.temp_datos = d
-                        st.rerun()
-
-                for clave, art in pendientes:
-                    titulo = f"🔗 {art.get('codigo_proveedor', art.get('codigo', ''))} — {str(art.get('descripcion', ''))[:50]}"
-                    with st.expander(titulo, expanded=(art.get("estado_vinculacion") == "sugerido")):
-                        if st.button("🤖 Sugerir con IA", key=f"groq_{clave}"):
-                            with st.spinner("Buscando equivalencias..."):
-                                inventario_ia = obtener_inventario_completo() or []
-                                sugerir_articulo_con_groq(art, inventario_ia)
-                                d["articulos"] = articulos
-                                st.session_state.temp_datos = d
-                                st.rerun()
-
-                        for j, sug in enumerate(art.get("sugerencias") or []):
-                            sc1, sc2 = st.columns([4, 1])
-                            sc1.caption(
-                                f"**{sug.get('score', 0)}%** — {sug.get('descripcion', '')} "
-                                f"→ `{sug.get('id_maestro')}_{sug.get('marca')}` · {sug.get('motivo', '')}"
-                            )
-                            if sc2.button("✅ Vincular", key=f"vinc_sug_{clave}_{j}"):
-                                aplicar_vinculacion_sugerida(art, sug)
-                                d["articulos"] = articulos
-                                st.session_state.temp_datos = d
-                                st.rerun()
-
-                        busq = st.text_input("Buscar artículo en stock", key=f"busq_vinc_{clave}", placeholder="Código, descripción, marca…")
-                        if busq:
-                            for m in listar_maestros_para_busqueda(busq):
-                                for marca_m in m.get("marcas", ["GENERICO"]):
-                                    lbl = f"{m['descripcion']} | {m['vehiculo']} | {marca_m} | Cód. {m['codigo']}"
-                                    if st.button(f"🔗 {lbl}", key=f"vinc_man_{clave}_{m['id_maestro']}_{marca_m}"):
-                                        aplicar_vinculacion_manual(
-                                            art, m["id_maestro"], marca_m, m.get("descripcion", "")
-                                        )
-                                        d["articulos"] = articulos
-                                        st.session_state.temp_datos = d
-                                        st.rerun()
-
-                        if st.button("➕ Crear como artículo nuevo", key=f"vinc_nuevo_{clave}"):
-                            aplicar_articulo_nuevo(art)
-                            d["articulos"] = articulos
-                            st.session_state.temp_datos = d
-                            st.rerun()
-
-            st.divider()
             df_articulos = pd.DataFrame(articulos)
+            if df_articulos.empty:
+                st.warning("No hay artículos en la factura.")
+            else:
+                if 'vehiculo' not in df_articulos.columns:
+                    df_articulos['vehiculo'] = "UNIVERSAL"
 
-            if 'vehiculo' not in df_articulos.columns:
-                df_articulos['vehiculo'] = "UNIVERSAL"
+                opciones_vehiculo = [
+                    "UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN",
+                    "FIAT", "FORD", "RENAULT", "CHEVROLET",
+                ]
 
-            opciones_vehiculo = ["UNIVERSAL", "VOLKSWAGEN", "PEUGEOT", "CITROEN", "FIAT", "FORD", "RENAULT", "CHEVROLET"]
+                cols_editor = [c for c in df_articulos.columns if c in (
+                    "codigo", "descripcion", "cantidad", "precio_unitario", "marca", "vehiculo",
+                )]
+                df_editor = df_articulos[cols_editor] if cols_editor else df_articulos
 
-            cols_editor = [c for c in df_articulos.columns if c not in (
-                "estado_vinculacion", "id_maestro", "marca_variante", "vinculado_a", "sugerencias", "codigo_proveedor"
-            )]
-            df_editor = df_articulos[cols_editor] if cols_editor else df_articulos
-
-            hay_sin_vincular = any(
-                isinstance(a, dict) and not a.get("id_maestro")
-                for a in articulos
-            )
-
-            with st.form("form_confirmacion_factura"):
-                df_editado = st.data_editor(
-                    df_editor,
-                    column_config={
-                        "codigo": st.column_config.TextColumn("Cód. proveedor", width="small", required=True),
-                        "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
-                        "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
-                        "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
-                        "marca": st.column_config.TextColumn("Marca (Variante)", width="small", required=True),
-                        "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True)
-                    },
-                    use_container_width=True,
-                    num_rows="dynamic",
-                    key="grilla_validacion"
-                )
-
-                st.divider()
-                st.subheader("⚙️ Opciones de Etiquetas QR")
-
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
-                with col2:
-                    if not df_editado.empty:
-                        art_ejemplo = df_editado.iloc[0].to_dict() or {}
-                        if not isinstance(art_ejemplo, dict):
-                            art_ejemplo = {}
-
-                        meta_ej = mapa_vinc.get(clave_linea_factura(art_ejemplo), {})
-                        cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
-                        marca_ej = str(
-                            meta_ej.get('marca_variante') or art_ejemplo.get('marca', 'GENERICO')
-                        ).strip().upper()
-                        id_maestro_ej = str(meta_ej.get('id_maestro') or cod_ej).strip().upper().replace("/", "-")
-                        desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
-                        precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
-                        id_qr_ej = f"{id_maestro_ej}_{marca_ej}"
-
-                        provs = obtener_proveedores() or {}
-                        recargo_prev = 0.0
-                        descuento_prev = 0.0
-                        if cuit_detectado in provs:
-                            datos_prov = provs[cuit_detectado]
-                            if isinstance(datos_prov, dict):
-                                recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                                descuento_prev = float(datos_prov.get('descuento', 0.0))
-
-                        calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
-                        qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
-                        st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
-
-                submit_factura = st.form_submit_button(
-                    "💾 Confirmar Ingreso y Generar TODOS los QR",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not cuit_valido or hay_sin_vincular,
-                    help=(
-                        "Registrá un CUIT de 11 dígitos en Configuración → Proveedores para habilitar la confirmación."
-                        if not cuit_valido
-                        else "Vinculá todos los artículos pendientes antes de confirmar."
-                        if hay_sin_vincular
-                        else None
-                    ),
-                )
-
-            if submit_factura:
-                if not cuit_valido:
-                    st.error(
-                        "No se puede confirmar: el CUIT debe tener 11 dígitos y estar registrado en Proveedores."
+                with st.form("form_confirmacion_factura"):
+                    df_editado = st.data_editor(
+                        df_editor,
+                        column_config={
+                            "codigo": st.column_config.TextColumn("Código", width="small", required=True),
+                            "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
+                            "cantidad": st.column_config.NumberColumn("Cant.", width="small", min_value=1, step=1, required=True),
+                            "precio_unitario": st.column_config.NumberColumn("Precio Base", width="small", min_value=0.0, format="$ %.2f", required=True),
+                            "marca": st.column_config.TextColumn("Marca (Variante)", width="small", required=True),
+                            "vehiculo": st.column_config.SelectboxColumn("Vehículo", width="small", options=opciones_vehiculo, required=True),
+                        },
+                        use_container_width=True,
+                        num_rows="dynamic",
+                        key="grilla_validacion",
                     )
-                elif hay_sin_vincular:
-                    st.error("Hay artículos sin vincular. Revisá la sección de vinculación.")
-                else:
-                    nombre_prov = d.get('proveedor', 'DESCONOCIDO')
-                    mapa_vinc = mapa_vinculacion_articulos(d.get("articulos", []))
-                    articulos_lista = fusionar_grilla_con_vinculacion(df_editado, mapa_vinc)
 
-                    for art in articulos_lista:
-                        if not isinstance(art, dict):
-                            continue
-                        art["codigo_proveedor"] = str(art.get("codigo", art.get("codigo_proveedor", ""))).strip()
-                        art['proveedor'] = nombre_prov
-                        art['cuit_proveedor'] = cuit_detectado
+                    st.divider()
+                    st.subheader("⚙️ Opciones de Etiquetas QR")
 
-                    d['articulos'] = articulos_lista
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        tamano_qr = st.slider("Tamaño de los QR (10 estándar)", min_value=5, max_value=20, value=10)
+                    with col2:
+                        if not df_editado.empty:
+                            art_ejemplo = df_editado.iloc[0].to_dict() or {}
+                            cod_ej = str(art_ejemplo.get('codigo', 'DEMO')).strip().upper().replace("/", "-") or 'DEMO'
+                            marca_ej = sanitizar_clave_marca(art_ejemplo.get('marca', 'GENERICO'))
+                            id_qr_ej = formatear_id_variante(cod_ej, marca_ej)
+                            desc_ej = f"{art_ejemplo.get('descripcion', 'Repuesto')} ({marca_ej})"
+                            precio_bruto = float(art_ejemplo.get('precio_unitario', 0))
 
-                    exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
+                            provs = obtener_proveedores() or {}
+                            recargo_prev = 0.0
+                            descuento_prev = 0.0
+                            if cuit_detectado in provs:
+                                datos_prov = provs[cuit_detectado]
+                                if isinstance(datos_prov, dict):
+                                    recargo_prev = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                                    descuento_prev = float(datos_prov.get('descuento', 0.0))
 
-                    if exito:
-                        prov_id = cuit_detectado
-                        provs = obtener_proveedores() or {}
-                        recargo = 0.0
-                        descuento_prov = 0.0
-                        if prov_id in provs:
-                            datos_prov = provs[prov_id]
-                            if isinstance(datos_prov, dict):
-                                recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
-                                descuento_prov = float(datos_prov.get('descuento', 0.0))
+                            calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
+                            qr_preview = generar_qr_producto(id_qr_ej, desc_ej, calculos['precio_venta'], tamano_caja=tamano_qr)
+                            st.image(qr_preview, caption=f"Vista Previa — {id_qr_ej}", width=150)
 
-                        zip_buffer = BytesIO()
-                        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                            for art in d.get('articulos', []):
-                                if not isinstance(art, dict):
-                                    continue
+                    submit_factura = st.form_submit_button(
+                        "💾 Confirmar Ingreso y Generar TODOS los QR",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=not cuit_valido,
+                        help=(
+                            "Registrá un CUIT de 11 dígitos en Configuración → Proveedores para habilitar la confirmación."
+                            if not cuit_valido else None
+                        ),
+                    )
 
-                                codigo_prov = str(art.get('codigo_proveedor') or art.get('codigo', '')).strip().upper().replace("/", "-")
-                                marca_rep = str(art.get('marca_variante') or art.get('marca', 'GENERICO')).strip().upper()
-                                id_maestro = str(art.get('id_maestro') or codigo_prov).strip().upper().replace("/", "-")
-                                if not id_maestro:
-                                    desc_limpia = str(art.get('descripcion', '')).strip()
-                                    id_maestro = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
-
-                                id_producto = f"{id_maestro}_{marca_rep}"
-                                precio_f = float(art.get('precio_unitario', 0))
-                                calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
-
-                                desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
-                                qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
-                                zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
-
-                        st.session_state.zip_listo = zip_buffer.getvalue()
-                        st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
-                        st.session_state.temp_datos = None
-                        st.success(msg)
-                        st.rerun()
+                if submit_factura:
+                    if not cuit_valido:
+                        st.error(
+                            "No se puede confirmar: el CUIT debe tener 11 dígitos y estar registrado en Proveedores."
+                        )
                     else:
-                        st.error(msg)
+                        nombre_prov = d.get('proveedor', 'DESCONOCIDO')
+                        articulos_lista = df_editado.to_dict('records')
+
+                        for art in articulos_lista:
+                            if not isinstance(art, dict):
+                                continue
+                            art["codigo_proveedor"] = str(art.get("codigo", "")).strip()
+                            art['proveedor'] = nombre_prov
+                            art['cuit_proveedor'] = cuit_detectado
+
+                        d['articulos'] = articulos_lista
+
+                        exito, msg = registrar_ingreso_inteligente(d, str(condicion_pago))
+
+                        if exito:
+                            prov_id = cuit_detectado
+                            provs = obtener_proveedores() or {}
+                            recargo = 0.0
+                            descuento_prov = 0.0
+                            if prov_id in provs:
+                                datos_prov = provs[prov_id]
+                                if isinstance(datos_prov, dict):
+                                    recargo = float(datos_prov.get('condiciones', {}).get(str(condicion_pago), 0.0))
+                                    descuento_prov = float(datos_prov.get('descuento', 0.0))
+
+                            zip_buffer = BytesIO()
+                            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                                for art in d.get('articulos', []):
+                                    if not isinstance(art, dict):
+                                        continue
+
+                                    codigo_base = str(art.get('codigo', '')).strip().upper().replace("/", "-")
+                                    marca_rep = sanitizar_clave_marca(art.get('marca', 'GENERICO'))
+                                    if not codigo_base:
+                                        desc_limpia = str(art.get('descripcion', '')).strip()
+                                        codigo_base = desc_limpia.replace(' ', '_').upper()[:15] if desc_limpia else "SIN_CODIGO"
+
+                                    id_producto = formatear_id_variante(codigo_base, marca_rep)
+                                    precio_f = float(art.get('precio_unitario', 0))
+                                    calc = calcular_cascada_precios(precio_f, recargo, descuento_prov)
+
+                                    desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
+                                    qr_img_bytes = generar_qr_producto(id_producto, desc_qr, calc['precio_venta'], tamano_caja=tamano_qr)
+                                    zip_file.writestr(f"QR_{id_producto}.png", qr_img_bytes)
+
+                            st.session_state.zip_listo = zip_buffer.getvalue()
+                            st.session_state.zip_nombre = f"Etiquetas_{prov_id}.zip"
+                            st.session_state.temp_datos = None
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
 
         if "zip_listo" in st.session_state:
             st.success("📦 Lote de etiquetas generado y Stock Actualizado.")
@@ -641,7 +540,7 @@ if pagina == "carga":
 elif pagina == "inventario":
     titulo_seccion("Inventario", "Ctrl+I")
 
-    tab_lista, tab_alta = st.tabs(["Listado", "Alta manual"])
+    tab_lista, tab_alta, tab_vinc = st.tabs(["Listado", "Alta manual", "Vincular códigos"])
 
     with tab_lista:
         inv = obtener_inventario_completo() or []
@@ -865,6 +764,10 @@ elif pagina == "inventario":
                             st.rerun()
                         else:
                             st.error(f"❌ {msj_alta}")
+
+    with tab_vinc:
+        from modulos.ui_vinculacion import render_vinculacion_inventario
+        render_vinculacion_inventario()
 
 # --- MOSTRADOR ---
 elif pagina == "mostrador":
@@ -1106,8 +1009,8 @@ elif pagina == "asistente":
     titulo_seccion("Asistente de depósito", "Ctrl+A")
     ayuda(
         "Ayuda — Comandos",
-        "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor. "
-        "Resultados agrupados por artículo maestro.",
+        "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor, "
+        "completar descripciones por código. Resultados agrupados por artículo maestro.",
     )
 
     if "ultima_orden" not in st.session_state:
@@ -1281,6 +1184,17 @@ elif pagina == "asistente":
                 else:
                     st.session_state.ultima_respuesta = f"❌ No existe '{termino}' en el sistema."
                     st.session_state.ultimo_estado = "error"
+
+            elif accion == "agregar_descripcion":
+                codigo = str(respuesta_json.get("codigo", "")).strip()
+                texto_nuevo = str(respuesta_json.get("texto", "")).strip()
+                if not codigo or not texto_nuevo:
+                    st.session_state.ultima_respuesta = "❌ No detecté el código o el texto a agregar."
+                    st.session_state.ultimo_estado = "error"
+                else:
+                    exito, msj_db = agregar_texto_descripcion(codigo, texto_nuevo)
+                    st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
 
             elif accion == "filtrar_proveedor":
                 prov_buscado = str(respuesta_json.get("proveedor", "")).strip()

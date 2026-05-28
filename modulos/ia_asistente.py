@@ -92,6 +92,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
 
     OPCIÓN 8 (Filtrar o listar repuestos por Proveedor):
     {{"accion": "filtrar_proveedor", "proveedor": "NOMBRE DEL PROVEEDOR LIMPIO"}}
+
+    OPCIÓN 9 (Agregar texto a la descripción de un código):
+    {{"accion": "agregar_descripcion", "codigo": "CODIGO_LIMPIO", "texto": "TEXTO A SUMAR AL FINAL"}}
+    Ejemplo: "al código 1252t agregale a la descripción filtro de aceite" -> codigo: "1252t", texto: "filtro de aceite"
     """
 
     try:
