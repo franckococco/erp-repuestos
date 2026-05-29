@@ -44,3 +44,21 @@ def vehiculos_a_texto(vehiculos):
 
 def vehiculos_en_busqueda(vehiculos):
     return " ".join(normalizar_lista_vehiculos(vehiculos))
+
+
+def combinar_vehiculos(actuales, nuevos, modo="reemplazar"):
+    """Aplica reemplazar, agregar o quitar sobre listas de vehículos del maestro."""
+    modo = str(modo or "reemplazar").strip().lower()
+    act = normalizar_lista_vehiculos(actuales)
+    nue = normalizar_lista_vehiculos(nuevos)
+    if modo == "agregar":
+        base = [v for v in act if v != "UNIVERSAL"]
+        for v in nue:
+            if v != "UNIVERSAL" and v not in base:
+                base.append(v)
+        return base or ["UNIVERSAL"]
+    if modo == "quitar":
+        quitar = set(nue)
+        res = [v for v in act if v not in quitar]
+        return res or ["UNIVERSAL"]
+    return nue

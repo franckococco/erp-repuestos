@@ -85,6 +85,7 @@ try:
         restaurar_inventario_csv,
         agregar_texto_descripcion,
         cambiar_marca_por_codigo,
+        cambiar_vehiculos_por_codigo,
         sanitizar_clave_marca,
         formatear_id_variante,
     )
@@ -414,8 +415,8 @@ elif pagina == "inventario":
             elif vista_inv == "Editar variantes":
                 ayuda(
                     "Ayuda — Edición",
-                    "Editá descripción, vehículo, marca, stock, precio y ubicación. "
-                    "Código maestro e ID variante no se modifican acá. Luego **Guardar cambios**.",
+                    "Editá descripción, vehículo (varios separados por coma), marca, stock, precio y ubicación. "
+                    "El vehículo se aplica al código maestro (todas las variantes). Luego **Guardar cambios**.",
                 )
                 df = pd.DataFrame(inv_filtrado)
                 cols_deseadas = [
@@ -835,7 +836,8 @@ elif pagina == "asistente":
     ayuda(
         "Ayuda — Comandos",
         "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor, "
-        "completar descripciones por código, **cambiar marca** (código con una sola variante). "
+        "completar descripciones por código, **cambiar marca** (código con una sola variante), "
+        "**cambiar vehículos** (reemplazar, agregar o quitar por código). "
         "Resultados agrupados por artículo maestro.",
     )
 
@@ -1030,6 +1032,20 @@ elif pagina == "asistente":
                     st.session_state.ultimo_estado = "error"
                 else:
                     exito, msj_db = cambiar_marca_por_codigo(codigo, marca_nueva)
+                    st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+
+            elif accion == "cambiar_vehiculos":
+                codigo = str(respuesta_json.get("codigo", "")).strip()
+                modo = str(respuesta_json.get("modo", "reemplazar")).strip().lower()
+                vehs = respuesta_json.get("vehiculos", [])
+                if isinstance(vehs, str):
+                    vehs = [vehs]
+                if not codigo:
+                    st.session_state.ultima_respuesta = "❌ No detecté el código."
+                    st.session_state.ultimo_estado = "error"
+                else:
+                    exito, msj_db = cambiar_vehiculos_por_codigo(codigo, vehs, modo=modo)
                     st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
 

@@ -9,7 +9,12 @@ import streamlit as st
 import pandas as pd
 
 from modulos.util_fechas import formatear_fecha_ar
-from modulos.util_vehiculos import normalizar_lista_vehiculos, vehiculos_a_texto, vehiculos_en_busqueda
+from modulos.util_vehiculos import (
+    normalizar_lista_vehiculos,
+    vehiculos_a_texto,
+    vehiculos_en_busqueda,
+    combinar_vehiculos,
+)
 
 load_dotenv(override=True)
 
@@ -758,6 +763,67 @@ def cambiar_marca_por_codigo(codigo, marca_nueva):
     )
 
 
+def _lookup_maestro_por_codigo(cod):
+    """Busca documento maestro por código. Retorna (ref, id_m, datos) o (None, None, None)."""
+    ref_prod, id_m = _obtener_ref_producto_maestro(cod, id_maestro=cod)
+    if not ref_prod:
+        docs = get_db().collection("productos").where("codigo", "==", cod).limit(1).get()
+        if docs:
+            ref_prod = get_db().collection("productos").document(docs[0].id)
+            id_m = docs[0].id
+        else:
+            return None, None, None
+    snap = ref_prod.get()
+    if not snap.exists:
+        return None, None, None
+    return ref_prod, id_m, snap.to_dict() or {}
+
+
+def cambiar_vehiculos_por_codigo(codigo, vehiculos, modo="reemplazar"):
+    """
+    Actualiza vehículos compatibles del artículo maestro.
+    modo: reemplazar | agregar | quitar
+    """
+    cod = normalizar_codigo_proveedor(codigo)
+    if not cod:
+        return False, "Código inválido."
+
+    modo_l = str(modo or "reemplazar").strip().lower()
+    if modo_l not in ("reemplazar", "agregar", "quitar"):
+        modo_l = "reemplazar"
+
+    if vehiculos is None or (isinstance(vehiculos, list) and len(vehiculos) == 0):
+        if modo_l == "reemplazar":
+            return False, "Indicá al menos un vehículo."
+        vehiculos = []
+
+    ref_prod, id_m, datos = _lookup_maestro_por_codigo(cod)
+    if not ref_prod:
+        return False, f"No encontré el código '{cod}' en el inventario."
+
+    if not datos.get("variantes"):
+        _asegurar_formato_variantes(ref_prod, datos)
+        snap = ref_prod.get()
+        datos = snap.to_dict() or {}
+
+    actuales = datos.get("vehiculos") or datos.get("vehiculo")
+    resultado = combinar_vehiculos(actuales, vehiculos, modo_l)
+    texto = vehiculos_a_texto(resultado)
+
+    if normalizar_lista_vehiculos(actuales) == resultado:
+        return True, f"El código {cod} ya tiene vehículos: {texto}."
+
+    ref_prod.update({
+        "vehiculos": resultado,
+        "vehiculo": texto,
+        "ultima_actualizacion": datetime.now(timezone.utc),
+    })
+    invalidar_cache_datos()
+
+    verbos = {"reemplazar": "actualizados", "agregar": "agregados", "quitar": "quitados"}
+    return True, f"Código {cod}: vehículos {verbos.get(modo_l, 'actualizados')} → {texto}."
+
+
 def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
     """Resuelve el documento Firebase del artículo maestro (el ID del doc puede ≠ campo codigo)."""
     vistos = set()
@@ -889,9 +955,14 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
         invalidar_cache_datos()
         return True, "OK"
 
+    if campo == "Vehículo":
+        cod_maestro = str(datos.get("codigo") or id_m or "").strip()
+        if not cod_maestro:
+            return False, "No se pudo resolver el código maestro."
+        return cambiar_vehiculos_por_codigo(cod_maestro, nuevo_valor, modo="reemplazar")
+
     mapa_campos = {
         "Descripción": "descripcion",
-        "Vehículo": "vehiculo",
         "Pasillo": "ubicacion.pasillo",
         "Piso": "ubicacion.piso",
         "Módulo": "ubicacion.modulo",
@@ -912,15 +983,7 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
     if campo in ("Stock", "Precio Final") and variantes and marca_key not in variantes:
         return False, f"La variante '{marca_key}' no existe en este artículo."
 
-    if campo == "Vehículo":
-        vehs = normalizar_lista_vehiculos(nuevo_valor)
-        updates = {
-            "vehiculos": vehs,
-            "vehiculo": vehiculos_a_texto(vehs),
-            "ultima_actualizacion": ahora,
-        }
-    else:
-        updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
+    updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
     ref_prod.update(updates)
     invalidar_cache_datos()
     return True, "OK"

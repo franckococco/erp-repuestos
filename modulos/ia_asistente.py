@@ -102,6 +102,14 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     Ejemplo: "cambiá la marca del código 1491 a SKF" -> codigo: "1491", marca_nueva: "SKF"
     Ejemplo: "al 1491 poneme marca FRAM" -> codigo: "1491", marca_nueva: "FRAM"
     Solo usar si el usuario pide cambiar/corregir/renombrar la MARCA de un código. NO confundir con buscar stock.
+
+    OPCIÓN 11 (Cambiar vehículos compatibles de un código maestro):
+    {{"accion": "cambiar_vehiculos", "codigo": "CODIGO_LIMPIO", "modo": "reemplazar" O "agregar" O "quitar", "vehiculos": ["PEUGEOT", "VOLKSWAGEN"]}}
+    Ejemplo: "al 1491 poneme vehículos Peugeot y Volkswagen" -> codigo: "1491", modo: "reemplazar", vehiculos: ["PEUGEOT", "VOLKSWAGEN"]
+    Ejemplo: "al código 1491 agregale Citroën" -> codigo: "1491", modo: "agregar", vehiculos: ["CITROEN"]
+    Ejemplo: "al 1491 sacale Ford" -> codigo: "1491", modo: "quitar", vehiculos: ["FORD"]
+    Vehículos válidos: UNIVERSAL, VOLKSWAGEN, PEUGEOT, CITROEN, FIAT, FORD, RENAULT, CHEVROLET.
+    Si no indica modo, usar "reemplazar". NO confundir con buscar stock ni con cambiar marca.
     """
 
     try:
