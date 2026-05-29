@@ -22,6 +22,7 @@ _ARCHIVOS_MODULOS = (
     "util_fechas.py",
     "util_vehiculos.py",
     "util_codigos.py",
+    "util_imagen.py",
     "factura_borrador.py",
     "ui_carga_factura.py",
 )
@@ -90,7 +91,7 @@ try:
         formatear_id_variante,
     )
     from modulos.generador_qr import generar_qr_producto
-    from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
+    from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario, ruta_logo_hafid
     from modulos.util_vehiculos import OPCIONES_VEHICULO, normalizar_lista_vehiculos, vehiculos_a_texto
 
     get_db()
@@ -277,14 +278,9 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
     pdf = FPDF()
     pdf.add_page()
 
-    if os.path.exists("logo_hafid.jpeg"):
-        pdf.image("logo_hafid.jpeg", x=85, y=10, w=40)
-        pdf.ln(35)
-    elif os.path.exists("logo_hafid.jpg"):
-        pdf.image("logo_hafid.jpg", x=85, y=10, w=40)
-        pdf.ln(35)
-    elif os.path.exists("logo_hafid.png"):
-        pdf.image("logo_hafid.png", x=85, y=10, w=40)
+    logo_pdf = ruta_logo_hafid()
+    if logo_pdf:
+        pdf.image(logo_pdf, x=85, y=10, w=40)
         pdf.ln(35)
 
     pdf.set_font("Helvetica", "B", 16)

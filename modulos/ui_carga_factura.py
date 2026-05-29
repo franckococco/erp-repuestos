@@ -5,6 +5,7 @@ from io import BytesIO
 import zipfile
 
 from modulos.ia_vision import procesar_factura_con_ia
+from modulos.util_imagen import mejorar_imagen_documento
 from modulos.factura_borrador import (
     guardar_borrador_factura,
     listar_borradores_factura,
@@ -139,12 +140,24 @@ def render_carga_factura():
             type=["png", "jpg", "jpeg"],
             label_visibility="visible",
         )
+        mejorar_img = st.checkbox(
+            "Mejorar imagen antes de leer (contraste y nitidez)",
+            value=True,
+            help="Recomendado para fotos con poca luz o inclinadas.",
+        )
 
     if archivo:
         if st.button("Procesar Factura", type="primary"):
-            with st.spinner("Leyendo factura con IA..."):
+            with st.spinner("Mejorando imagen y leyendo factura con IA..."):
                 try:
-                    datos = procesar_factura_con_ia(Image.open(archivo))
+                    img = Image.open(archivo)
+                    img_proc = mejorar_imagen_documento(img.copy()) if mejorar_img else img
+                    if mejorar_img:
+                        with st.expander("Vista previa de imagen", expanded=False):
+                            c1, c2 = st.columns(2)
+                            c1.image(img, caption="Original", use_container_width=True)
+                            c2.image(img_proc, caption="Mejorada", use_container_width=True)
+                    datos = procesar_factura_con_ia(img_proc, mejorar_imagen=False)
                     if datos:
                         for art in datos.get("articulos", []):
                             if not isinstance(art, dict):

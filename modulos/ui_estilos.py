@@ -1,5 +1,18 @@
 """Estilos y componentes visuales compartidos para la app Streamlit."""
+import os
 import streamlit as st
+
+
+def ruta_logo_hafid():
+    """Busca logo_hafid en modulos/ y en la raíz del proyecto."""
+    modulos_dir = os.path.dirname(os.path.abspath(__file__))
+    raiz = os.path.dirname(modulos_dir)
+    for carpeta in (modulos_dir, raiz):
+        for ext in ("png", "jpg", "jpeg", "webp"):
+            path = os.path.join(carpeta, f"logo_hafid.{ext}")
+            if os.path.isfile(path):
+                return path
+    return None
 
 
 def aplicar_estilos_globales():
@@ -37,8 +50,17 @@ def aplicar_estilos_globales():
 
 def render_sidebar(cliente_activo):
     with st.sidebar:
-        st.markdown("### Hafid Repuestos")
-        st.caption("Inventario · Mostrador · IA")
+        logo = ruta_logo_hafid()
+        if logo:
+            col_logo, col_tit = st.columns([1, 1.4])
+            with col_logo:
+                st.image(logo, use_container_width=True)
+            with col_tit:
+                st.markdown("### Hafid Repuestos")
+                st.caption("Inventario · Mostrador · IA")
+        else:
+            st.markdown("### Hafid Repuestos")
+            st.caption("Inventario · Mostrador · IA")
         st.divider()
 
         nav_labels = [

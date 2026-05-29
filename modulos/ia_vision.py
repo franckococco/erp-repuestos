@@ -10,6 +10,8 @@ from anthropic import Anthropic
 from anthropic.types import TextBlock
 
 # Forzamos la recarga de la clave
+from modulos.util_imagen import mejorar_imagen_documento
+
 load_dotenv(override=True)
 
 key_ai = os.getenv("ANTHROPIC_API_KEY")
@@ -66,7 +68,9 @@ def _procesar_documento_ia(imagen_pil, prompt):
     return _extraer_json_respuesta(texto_limpio)
 
 
-def procesar_factura_con_ia(imagen_pil):
+def procesar_factura_con_ia(imagen_pil, mejorar_imagen=True):
+    if mejorar_imagen:
+        imagen_pil = mejorar_imagen_documento(imagen_pil)
     prompt = """
     Eres un experto en facturación argentina. Extrae:
     1. CUIT del emisor (11 dígitos).
@@ -90,7 +94,9 @@ def procesar_factura_con_ia(imagen_pil):
         raise Exception(f"Error en lectura de IA: {str(e)}")
 
 
-def procesar_remito_con_ia(imagen_pil):
+def procesar_remito_con_ia(imagen_pil, mejorar_imagen=True):
+    if mejorar_imagen:
+        imagen_pil = mejorar_imagen_documento(imagen_pil)
     prompt = """
     Eres un experto en documentos logísticos argentinos (remitos de entrega).
     Extrae:
