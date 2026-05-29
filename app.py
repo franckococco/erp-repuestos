@@ -355,7 +355,7 @@ if pagina == "carga":
         render_control_factura_remito()
 
     elif vista_carga.startswith("📸"):
-        st.subheader("Escanear factura")
+        st.subheader("Subir factura")
         from modulos.ui_carga_factura import render_carga_factura
         render_carga_factura()
 

@@ -124,25 +124,27 @@ def render_carga_factura():
                     st.rerun()
 
     cond_default = st.session_state.pop("condicion_pago_borrador", None)
-    st.write("**Condición de pago**")
-    condicion_pago = st.radio(
-        "Define el recargo financiero a aplicar:",
-        ["Contado", "30 Días"],
-        horizontal=True,
-        index=0 if cond_default != "30 Días" else 1,
-        key="condicion_pago_factura",
-    )
+    col_cond, col_arch = st.columns([1, 2])
+    with col_cond:
+        condicion_pago = st.radio(
+            "Condición de pago",
+            ["Contado", "30 Días"],
+            horizontal=True,
+            index=0 if cond_default != "30 Días" else 1,
+            key="condicion_pago_factura",
+        )
+    with col_arch:
+        archivo = st.file_uploader(
+            "Subir imagen de factura",
+            type=["png", "jpg", "jpeg"],
+            label_visibility="visible",
+        )
 
-    st.divider()
-    foto = st.camera_input("Tomar foto", key="camara")
-    archivo = st.file_uploader("O subir imagen", type=["png", "jpg", "jpeg"])
-    img = foto if foto else archivo
-
-    if img:
+    if archivo:
         if st.button("Procesar Factura", type="primary"):
             with st.spinner("Leyendo factura con IA..."):
                 try:
-                    datos = procesar_factura_con_ia(Image.open(img))
+                    datos = procesar_factura_con_ia(Image.open(archivo))
                     if datos:
                         for art in datos.get("articulos", []):
                             if not isinstance(art, dict):
