@@ -641,6 +641,68 @@ def agregar_texto_descripcion(codigo, texto_a_sumar):
     return True, f"Descripción de {id_m or cod} actualizada: \"{nueva[:100]}{'...' if len(nueva) > 100 else ''}\""
 
 
+def cambiar_marca_por_codigo(codigo, marca_nueva):
+    """
+    Renombra la variante de un código maestro.
+    Solo permitido cuando el artículo tiene exactamente una marca.
+    """
+    cod = normalizar_codigo_proveedor(codigo)
+    if not cod:
+        return False, "Código inválido."
+
+    if not str(marca_nueva or "").strip():
+        return False, "Indicá la marca nueva."
+
+    nueva_marca = sanitizar_clave_marca(marca_nueva)
+    if not nueva_marca:
+        return False, "Marca nueva inválida."
+
+    ref_prod, id_m = _obtener_ref_producto_maestro(cod, id_maestro=cod)
+    if not ref_prod:
+        docs = get_db().collection("productos").where("codigo", "==", cod).limit(1).get()
+        if docs:
+            ref_prod = get_db().collection("productos").document(docs[0].id)
+            id_m = docs[0].id
+        else:
+            return False, f"No encontré el código '{cod}' en el inventario."
+
+    snap = ref_prod.get()
+    if not snap.exists:
+        return False, f"No encontré el código '{cod}' en el inventario."
+
+    datos = snap.to_dict() or {}
+    variantes = datos.get("variantes", {})
+    if not variantes:
+        return False, "Producto en formato antiguo. Cambiá la marca desde Inventario → Editar variantes."
+
+    marcas = list(variantes.keys())
+    if len(marcas) != 1:
+        lista = ", ".join(marcas)
+        return False, (
+            f"El código '{cod}' tiene {len(marcas)} marcas ({lista}). "
+            "El asistente solo cambia marca cuando hay una sola variante por código."
+        )
+
+    marca_actual = marcas[0]
+    if nueva_marca == marca_actual:
+        return True, f"El código {cod} ya tiene marca {marca_actual}."
+
+    id_m = id_m or cod
+    id_viejo = formatear_id_variante(id_m, marca_actual)
+    id_nuevo = formatear_id_variante(id_m, nueva_marca)
+
+    ref_prod.update({
+        f"variantes.{nueva_marca}": variantes[marca_actual],
+        f"variantes.{marca_actual}": firestore.DELETE_FIELD,  # type: ignore
+        "ultima_actualizacion": datetime.now(timezone.utc),
+    })
+    invalidar_cache_datos()
+    return True, (
+        f"Marca de {cod} actualizada: {marca_actual} → {nueva_marca}. "
+        f"Nuevo ID: {id_nuevo} (antes {id_viejo})."
+    )
+
+
 def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
     """Resuelve el documento Firebase del artículo maestro (el ID del doc puede ≠ campo codigo)."""
     vistos = set()

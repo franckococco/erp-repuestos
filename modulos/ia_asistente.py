@@ -96,6 +96,12 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     OPCIÓN 9 (Agregar texto a la descripción de un código):
     {{"accion": "agregar_descripcion", "codigo": "CODIGO_LIMPIO", "texto": "TEXTO A SUMAR AL FINAL"}}
     Ejemplo: "al código 1252t agregale a la descripción filtro de aceite" -> codigo: "1252t", texto: "filtro de aceite"
+
+    OPCIÓN 10 (Cambiar la marca de un código con UNA sola variante):
+    {{"accion": "cambiar_marca", "codigo": "CODIGO_LIMPIO", "marca_nueva": "MARCA_NUEVA"}}
+    Ejemplo: "cambiá la marca del código 1491 a SKF" -> codigo: "1491", marca_nueva: "SKF"
+    Ejemplo: "al 1491 poneme marca FRAM" -> codigo: "1491", marca_nueva: "FRAM"
+    Solo usar si el usuario pide cambiar/corregir/renombrar la MARCA de un código. NO confundir con buscar stock.
     """
 
     try:

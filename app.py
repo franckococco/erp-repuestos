@@ -84,6 +84,7 @@ try:
         exportar_inventario_csv,
         restaurar_inventario_csv,
         agregar_texto_descripcion,
+        cambiar_marca_por_codigo,
         sanitizar_clave_marca,
         formatear_id_variante,
     )
@@ -834,7 +835,8 @@ elif pagina == "asistente":
     ayuda(
         "Ayuda — Comandos",
         "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor, "
-        "completar descripciones por código. Resultados agrupados por artículo maestro.",
+        "completar descripciones por código, **cambiar marca** (código con una sola variante). "
+        "Resultados agrupados por artículo maestro.",
     )
 
     if "ultima_orden" not in st.session_state:
@@ -1017,6 +1019,17 @@ elif pagina == "asistente":
                     st.session_state.ultimo_estado = "error"
                 else:
                     exito, msj_db = agregar_texto_descripcion(codigo, texto_nuevo)
+                    st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+
+            elif accion == "cambiar_marca":
+                codigo = str(respuesta_json.get("codigo", "")).strip()
+                marca_nueva = str(respuesta_json.get("marca_nueva", "")).strip()
+                if not codigo or not marca_nueva:
+                    st.session_state.ultima_respuesta = "❌ No detecté el código o la marca nueva."
+                    st.session_state.ultimo_estado = "error"
+                else:
+                    exito, msj_db = cambiar_marca_por_codigo(codigo, marca_nueva)
                     st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
 
