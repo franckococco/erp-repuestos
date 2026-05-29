@@ -23,6 +23,7 @@ _ARCHIVOS_MODULOS = (
     "util_vehiculos.py",
     "util_codigos.py",
     "util_imagen.py",
+    "util_branding.py",
     "factura_borrador.py",
     "ui_carga_factura.py",
 )
@@ -91,7 +92,8 @@ try:
         formatear_id_variante,
     )
     from modulos.generador_qr import generar_qr_producto
-    from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario, ruta_logo_hafid
+    from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
+    from modulos.util_branding import ruta_logo_hafid
     from modulos.util_vehiculos import OPCIONES_VEHICULO, normalizar_lista_vehiculos, vehiculos_a_texto
 
     get_db()
