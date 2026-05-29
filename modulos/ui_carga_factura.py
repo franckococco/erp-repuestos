@@ -25,41 +25,43 @@ from modulos.generador_qr import generar_qr_producto
 from modulos.ui_estilos import ayuda
 
 
-def _sync_vehiculos_desde_ui(articulos):
-    codigos = sorted({str(a.get("codigo", "")).strip() for a in articulos if a.get("codigo")})
-    for cod in codigos:
-        key = f"veh_ms_{cod}"
-        if key in st.session_state:
-            vehs = normalizar_lista_vehiculos(st.session_state[key])
-            for art in articulos:
-                if str(art.get("codigo", "")).strip() == cod:
-                    art["vehiculos"] = vehs
-                    art["vehiculo"] = vehiculos_a_texto(vehs)
-
-
-def _articulos_desde_grilla(articulos_base, df_editado):
-    filas = df_editado.to_dict("records") if df_editado is not None and not df_editado.empty else []
-    mapa_veh = {}
-    for art in articulos_base or []:
+def _vehiculos_por_codigo(articulos):
+    """Unifica vehículos del maestro cuando el mismo código aparece en varias filas."""
+    mapa = {}
+    for art in articulos or []:
         cod = str(art.get("codigo", "")).strip()
-        if cod and cod not in mapa_veh:
-            mapa_veh[cod] = art.get("vehiculos") or normalizar_lista_vehiculos(art.get("vehiculo"))
+        if not cod:
+            continue
+        vehs = normalizar_lista_vehiculos(art.get("vehiculos") or art.get("vehiculo"))
+        if cod not in mapa:
+            mapa[cod] = set()
+        mapa[cod].update(vehs)
+    resultado = {}
+    for cod, conjunto in mapa.items():
+        ordenados = [v for v in OPCIONES_VEHICULO if v in conjunto]
+        resultado[cod] = ordenados or ["UNIVERSAL"]
+    return resultado
 
+
+def _articulos_desde_grilla(df_editado):
+    filas = df_editado.to_dict("records") if df_editado is not None and not df_editado.empty else []
     resultado = []
     for row in filas:
         if not isinstance(row, dict):
             continue
         art = dict(row)
-        cod = str(art.get("codigo", "")).strip()
-        key = f"veh_ms_{cod}"
-        if key in st.session_state:
-            vehs = normalizar_lista_vehiculos(st.session_state[key])
-        else:
-            vehs = mapa_veh.get(cod, ["UNIVERSAL"])
+        vehs = normalizar_lista_vehiculos(art.get("vehiculos") or art.get("vehiculo"))
         art["vehiculos"] = vehs
         art["vehiculo"] = vehiculos_a_texto(vehs)
         art["marca"] = str(art.get("marca", "GENERICO")).strip().upper()
         resultado.append(art)
+
+    mapa = _vehiculos_por_codigo(resultado)
+    for art in resultado:
+        cod = str(art.get("codigo", "")).strip()
+        if cod in mapa:
+            art["vehiculos"] = mapa[cod]
+            art["vehiculo"] = vehiculos_a_texto(mapa[cod])
     return resultado
 
 
@@ -82,9 +84,8 @@ def _cargar_borrador_en_sesion(borrador):
         del st.session_state["grilla_validacion"]
 
 
-def _guardar_borrador_actual(d, articulos, df_editado, condicion_pago):
-    _sync_vehiculos_desde_ui(articulos)
-    arts_save = _articulos_desde_grilla(articulos, df_editado)
+def _guardar_borrador_actual(d, df_editado, condicion_pago):
+    arts_save = _articulos_desde_grilla(df_editado)
     payload = {**d, "articulos": arts_save, "condicion_pago": condicion_pago}
     ok, msg, bid = guardar_borrador_factura(payload, st.session_state.borrador_id)
     if ok:
@@ -97,7 +98,7 @@ def _guardar_borrador_actual(d, articulos, df_editado, condicion_pago):
 def render_carga_factura():
     ayuda(
         "Ayuda — Carga de factura",
-        "Editá la grilla, asigná **vehículos** por código (varios casilleros), guardá con **Ctrl+G** "
+        "Editá la grilla (código, marca, **vehículos** en la misma tabla). Guardá con **Ctrl+G** "
         "o el botón *Guardar borrador*. Retomá desde *Facturas en curso*.",
     )
 
@@ -215,22 +216,35 @@ def render_carga_factura():
     cuit_valido = len(cuit_detectado) == 11 and cuit_detectado in provs_check
 
     articulos = d.get("articulos", [])
+    mapa_veh = _vehiculos_por_codigo(articulos)
     for art in articulos:
         if not isinstance(art, dict):
             continue
         art.setdefault("codigo_proveedor", art.get("codigo", ""))
         art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
-        art["vehiculos"] = normalizar_lista_vehiculos(art.get("vehiculos") or art.get("vehiculo"))
-        art["vehiculo"] = vehiculos_a_texto(art["vehiculos"])
+        cod = str(art.get("codigo", "")).strip()
+        vehs = mapa_veh.get(cod) or normalizar_lista_vehiculos(art.get("vehiculos") or art.get("vehiculo"))
+        art["vehiculos"] = vehs
+        art["vehiculo"] = vehiculos_a_texto(vehs)
 
-    st.caption(f"**{len(articulos)}** artículos — editá la grilla. **Ctrl+G** guarda borrador.")
+    st.caption(
+        f"**{len(articulos)}** artículos — editá todo en la grilla. "
+        "Columna *Vehículos*: elegí varios por fila. **Ctrl+G** guarda borrador."
+    )
 
     if not articulos:
         st.warning("No hay artículos en la factura.")
         return
 
     df_articulos = pd.DataFrame(articulos)
-    cols_editor = [c for c in ("codigo", "descripcion", "cantidad", "precio_unitario", "marca") if c in df_articulos.columns]
+    if "vehiculos" not in df_articulos.columns:
+        df_articulos["vehiculos"] = [["UNIVERSAL"]] * len(df_articulos)
+    df_articulos["vehiculos"] = df_articulos["vehiculos"].apply(normalizar_lista_vehiculos)
+
+    cols_editor = [
+        c for c in ("codigo", "descripcion", "cantidad", "precio_unitario", "marca", "vehiculos")
+        if c in df_articulos.columns
+    ]
     df_editor = df_articulos[cols_editor]
 
     df_editado = st.data_editor(
@@ -241,36 +255,23 @@ def render_carga_factura():
             "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
             "precio_unitario": st.column_config.NumberColumn("Precio Base", min_value=0.0, format="$ %.2f", required=True),
             "marca": st.column_config.TextColumn("Marca (variante)", width="small", required=True),
+            "vehiculos": st.column_config.MultiselectColumn(
+                "Vehículos",
+                help="Varios por fila (mismo código maestro comparte vehículos al guardar).",
+                options=OPCIONES_VEHICULO,
+                default=["UNIVERSAL"],
+                width="medium",
+                required=True,
+            ),
         },
         use_container_width=True,
         num_rows="dynamic",
         key="grilla_validacion",
     )
 
-    st.markdown("#### 🚗 Vehículos compatibles (por código)")
-    st.caption("Un repuesto puede servir para varios vehículos. Marcá todos los que correspondan.")
-    codigos_unicos = []
-    for art in articulos:
-        cod = str(art.get("codigo", "")).strip()
-        if cod and cod not in codigos_unicos:
-            codigos_unicos.append(cod)
-
-    for cod in codigos_unicos:
-        veh_actual = next(
-            (a.get("vehiculos") for a in articulos if str(a.get("codigo", "")).strip() == cod),
-            ["UNIVERSAL"],
-        )
-        default = normalizar_lista_vehiculos(veh_actual)
-        st.multiselect(
-            f"Código **{cod}**",
-            options=OPCIONES_VEHICULO,
-            default=[v for v in default if v in OPCIONES_VEHICULO] or ["UNIVERSAL"],
-            key=f"veh_ms_{cod}",
-        )
-
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     if col_btn1.button("💾 Guardar borrador (Ctrl+G)", type="secondary", use_container_width=True):
-        _guardar_borrador_actual(d, articulos, df_editado, condicion_pago)
+        _guardar_borrador_actual(d, df_editado, condicion_pago)
 
     if col_btn2.button("🔤 Normalizar códigos", use_container_width=True):
         n = normalizar_codigos_en_articulos(articulos)
@@ -320,8 +321,7 @@ def render_carga_factura():
             st.error("CUIT inválido o no registrado.")
             return
 
-        _sync_vehiculos_desde_ui(articulos)
-        articulos_lista = _articulos_desde_grilla(articulos, df_editado)
+        articulos_lista = _articulos_desde_grilla(df_editado)
         nombre_prov = d.get("proveedor", "DESCONOCIDO")
         for art in articulos_lista:
             art["codigo_proveedor"] = str(art.get("codigo", "")).strip()
