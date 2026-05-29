@@ -798,7 +798,7 @@ def cambiar_vehiculos_por_codigo(codigo, vehiculos, modo="reemplazar"):
         vehiculos = []
 
     ref_prod, id_m, datos = _lookup_maestro_por_codigo(cod)
-    if not ref_prod:
+    if not ref_prod or datos is None:
         return False, f"No encontré el código '{cod}' en el inventario."
 
     if not datos.get("variantes"):
