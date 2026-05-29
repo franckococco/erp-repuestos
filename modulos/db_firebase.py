@@ -8,6 +8,9 @@ import re
 import streamlit as st
 import pandas as pd
 
+from modulos.util_fechas import formatear_fecha_ar
+from modulos.util_vehiculos import normalizar_lista_vehiculos, vehiculos_a_texto, vehiculos_en_busqueda
+
 load_dotenv(override=True)
 
 def inicializar_firebase():
@@ -458,12 +461,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     doc_factura = get_db().collection("facturas_procesadas").document(id_factura).get()
     if doc_factura.exists:
         datos_fac = doc_factura.to_dict() or {}
-        fecha_bd = datos_fac.get("fecha_carga")
-        if fecha_bd:
-            fecha_str = fecha_bd.strftime("%d/%m/%Y a las %H:%M hs")
-        else:
-            fecha_str = "una fecha desconocida"
-        return False, f"La factura {pv}-{num} ya fue cargada previamente el {fecha_str}."
+        fecha_str = formatear_fecha_ar(datos_fac.get("fecha_carga")) or "una fecha desconocida"
+        return False, f"La factura {pv}-{num} ya fue cargada previamente el {fecha_str} (hora Argentina)."
 
     prov_doc = get_db().collection("proveedores").document(prov_id).get()
     if not prov_doc.exists:
@@ -493,7 +492,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
             return False, "Hay artículos sin código ni descripción."
 
         marca_rep = sanitizar_clave_marca(art.get('marca', art.get('condicion', 'GENERICO')))
-        vehiculo_rep = str(art.get('vehiculo', 'UNIVERSAL')).strip().upper()
+        vehiculos_rep = normalizar_lista_vehiculos(art.get('vehiculos') or art.get('vehiculo'))
+        vehiculo_rep = vehiculos_a_texto(vehiculos_rep)
         proveedor = str(art.get('proveedor', 'DESCONOCIDO')).upper()
         cuit_proveedor = prov_id
         precio_unitario = float(art.get('precio_unitario', 0.0))
@@ -505,6 +505,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         batch.set(ref_prod, {
             "codigo": codigo_base,
             "descripcion": str(art.get('descripcion', 'Repuesto')),
+            "vehiculos": vehiculos_rep,
             "vehiculo": vehiculo_rep,
             "ultima_actualizacion": ahora,
             "variantes": {
@@ -538,7 +539,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
 def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper().replace("/", "-")
     marca_limpia = sanitizar_clave_marca(condicion)
-    veh_limpio = str(vehiculo).strip().upper()
+    vehiculos_limpios = normalizar_lista_vehiculos(vehiculo)
+    veh_limpio = vehiculos_a_texto(vehiculos_limpios)
 
     if not codigo_base: return False, "Código de producto inválido."
 
@@ -558,6 +560,7 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
     ref_prod.set({
         "codigo": codigo_base,
         "descripcion": str(descripcion).strip(),
+        "vehiculos": vehiculos_limpios,
         "vehiculo": veh_limpio,
         "ubicacion": {
             "pasillo": int(pasillo),
@@ -784,15 +787,21 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
 
     if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Precio Final"]:
         nuevo_valor = int(nuevo_valor)
-    elif campo == "Vehículo":
-        nuevo_valor = str(nuevo_valor).upper()
     else:
         nuevo_valor = str(nuevo_valor)
 
     if campo in ("Stock", "Precio Final") and variantes and marca_key not in variantes:
         return False, f"La variante '{marca_key}' no existe en este artículo."
 
-    updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
+    if campo == "Vehículo":
+        vehs = normalizar_lista_vehiculos(nuevo_valor)
+        updates = {
+            "vehiculos": vehs,
+            "vehiculo": vehiculos_a_texto(vehs),
+            "ultima_actualizacion": ahora,
+        }
+    else:
+        updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
     ref_prod.update(updates)
     invalidar_cache_datos()
     return True, "OK"
@@ -907,7 +916,10 @@ def obtener_inventario_completo() -> list:
     for d in docs:
         master = d.to_dict() or {}
         master_id = d.id
-        
+        vehs_master = normalizar_lista_vehiculos(master.get("vehiculos") or master.get("vehiculo"))
+        veh_texto = vehiculos_a_texto(vehs_master)
+        veh_busqueda = vehiculos_en_busqueda(vehs_master)
+
         if "variantes" not in master:
             # Producto formato viejo, lo aplanamos para que no rompa app.py
             marca_ant = master.get("marca", master.get("condicion", "GENERICO"))
@@ -916,7 +928,9 @@ def obtener_inventario_completo() -> list:
                 "id_maestro": master_id,
                 "codigo": master.get("codigo", master_id),
                 "descripcion": master.get("descripcion", ""),
-                "vehiculo": master.get("vehiculo", "UNIVERSAL"),
+                "vehiculos": vehs_master,
+                "vehiculo": veh_texto,
+                "vehiculos_busqueda": veh_busqueda,
                 "marca": marca_ant,
                 "stock": master.get("stock", 0),
                 "precio_venta": master.get("precio_venta", 0.0),
@@ -935,7 +949,9 @@ def obtener_inventario_completo() -> list:
                     "id_maestro": master_id,
                     "codigo": master.get("codigo", master_id),
                     "descripcion": master.get("descripcion", ""),
-                    "vehiculo": master.get("vehiculo", "UNIVERSAL"),
+                    "vehiculos": vehs_master,
+                    "vehiculo": veh_texto,
+                    "vehiculos_busqueda": veh_busqueda,
                     "marca": marca,
                     "stock": v_data.get("stock", 0),
                     "precio_venta": v_data.get("precio_venta", 0.0),
@@ -1096,7 +1112,7 @@ def borrar_toda_la_base_de_datos():
         _borrar_subcoleccion(doc.reference, "items")
         doc.reference.delete()
 
-    for col in ["productos", "facturas_procesadas", "auditoria_mermas", "auditoria_ingresos", "clientes", "proveedores", "marcas", "equivalencias", "controles_remito"]:
+    for col in ["productos", "facturas_procesadas", "facturas_borrador", "auditoria_mermas", "auditoria_ingresos", "clientes", "proveedores", "marcas", "equivalencias", "controles_remito"]:
         batch = get_db().batch()
         operaciones = 0
         for doc in get_db().collection(col).stream():
