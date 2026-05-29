@@ -99,6 +99,47 @@ def sanitizar_clave_marca(marca):
     return m[:60]
 
 
+_CAMPOS_FORMATO_ANTIGUO = (
+    "marca", "condicion", "stock", "precio_venta", "precio_interno",
+    "ultimo_costo_base", "proveedor", "cuit_proveedor",
+)
+
+
+def _extraer_variantes_producto(datos):
+    """Obtiene variantes del documento; reconstruye desde formato antiguo si hace falta."""
+    variantes = datos.get("variantes")
+    if variantes:
+        return variantes
+    marca_ant = sanitizar_clave_marca(datos.get("marca", datos.get("condicion", "GENERICO")))
+    return {
+        marca_ant: {
+            "stock": int(datos.get("stock", 0)),
+            "ultimo_costo_base": float(datos.get("ultimo_costo_base", 0.0)),
+            "precio_interno": float(datos.get("precio_interno", 0.0)),
+            "precio_venta": float(datos.get("precio_venta", 0.0)),
+            "proveedor": str(datos.get("proveedor", "DESCONOCIDO")),
+            "cuit_proveedor": str(datos.get("cuit_proveedor", "0")),
+        }
+    }
+
+
+def _asegurar_formato_variantes(ref_prod, datos):
+    """Migra producto antiguo (campos planos) al esquema maestro + variantes."""
+    if datos.get("variantes"):
+        return datos["variantes"]
+    variantes = _extraer_variantes_producto(datos)
+    updates = {
+        "variantes": variantes,
+        "ultima_actualizacion": datetime.now(timezone.utc),
+    }
+    for k in _CAMPOS_FORMATO_ANTIGUO:
+        if k in datos:
+            updates[k] = firestore.DELETE_FIELD  # type: ignore
+    ref_prod.update(updates)
+    invalidar_cache_datos()
+    return variantes
+
+
 def clave_linea_factura(codigo_o_art, marca=None):
     """Clave estable para emparejar filas de factura con metadatos de vinculación."""
     if isinstance(codigo_o_art, dict):
@@ -671,9 +712,8 @@ def cambiar_marca_por_codigo(codigo, marca_nueva):
         return False, f"No encontré el código '{cod}' en el inventario."
 
     datos = snap.to_dict() or {}
-    variantes = datos.get("variantes", {})
-    if not variantes:
-        return False, "Producto en formato antiguo. Cambiá la marca desde Inventario → Editar variantes."
+    era_antiguo = "variantes" not in datos
+    variantes = _extraer_variantes_producto(datos)
 
     marcas = list(variantes.keys())
     if len(marcas) != 1:
@@ -685,20 +725,35 @@ def cambiar_marca_por_codigo(codigo, marca_nueva):
 
     marca_actual = marcas[0]
     if nueva_marca == marca_actual:
+        if era_antiguo:
+            _asegurar_formato_variantes(ref_prod, datos)
         return True, f"El código {cod} ya tiene marca {marca_actual}."
 
     id_m = id_m or cod
     id_viejo = formatear_id_variante(id_m, marca_actual)
     id_nuevo = formatear_id_variante(id_m, nueva_marca)
+    ahora = datetime.now(timezone.utc)
 
-    ref_prod.update({
-        f"variantes.{nueva_marca}": variantes[marca_actual],
-        f"variantes.{marca_actual}": firestore.DELETE_FIELD,  # type: ignore
-        "ultima_actualizacion": datetime.now(timezone.utc),
-    })
+    if era_antiguo:
+        updates = {
+            "variantes": {nueva_marca: variantes[marca_actual]},
+            "ultima_actualizacion": ahora,
+        }
+        for k in _CAMPOS_FORMATO_ANTIGUO:
+            if k in datos:
+                updates[k] = firestore.DELETE_FIELD  # type: ignore
+    else:
+        updates = {
+            f"variantes.{nueva_marca}": variantes[marca_actual],
+            f"variantes.{marca_actual}": firestore.DELETE_FIELD,  # type: ignore
+            "ultima_actualizacion": ahora,
+        }
+
+    ref_prod.update(updates)
     invalidar_cache_datos()
+    msg_extra = " (migrado a formato nuevo)" if era_antiguo else ""
     return True, (
-        f"Marca de {cod} actualizada: {marca_actual} → {nueva_marca}. "
+        f"Marca de {cod} actualizada: {marca_actual} → {nueva_marca}{msg_extra}. "
         f"Nuevo ID: {id_nuevo} (antes {id_viejo})."
     )
 
@@ -811,13 +866,15 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
     doc = ref_prod.get()
 
     datos = doc.to_dict() or {}
-    variantes = datos.get("variantes", {})
+    if not datos.get("variantes"):
+        variantes = _asegurar_formato_variantes(ref_prod, datos)
+    else:
+        variantes = datos.get("variantes", {})
     ahora = datetime.now(timezone.utc)
 
     if campo == "Marca":
-        if not variantes:
-            return False, "Producto sin variantes (formato antiguo)."
-        nueva_marca = str(nuevo_valor).strip().upper()
+        nueva_marca = sanitizar_clave_marca(nuevo_valor)
+        marca_key = sanitizar_clave_marca(marca_key)
         if nueva_marca == marca_key:
             return True, "OK"
         if marca_key not in variantes:
