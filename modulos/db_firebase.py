@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from modulos.util_fechas import formatear_fecha_ar
+from modulos.util_busqueda import termino_en_texto, normalizar_para_busqueda as _norm_busqueda
 from modulos.util_vehiculos import (
     normalizar_lista_vehiculos,
     vehiculos_a_texto,
@@ -440,8 +441,8 @@ def guardar_equivalencia(cuit, codigo_proveedor, id_maestro, marca_variante,
 def listar_maestros_para_busqueda(termino="", limite=40):
     inv = obtener_inventario_completo()
     grupos = {}
-    termino_norm = re.sub(r"[^a-z0-9\s]", "", str(termino).lower()) if termino else ""
-    terminos = [t for t in termino_norm.split() if t]
+    termino_norm = _norm_busqueda(termino) if termino else ""
+    terminos = [t for t in termino_norm.split() if len(t) >= 2]
 
     for item in inv:
         if not isinstance(item, dict):
@@ -465,11 +466,10 @@ def listar_maestros_para_busqueda(termino="", limite=40):
     if terminos:
         filtrados = []
         for g in resultado:
-            texto = re.sub(
-                r"[^a-z0-9\s]", "",
-                f"{g['codigo']} {g['descripcion']} {g['vehiculo']} {' '.join(g['marcas'])}".lower(),
+            texto = _norm_busqueda(
+                f"{g['codigo']} {g['descripcion']} {g['vehiculo']} {' '.join(g['marcas'])}"
             )
-            if all(t in texto for t in terminos):
+            if all(termino_en_texto(t, texto) for t in terminos):
                 filtrados.append(g)
         resultado = filtrados
 
@@ -526,6 +526,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     ahora = datetime.now(timezone.utc)
     batch = get_db().batch()
     operaciones = 0
+    nuevos = 0
+    actualizados = 0
 
     for art in articulos:
         if not isinstance(art, dict):
@@ -548,11 +550,11 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         calculos = calcular_cascada_precios(precio_unitario, recargo, descuento_prov)
         ref_prod = get_db().collection("productos").document(codigo_base)
 
-        batch.set(ref_prod, {
+        snap_existente = ref_prod.get()
+        datos_existentes = snap_existente.to_dict() if snap_existente.exists else None
+
+        payload = {
             "codigo": codigo_base,
-            "descripcion": str(art.get('descripcion', 'Repuesto')),
-            "vehiculos": vehiculos_rep,
-            "vehiculo": vehiculo_rep,
             "ultima_actualizacion": ahora,
             "variantes": {
                 marca_rep: {
@@ -564,7 +566,16 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                     "cuit_proveedor": cuit_proveedor
                 }
             }
-        }, merge=True)
+        }
+        if datos_existentes:
+            actualizados += 1
+        else:
+            nuevos += 1
+            payload["descripcion"] = str(art.get('descripcion', 'Repuesto'))
+            payload["vehiculos"] = vehiculos_rep
+            payload["vehiculo"] = vehiculo_rep
+
+        batch.set(ref_prod, payload, merge=True)
         operaciones += 1
         batch = _commit_batch_si_lleno(batch, operaciones)
 
@@ -580,7 +591,15 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     if operaciones % _BATCH_LIMIT != 0:
         batch.commit()
     invalidar_cache_datos()
-    return True, "Mercadería cargada y agrupada correctamente."
+    partes = ["Mercadería cargada correctamente."]
+    if actualizados:
+        partes.append(
+            f"{actualizados} código(s) ya existían: se actualizó stock/precio "
+            f"(descripción y vehículos conservados)."
+        )
+    if nuevos:
+        partes.append(f"{nuevos} código(s) nuevos.")
+    return True, " ".join(partes)
 
 def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
     codigo_base = str(codigo).strip().upper().replace("/", "-")
@@ -685,6 +704,112 @@ def agregar_texto_descripcion(codigo, texto_a_sumar):
     })
     invalidar_cache_datos()
     return True, f"Descripción de {id_m or cod} actualizada: \"{nueva[:100]}{'...' if len(nueva) > 100 else ''}\""
+
+
+def reemplazar_descripcion_maestro(codigo, nueva_descripcion):
+    """Reemplaza por completo la descripción del artículo maestro."""
+    cod = normalizar_codigo_proveedor(codigo)
+    if not cod:
+        return False, "Código inválido."
+    nueva = str(nueva_descripcion or "").strip()
+    if not nueva:
+        return False, "La descripción no puede estar vacía."
+
+    ref_prod, id_m = _obtener_ref_producto_maestro(cod, id_maestro=cod)
+    if not ref_prod:
+        docs = get_db().collection("productos").where("codigo", "==", cod).limit(1).get()
+        if docs:
+            ref_prod = get_db().collection("productos").document(docs[0].id)
+            id_m = docs[0].id
+        else:
+            return False, f"No encontré el código '{cod}' en el inventario."
+
+    snap = ref_prod.get()
+    if not snap.exists:
+        return False, f"No encontré el código '{cod}' en el inventario."
+
+    ref_prod.update({
+        "descripcion": nueva,
+        "ultima_actualizacion": datetime.now(timezone.utc),
+    })
+    invalidar_cache_datos()
+    return True, f"Descripción de {id_m or cod} reemplazada."
+
+
+def edicion_masiva_descripcion(items, modo, texto):
+    """Agrega o reemplaza descripción en códigos maestro únicos del listado."""
+    texto = str(texto or "").strip()
+    if not texto:
+        return False, "Indicá el texto."
+    if modo not in ("agregar", "reemplazar"):
+        return False, "Modo inválido."
+
+    maestros = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id_maestro") or item.get("codigo") or "").strip()
+        if key:
+            maestros[key] = str(item.get("codigo") or key).strip()
+    if not maestros:
+        return False, "No hay artículos en la selección."
+
+    ok = 0
+    errores = []
+    for cod in maestros.values():
+        if modo == "agregar":
+            success, msg = agregar_texto_descripcion(cod, texto)
+        else:
+            success, msg = reemplazar_descripcion_maestro(cod, texto)
+        if success:
+            ok += 1
+        else:
+            errores.append(f"{cod}: {msg}")
+
+    if ok == 0:
+        return False, errores[0] if errores else "No se pudo actualizar ninguna descripción."
+    msg = f"Descripción actualizada en {ok} código(s) maestro(s)."
+    if errores:
+        msg += f" {len(errores)} error(es)."
+    return True, msg
+
+
+def edicion_masiva_marca(items, marca_nueva):
+    """Cambia marca en códigos del listado (solo los que tienen una sola variante)."""
+    marca = str(marca_nueva or "").strip()
+    if not marca:
+        return False, "Indicá la marca nueva."
+
+    codigos = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        cod = str(item.get("codigo") or item.get("id_maestro") or "").strip()
+        if cod:
+            codigos[cod] = cod
+    if not codigos:
+        return False, "No hay artículos en la selección."
+
+    ok = 0
+    omitidos = 0
+    errores = []
+    for cod in codigos.values():
+        success, msg = cambiar_marca_por_codigo(cod, marca)
+        if success:
+            ok += 1
+        elif "una sola" in msg.lower() or "exactamente" in msg.lower():
+            omitidos += 1
+        else:
+            errores.append(f"{cod}: {msg}")
+
+    if ok == 0 and omitidos == 0:
+        return False, errores[0] if errores else "No se pudo cambiar ninguna marca."
+    msg = f"Marca actualizada en {ok} código(s)."
+    if omitidos:
+        msg += f" {omitidos} omitido(s) por tener varias marcas."
+    if errores:
+        msg += f" {len(errores)} error(es)."
+    return True, msg
 
 
 def cambiar_marca_por_codigo(codigo, marca_nueva):

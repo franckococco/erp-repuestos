@@ -66,6 +66,12 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
     5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
     6. PROVEEDORES: Si pide filtrar por proveedor, extrae solo la raíz del nombre (ej: "expoyer", no "EXPOYER S.A." ni "productos de").
+    7. ALTA / BAJA DE STOCK: Si pide sumar, cargar, ingresar o dar de alta unidades, usa "alta". Si pide restar, descontar o merma, usa "baja".
+       Extrae código o nombre del repuesto y la cantidad numérica.
+       Ejemplo: "sumá 10 al código 1491" -> alta, termino: "1491", cantidad: 10
+       Ejemplo: "cargá 5 bujes del 1252" -> alta, termino: "1252", cantidad: 5
+       Ejemplo: "descontá 2 del filtro 1252t" -> baja, termino: "1252t", cantidad: 2
+    8. BÚSQUEDA FLEXIBLE: El término puede ir en singular o plural (bujes/buje). Extrae la raíz limpia.
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
@@ -78,8 +84,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     OPCIÓN 3 (Actualizar Ubicación Exacta):
     {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
 
-    OPCIÓN 4 (Alta de Stock / Sumar):
-    {{"accion": "alta", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
+    OPCIÓN 4 (Alta de Stock / Sumar unidades al inventario):
+    {{"accion": "alta", "termino": "CODIGO_O_NOMBRE_LIMPIO", "cantidad": NUMERO}}
+    Ejemplo: "sumá 10 al 1491" -> termino: "1491", cantidad: 10
+    Ejemplo: "cargá 5 unidades del código 1252t" -> termino: "1252t", cantidad: 5
 
     OPCIÓN 5 (Baja de Stock / Descontar):
     {{"accion": "baja", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}

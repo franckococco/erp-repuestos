@@ -22,6 +22,7 @@ _ARCHIVOS_MODULOS = (
     "util_fechas.py",
     "util_vehiculos.py",
     "util_codigos.py",
+    "util_busqueda.py",
     "util_imagen.py",
     "util_branding.py",
     "factura_borrador.py",
@@ -88,6 +89,8 @@ try:
         agregar_texto_descripcion,
         cambiar_marca_por_codigo,
         cambiar_vehiculos_por_codigo,
+        edicion_masiva_descripcion,
+        edicion_masiva_marca,
         sanitizar_clave_marca,
         formatear_id_variante,
     )
@@ -95,6 +98,11 @@ try:
     from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
     from modulos.util_branding import ruta_logo_hafid
     from modulos.util_vehiculos import OPCIONES_VEHICULO, normalizar_lista_vehiculos, vehiculos_a_texto
+    from modulos.util_busqueda import (
+        normalizar_para_busqueda,
+        filtrar_por_busqueda,
+        texto_item_inventario,
+    )
 
     get_db()
 
@@ -143,14 +151,7 @@ components.html(
     height=0, width=0,
 )
 
-# --- FUNCIÓN DE NORMALIZACIÓN EXTREMA ---
-def normalizar_para_busqueda(texto):
-    if not texto:
-        return ""
-    t = ''.join(c for c in unicodedata.normalize('NFD', str(texto)) if unicodedata.category(c) != 'Mn')
-    return re.sub(r'[^a-z0-9\s]', '', t.lower())
-
-
+# --- Búsqueda de proveedores (normalización en util_busqueda) ---
 _STOPWORDS_PROV = frozenset({
     "de", "del", "la", "las", "el", "los", "y", "e", "en", "por", "para", "con", "un", "una", "productos", "repuestos",
 })
@@ -233,20 +234,12 @@ def agrupar_por_maestro(items):
     return grupos
 
 
+def buscar_en_inventario(items, termino):
+    return filtrar_por_busqueda(items, termino, texto_item_inventario)
+
+
 def filtrar_inventario(items, termino_busqueda):
-    if not termino_busqueda:
-        return items
-    terminos = normalizar_para_busqueda(termino_busqueda).split()
-    resultado = []
-    for item in items:
-        texto = normalizar_para_busqueda(
-            f"{item.get('codigo', '')} {item.get('descripcion', '')} {item.get('vehiculo', '')} "
-            f"{item.get('vehiculos_busqueda', '')} {item.get('marca', '')} {item.get('id', '')} "
-            f"{item.get('proveedor', '')}"
-        )
-        if all(t in texto for t in terminos):
-            resultado.append(item)
-    return resultado
+    return buscar_en_inventario(items, termino_busqueda)
 
 
 def texto_resultados_agrupados(encontrados, termino):
@@ -377,6 +370,43 @@ elif pagina == "inventario":
             )
             inv_filtrado = filtrar_inventario(inv, busqueda_inv)
             metricas_inventario(inv_filtrado)
+
+            if busqueda_inv and inv_filtrado:
+                with st.expander("Edición masiva (resultados filtrados)", expanded=False):
+                    n_maestros = len({
+                        str(i.get("id_maestro") or i.get("codigo") or "")
+                        for i in inv_filtrado
+                    })
+                    st.caption(
+                        f"{len(inv_filtrado)} variantes · {n_maestros} código(s) maestro(s)"
+                    )
+                    col_desc, col_marca = st.columns(2)
+                    with col_desc:
+                        modo_desc = st.radio(
+                            "Descripción",
+                            ["Agregar texto", "Reemplazar descripción"],
+                            horizontal=True,
+                            key="mass_desc_mode",
+                        )
+                        texto_desc = st.text_input("Texto", key="mass_desc_text", label_visibility="collapsed")
+                        if st.button("Aplicar descripción al filtro", key="mass_desc_btn"):
+                            modo = "agregar" if modo_desc == "Agregar texto" else "reemplazar"
+                            exito, msg = edicion_masiva_descripcion(inv_filtrado, modo, texto_desc)
+                            if exito:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with col_marca:
+                        st.caption("Marca: solo códigos con una sola variante.")
+                        marca_nueva = st.text_input("Nueva marca", key="mass_marca_text")
+                        if st.button("Cambiar marca en filtro", key="mass_marca_btn"):
+                            exito, msg = edicion_masiva_marca(inv_filtrado, marca_nueva)
+                            if exito:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
             vista_inv = st.radio(
                 "Vista",
@@ -677,15 +707,7 @@ elif pagina == "mostrador":
                         cant_raw = respuesta_json.get("cantidad")
                         cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
 
-                        terminos_busqueda = normalizar_para_busqueda(termino).split()
-
-                        encontrados = []
-                        for p in inventario:
-                            marca_p = p.get('marca', p.get('condicion', ''))
-                            texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {marca_p}"
-                            texto_norm = normalizar_para_busqueda(texto_item)
-                            if all(t in texto_norm for t in terminos_busqueda):
-                                encontrados.append(p)
+                        encontrados = buscar_en_inventario(inventario, termino)
 
                         if len(encontrados) == 1:
                             exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]['id'], cant)
@@ -727,18 +749,7 @@ elif pagina == "mostrador":
                             termino = orden_usuario_mostrador
 
                         if termino:
-                            terminos_busqueda = normalizar_para_busqueda(termino).split()
-                            encontrados = []
-                            for prod in inventario:
-                                if isinstance(prod, dict):
-                                    marca_p = prod.get('marca', prod.get('condicion', ''))
-                                    texto_item = (
-                                        f"{prod.get('descripcion', '')} {marca_p} "
-                                        f"{prod.get('vehiculo', '')} {prod.get('codigo', '')}"
-                                    )
-                                    texto_norm = normalizar_para_busqueda(texto_item)
-                                    if all(t in texto_norm for t in terminos_busqueda):
-                                        encontrados.append(prod)
+                            encontrados = buscar_en_inventario(inventario, termino)
 
                             if encontrados:
                                 st.session_state.resultados_ia_mostrador = encontrados[:10]
@@ -833,7 +844,8 @@ elif pagina == "asistente":
     titulo_seccion("Asistente de depósito", "Ctrl+A")
     ayuda(
         "Ayuda — Comandos",
-        "Búsqueda de stock, reportes (ej. *menos de 3*), ubicación, altas/bajas, filtro por proveedor, "
+        "Búsqueda de stock (acepta plural/singular: *bujes* = *buje*), reportes (ej. *menos de 3*), "
+        "ubicación, **altas/bajas de stock** (ej. *sumá 5 al código 1491*), filtro por proveedor, "
         "completar descripciones por código, **cambiar marca** (código con una sola variante), "
         "**cambiar vehículos** (reemplazar, agregar o quitar por código). "
         "Resultados agrupados por artículo maestro.",
@@ -871,13 +883,7 @@ elif pagina == "asistente":
                 mod = respuesta_json.get("modulo")
                 fil = respuesta_json.get("fila")
 
-                terminos_busqueda = normalizar_para_busqueda(termino).split()
-                encontrados = []
-                for p in inventario:
-                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')}"
-                    texto_norm = normalizar_para_busqueda(texto_item)
-                    if all(t in texto_norm for t in terminos_busqueda):
-                        encontrados.append(p)
+                encontrados = buscar_en_inventario(inventario, termino)
 
                 maestros_unicos = {p.get('id_maestro', p.get('codigo')) for p in encontrados}
 
@@ -954,14 +960,7 @@ elif pagina == "asistente":
                 termino = str(respuesta_json.get("termino", ""))
                 cant_raw = respuesta_json.get("cantidad")
                 cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-                terminos_busqueda = normalizar_para_busqueda(termino).split()
-
-                encontrados = []
-                for p in inventario:
-                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('marca', '')}"
-                    texto_norm = normalizar_para_busqueda(texto_item)
-                    if all(t in texto_norm for t in terminos_busqueda):
-                        encontrados.append(p)
+                encontrados = buscar_en_inventario(inventario, termino)
 
                 if len(encontrados) == 1:
                     exito, msj_db = agregar_al_carrito("Caja Principal", encontrados[0]['id'], cant)
@@ -984,14 +983,7 @@ elif pagina == "asistente":
                 termino = str(respuesta_json.get("termino", ""))
                 cant_raw = respuesta_json.get("cantidad")
                 cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-                terminos_busqueda = normalizar_para_busqueda(termino).split()
-
-                encontrados = []
-                for p in inventario:
-                    texto_item = f"{p.get('descripcion', '')} {p.get('codigo', '')} {p.get('vehiculo', '')} {p.get('marca', '')} {p.get('id', '')}"
-                    texto_norm = normalizar_para_busqueda(texto_item)
-                    if all(t in texto_norm for t in terminos_busqueda):
-                        encontrados.append(p)
+                encontrados = buscar_en_inventario(inventario, termino)
 
                 if len(encontrados) == 1:
                     if accion == "alta":
@@ -1083,16 +1075,7 @@ elif pagina == "asistente":
                 if not termino:
                     termino = orden_usuario
 
-                terminos_busqueda = normalizar_para_busqueda(termino).split()
-
-                encontrados = []
-                for p in inventario:
-                    if isinstance(p, dict):
-                        marca_p = p.get('marca', p.get('condicion', ''))
-                        texto_item = f"{p.get('descripcion', '')} {p.get('vehiculo', '')} {marca_p} {p.get('codigo', '')}"
-                        texto_norm = normalizar_para_busqueda(texto_item)
-                        if all(t in texto_norm for t in terminos_busqueda):
-                            encontrados.append(p)
+                encontrados = buscar_en_inventario(inventario, termino)
 
                 if encontrados:
                     st.session_state.ultima_respuesta = texto_resultados_agrupados(encontrados, termino)
