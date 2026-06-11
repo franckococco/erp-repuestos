@@ -91,6 +91,8 @@ try:
         cambiar_vehiculos_por_codigo,
         edicion_masiva_descripcion,
         edicion_masiva_marca,
+        validar_y_preparar_carga_producto_voz,
+        ejecutar_carga_producto_voz,
         sanitizar_clave_marca,
         formatear_id_variante,
     )
@@ -845,8 +847,9 @@ elif pagina == "asistente":
     ayuda(
         "Ayuda — Comandos",
         "Búsqueda de stock (acepta plural/singular: *bujes* = *buje*), reportes (ej. *menos de 3*), "
-        "ubicación, **altas/bajas de stock** (ej. *sumá 5 al código 1491*), filtro por proveedor, "
-        "completar descripciones por código, **cambiar marca** (código con una sola variante), "
+        "ubicación, **altas/bajas de stock** (ej. *sumá 5 al código 1491*), "
+        "**cargar producto nuevo** (ej. *cargame el 25412 buje amortiguador para gol, 4 unidades, pasillo 2*), "
+        "filtro por proveedor, completar descripciones por código, **cambiar marca** (código con una sola variante), "
         "**cambiar vehículos** (reemplazar, agregar o quitar por código). "
         "Resultados agrupados por artículo maestro.",
     )
@@ -859,6 +862,27 @@ elif pagina == "asistente":
         st.session_state.ultimo_estado = None
     if "df_reporte" not in st.session_state:
         st.session_state.df_reporte = None
+    if "producto_pendiente_voz" not in st.session_state:
+        st.session_state.producto_pendiente_voz = None
+
+    if st.session_state.producto_pendiente_voz:
+        pend = st.session_state.producto_pendiente_voz
+        st.markdown(pend.get("mensaje", ""))
+        col_ok, col_no = st.columns(2)
+        if col_ok.button("Confirmar carga", type="primary", use_container_width=True, key="btn_conf_prod_voz"):
+            exito, msj_db = ejecutar_carga_producto_voz(pend.get("payload"))
+            st.session_state.producto_pendiente_voz = None
+            st.session_state.ultima_orden = "Confirmar carga de producto"
+            st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
+            st.session_state.ultimo_estado = "success" if exito else "error"
+            st.rerun()
+        if col_no.button("Cancelar", use_container_width=True, key="btn_cancel_prod_voz"):
+            st.session_state.producto_pendiente_voz = None
+            st.session_state.ultima_orden = "Cancelar carga de producto"
+            st.session_state.ultima_respuesta = "Carga cancelada."
+            st.session_state.ultimo_estado = "normal"
+            st.rerun()
+        st.divider()
 
     orden_usuario = st.chat_input("Dicte o escriba aquí...")
 
@@ -875,6 +899,9 @@ elif pagina == "asistente":
 
             accion = respuesta_json.get("accion")
             texto_ia = respuesta_json.get("respuesta", "Lo siento, no entendí bien la orden.")
+
+            if accion != "cargar_producto":
+                st.session_state.producto_pendiente_voz = None
 
             if accion == "actualizar_ubicacion":
                 termino = str(respuesta_json.get("termino", ""))
@@ -1038,6 +1065,22 @@ elif pagina == "asistente":
                     exito, msj_db = cambiar_vehiculos_por_codigo(codigo, vehs, modo=modo)
                     st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
+
+            elif accion == "cargar_producto":
+                ok_prep, payload, msg_prep = validar_y_preparar_carga_producto_voz(respuesta_json)
+                if ok_prep and payload:
+                    st.session_state.producto_pendiente_voz = {
+                        "payload": payload,
+                        "mensaje": msg_prep,
+                    }
+                    st.session_state.ultima_respuesta = (
+                        f"{msg_prep}\n\n👆 **Revisá los datos y confirmá con el botón de arriba.**"
+                    )
+                    st.session_state.ultimo_estado = "normal"
+                else:
+                    st.session_state.producto_pendiente_voz = None
+                    st.session_state.ultima_respuesta = f"❌ {msg_prep}"
+                    st.session_state.ultimo_estado = "error"
 
             elif accion == "filtrar_proveedor":
                 prov_buscado = str(respuesta_json.get("proveedor", "")).strip()

@@ -66,12 +66,17 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
     5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
     6. PROVEEDORES: Si pide filtrar por proveedor, extrae solo la raíz del nombre (ej: "expoyer", no "EXPOYER S.A." ni "productos de").
-    7. ALTA / BAJA DE STOCK: Si pide sumar, cargar, ingresar o dar de alta unidades, usa "alta". Si pide restar, descontar o merma, usa "baja".
-       Extrae código o nombre del repuesto y la cantidad numérica.
+    7. ALTA / BAJA DE STOCK (producto YA EXISTE): Solo si pide sumar/restar unidades a un código existente, SIN dar descripción ni datos de producto nuevo.
+       Usa "alta" o "baja". Extrae código y cantidad.
        Ejemplo: "sumá 10 al código 1491" -> alta, termino: "1491", cantidad: 10
-       Ejemplo: "cargá 5 bujes del 1252" -> alta, termino: "1252", cantidad: 5
-       Ejemplo: "descontá 2 del filtro 1252t" -> baja, termino: "1252t", cantidad: 2
+       Ejemplo: "cargá 5 unidades del 1252" -> alta, termino: "1252", cantidad: 5
+       NO uses "alta" si el usuario describe un producto nuevo (descripción, vehículo, ubicación).
     8. BÚSQUEDA FLEXIBLE: El término puede ir en singular o plural (bujes/buje). Extrae la raíz limpia.
+    9. CARGAR PRODUCTO NUEVO: Si pide registrar/cargar/ingresar un código CON descripción (y opcionalmente stock, vehículo, ubicación), usa "cargar_producto".
+       NO confundir con "alta" (sumar stock). Si menciona descripción del repuesto -> cargar_producto.
+       Ejemplo: "cargame el código 25412 con descripción buje amortiguador para gol, 4 unidades, pasillo 2 piso 1 módulo 3 fila 4"
+       -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, pasillo: 2, piso: 1, modulo: 3, fila: 4
+       "Para gol" / "auto gol" -> VOLKSWAGEN. Si no dice vehículo -> ["UNIVERSAL"]. Si no dice stock -> 1. Si no dice marca -> "GENERICO".
 
     Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
 
@@ -118,6 +123,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     Ejemplo: "al 1491 sacale Ford" -> codigo: "1491", modo: "quitar", vehiculos: ["FORD"]
     Vehículos válidos: UNIVERSAL, VOLKSWAGEN, PEUGEOT, CITROEN, FIAT, FORD, RENAULT, CHEVROLET.
     Si no indica modo, usar "reemplazar". NO confundir con buscar stock ni con cambiar marca.
+
+    OPCIÓN 12 (Registrar producto nuevo en inventario — requiere código y descripción):
+    {{"accion": "cargar_producto", "codigo": "CODIGO_LIMPIO", "descripcion": "DESCRIPCION", "vehiculos": ["VOLKSWAGEN"], "stock": NUMERO, "marca": "GENERICO", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "precio_base": NUMERO_O_NULL}}
+    Ejemplo: "registrame el 25412 buje amortiguador para gol 4 unidades pasillo 2" -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, pasillo: 2
     """
 
     try:

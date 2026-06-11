@@ -58,17 +58,45 @@ def _commit_batch_si_lleno(batch, operaciones):
     return batch
 
 
+def _celda_vacia(val) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, float) and math.isnan(val):
+        return True
+    return False
+
+
+def _entero_fila(row, key, default=0) -> int:
+    val = row.get(key, default)
+    if _celda_vacia(val):
+        return default
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_fila(row, key, default=0.0) -> float:
+    val = row.get(key, default)
+    if _celda_vacia(val):
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def _ubicacion_desde_fila(row):
     ubi = row.get("ubicacion")
     if isinstance(ubi, dict):
         return ubi
     pasillo = row.get("pasillo")
-    if pd.notna(pasillo):
+    if not _celda_vacia(pasillo):
         return {
-            "pasillo": int(pasillo if pd.notna(pasillo) else 0),
-            "piso": int(row.get("piso", 0) if pd.notna(row.get("piso")) else 0),
-            "modulo": int(row.get("modulo", 0) if pd.notna(row.get("modulo")) else 0),
-            "fila": int(row.get("fila", 0) if pd.notna(row.get("fila")) else 0),
+            "pasillo": _entero_fila(row, "pasillo"),
+            "piso": _entero_fila(row, "piso"),
+            "modulo": _entero_fila(row, "modulo"),
+            "fila": _entero_fila(row, "fila"),
         }
     return {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}
 
@@ -219,10 +247,10 @@ def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
             }
         
         maestros[id_m]["variantes"][marca] = {
-            "stock": int(row.get('stock', 0) if pd.notna(row.get('stock')) else 0),
-            "precio_venta": float(row.get('precio_venta', 0) if pd.notna(row.get('precio_venta')) else 0),
-            "precio_interno": float(row.get('precio_interno', 0) if pd.notna(row.get('precio_interno')) else 0),
-            "ultimo_costo_base": float(row.get('ultimo_costo_base', 0) if pd.notna(row.get('ultimo_costo_base')) else 0),
+            "stock": _entero_fila(row, "stock"),
+            "precio_venta": _float_fila(row, "precio_venta"),
+            "precio_interno": _float_fila(row, "precio_interno"),
+            "ultimo_costo_base": _float_fila(row, "ultimo_costo_base"),
             "proveedor": str(row.get('proveedor', '')),
             "cuit_proveedor": str(row.get('cuit_proveedor', ''))
         }
@@ -648,6 +676,171 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
 
     invalidar_cache_datos()
     return True, f"Repuesto {codigo_base} guardado bajo la variante {marca_limpia}."
+
+
+def _entero_ubicacion(val):
+    if val is None:
+        return 0
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        return 0
+
+
+def validar_y_preparar_carga_producto_voz(datos):
+    """
+    Valida una orden cargar_producto del asistente.
+    Retorna (ok, payload, mensaje_resumen).
+    """
+    if not isinstance(datos, dict):
+        return False, None, "Datos inválidos."
+
+    codigo = normalizar_codigo_proveedor(datos.get("codigo", ""))
+    descripcion = str(datos.get("descripcion", "") or "").strip()
+    if not codigo:
+        return False, None, "No detecté el código del producto."
+    if not descripcion:
+        return False, None, "No detecté la descripción. Incluila en la orden."
+
+    marca = sanitizar_clave_marca(datos.get("marca") or "GENERICO")
+    vehiculos_raw = datos.get("vehiculos") or datos.get("vehiculo") or ["UNIVERSAL"]
+    vehiculos = normalizar_lista_vehiculos(vehiculos_raw)
+
+    stock_raw = datos.get("stock")
+    try:
+        stock = int(stock_raw) if stock_raw is not None else 1
+    except (TypeError, ValueError):
+        stock = 1
+    stock = max(0, stock)
+
+    try:
+        precio = float(datos.get("precio_base") or 0)
+    except (TypeError, ValueError):
+        precio = 0.0
+    precio = max(0.0, precio)
+
+    payload = {
+        "codigo": codigo,
+        "descripcion": descripcion,
+        "marca": marca,
+        "vehiculos": vehiculos,
+        "stock": stock,
+        "precio_base": precio,
+        "cuit_proveedor": "0",
+        "recargo": 0.0,
+        "pasillo": _entero_ubicacion(datos.get("pasillo")),
+        "piso": _entero_ubicacion(datos.get("piso")),
+        "modulo": _entero_ubicacion(datos.get("modulo")),
+        "fila": _entero_ubicacion(datos.get("fila")),
+        "solo_variante": False,
+    }
+
+    existente = obtener_producto_por_codigo(codigo)
+    desc_existente = ""
+    if existente:
+        desc_existente = str(existente.get("descripcion", ""))
+        variantes = _extraer_variantes_producto(existente)
+        if marca in variantes:
+            return False, None, (
+                f"El código {codigo} ya existe con marca {marca}. "
+                f"Usá «sumá {stock} al {codigo}» para agregar stock."
+            )
+        payload["solo_variante"] = True
+        payload["id_maestro"] = existente.get("id", codigo)
+
+    veh_texto = vehiculos_a_texto(vehiculos)
+    tiene_ubi = any(payload[k] for k in ("pasillo", "piso", "modulo", "fila"))
+    ubi_txt = (
+        f"Pasillo {payload['pasillo']}, Piso {payload['piso']}, "
+        f"Módulo {payload['modulo']}, Fila {payload['fila']}"
+        if tiene_ubi else "Sin ubicación (0/0/0/0)"
+    )
+    precio_txt = f"${precio:,.0f}" if precio > 0 else "Sin precio (completar después)"
+
+    msg = (
+        f"**Confirmar carga de producto**\n\n"
+        f"- **Código:** {codigo}\n"
+        f"- **Descripción:** {descripcion}\n"
+        f"- **Marca:** {marca}\n"
+        f"- **Vehículo(s):** {veh_texto}\n"
+        f"- **Stock:** {stock}\n"
+        f"- **Ubicación:** {ubi_txt}\n"
+        f"- **Precio:** {precio_txt}\n"
+    )
+    if payload["solo_variante"]:
+        msg += (
+            f"\n_El código ya existe ({desc_existente}). "
+            f"Se agregará la variante **{marca}** sin cambiar descripción ni vehículos del maestro._\n"
+        )
+
+    return True, payload, msg
+
+
+def ejecutar_carga_producto_voz(payload):
+    """Graba el producto tras confirmación del usuario."""
+    if not isinstance(payload, dict):
+        return False, "Datos inválidos."
+
+    codigo = payload.get("codigo", "")
+    marca = payload.get("marca", "GENERICO")
+    stock = int(payload.get("stock", 0))
+    precio = float(payload.get("precio_base", 0))
+    ahora = datetime.now(timezone.utc)
+
+    if payload.get("solo_variante"):
+        id_m = str(payload.get("id_maestro") or codigo).strip()
+        ref_prod = get_db().collection("productos").document(id_m)
+        if not ref_prod.get().exists:
+            docs = get_db().collection("productos").where("codigo", "==", codigo).limit(1).get()
+            if not docs:
+                return False, f"No encontré el código {codigo}."
+            ref_prod = get_db().collection("productos").document(docs[0].id)
+
+        calculos = calcular_cascada_precios(precio, 0.0, 0.0)
+        updates = {
+            "ultima_actualizacion": ahora,
+            "variantes": {
+                marca: {
+                    "stock": stock,
+                    "ultimo_costo_base": precio,
+                    "precio_interno": calculos["precio_interno"],
+                    "precio_venta": calculos["precio_venta"],
+                    "proveedor": "DESCONOCIDO",
+                    "cuit_proveedor": "0",
+                }
+            },
+        }
+        ref_prod.set(updates, merge=True)
+
+        if any(payload.get(k) for k in ("pasillo", "piso", "modulo", "fila")):
+            ref_prod.update({
+                "ubicacion": {
+                    "pasillo": _entero_ubicacion(payload.get("pasillo")),
+                    "piso": _entero_ubicacion(payload.get("piso")),
+                    "modulo": _entero_ubicacion(payload.get("modulo")),
+                    "fila": _entero_ubicacion(payload.get("fila")),
+                },
+                "ultima_actualizacion": ahora,
+            })
+
+        invalidar_cache_datos()
+        return True, f"Variante {marca} agregada al código {codigo} ({stock} u.)."
+
+    return alta_manual_producto(
+        codigo=codigo,
+        condicion=marca,
+        vehiculo=payload.get("vehiculos", ["UNIVERSAL"]),
+        descripcion=payload.get("descripcion", ""),
+        cuit_proveedor=payload.get("cuit_proveedor", "0"),
+        precio_base=precio,
+        recargo=float(payload.get("recargo", 0)),
+        stock=stock,
+        pasillo=_entero_ubicacion(payload.get("pasillo")),
+        piso=_entero_ubicacion(payload.get("piso")),
+        modulo=_entero_ubicacion(payload.get("modulo")),
+        fila=_entero_ubicacion(payload.get("fila")),
+    )
+
 
 def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modulo=None, fila=None):
     id_limpio = str(id_producto).strip().upper().replace("/", "-").split("_")[0] # Toma el maestro
