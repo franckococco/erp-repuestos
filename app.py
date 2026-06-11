@@ -868,25 +868,6 @@ elif pagina == "asistente":
     if "producto_pendiente_voz" not in st.session_state:
         st.session_state.producto_pendiente_voz = None
 
-    if st.session_state.producto_pendiente_voz:
-        pend = st.session_state.producto_pendiente_voz
-        st.markdown(pend.get("mensaje", ""))
-        col_ok, col_no = st.columns(2)
-        if col_ok.button("Confirmar carga", type="primary", use_container_width=True, key="btn_conf_prod_voz"):
-            exito, msj_db = ejecutar_carga_producto_voz(pend.get("payload"))
-            st.session_state.producto_pendiente_voz = None
-            st.session_state.ultima_orden = "Confirmar carga de producto"
-            st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
-            st.session_state.ultimo_estado = "success" if exito else "error"
-            st.rerun()
-        if col_no.button("Cancelar", use_container_width=True, key="btn_cancel_prod_voz"):
-            st.session_state.producto_pendiente_voz = None
-            st.session_state.ultima_orden = "Cancelar carga de producto"
-            st.session_state.ultima_respuesta = "Carga cancelada."
-            st.session_state.ultimo_estado = "normal"
-            st.rerun()
-        st.divider()
-
     orden_usuario = st.chat_input("Dicte o escriba aquí...")
 
     if orden_usuario:
@@ -1077,7 +1058,7 @@ elif pagina == "asistente":
                         "mensaje": msg_prep,
                     }
                     st.session_state.ultima_respuesta = (
-                        f"{msg_prep}\n\n👆 **Revisá los datos y confirmá con el botón de arriba.**"
+                        f"{msg_prep}\n\n**Confirmá o cancelá la carga con los botones de abajo.**"
                     )
                     st.session_state.ultimo_estado = "normal"
                 else:
@@ -1145,6 +1126,23 @@ elif pagina == "asistente":
                 st.error(st.session_state.ultima_respuesta)
             else:
                 st.markdown(st.session_state.ultima_respuesta)
+
+            if st.session_state.producto_pendiente_voz:
+                pend = st.session_state.producto_pendiente_voz
+                col_ok, col_no = st.columns(2)
+                if col_ok.button("Confirmar carga", type="primary", use_container_width=True, key="btn_conf_prod_voz"):
+                    exito, msj_db = ejecutar_carga_producto_voz(pend.get("payload"))
+                    st.session_state.producto_pendiente_voz = None
+                    st.session_state.ultima_orden = "Confirmar carga de producto"
+                    st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
+                    st.session_state.ultimo_estado = "success" if exito else "error"
+                    st.rerun()
+                if col_no.button("Cancelar", use_container_width=True, key="btn_cancel_prod_voz"):
+                    st.session_state.producto_pendiente_voz = None
+                    st.session_state.ultima_orden = "Cancelar carga de producto"
+                    st.session_state.ultima_respuesta = "Carga cancelada."
+                    st.session_state.ultimo_estado = "normal"
+                    st.rerun()
 
             if st.session_state.get("df_reporte") is not None:
                 st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
