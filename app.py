@@ -27,6 +27,7 @@ _ARCHIVOS_MODULOS = (
     "util_branding.py",
     "factura_borrador.py",
     "ui_carga_factura.py",
+    "carga_producto_voz.py",
 )
 
 _modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
@@ -91,10 +92,12 @@ try:
         cambiar_vehiculos_por_codigo,
         edicion_masiva_descripcion,
         edicion_masiva_marca,
-        validar_y_preparar_carga_producto_voz,
-        ejecutar_carga_producto_voz,
         sanitizar_clave_marca,
         formatear_id_variante,
+    )
+    from modulos.carga_producto_voz import (
+        validar_y_preparar_carga_producto_voz,
+        ejecutar_carga_producto_voz,
     )
     from modulos.generador_qr import generar_qr_producto
     from modulos.ui_estilos import aplicar_estilos_globales, render_sidebar, titulo_seccion, ayuda, metricas_inventario
