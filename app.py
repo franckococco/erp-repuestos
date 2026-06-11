@@ -373,162 +373,171 @@ elif pagina == "inventario":
                 placeholder="Código, descripción, marca, vehículo, proveedor…",
                 label_visibility="collapsed",
             )
-            inv_filtrado = filtrar_inventario(inv, busqueda_inv)
-            metricas_inventario(inv_filtrado)
+            term_busqueda = str(busqueda_inv or "").strip()
 
-            if busqueda_inv and inv_filtrado:
-                with st.expander("Edición masiva (resultados filtrados)", expanded=False):
-                    n_maestros = len({
-                        str(i.get("id_maestro") or i.get("codigo") or "")
-                        for i in inv_filtrado
-                    })
-                    st.caption(
-                        f"{len(inv_filtrado)} variantes · {n_maestros} código(s) maestro(s)"
-                    )
-                    col_desc, col_marca = st.columns(2)
-                    with col_desc:
-                        modo_desc = st.radio(
-                            "Descripción",
-                            ["Agregar texto", "Reemplazar descripción"],
-                            horizontal=True,
-                            key="mass_desc_mode",
-                        )
-                        texto_desc = st.text_input("Texto", key="mass_desc_text", label_visibility="collapsed")
-                        if st.button("Aplicar descripción al filtro", key="mass_desc_btn"):
-                            modo = "agregar" if modo_desc == "Agregar texto" else "reemplazar"
-                            exito, msg = edicion_masiva_descripcion(inv_filtrado, modo, texto_desc)
-                            if exito:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-                    with col_marca:
-                        st.caption("Marca: solo códigos con una sola variante.")
-                        marca_nueva = st.text_input("Nueva marca", key="mass_marca_text")
-                        if st.button("Cambiar marca en filtro", key="mass_marca_btn"):
-                            exito, msg = edicion_masiva_marca(inv_filtrado, marca_nueva)
-                            if exito:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
-
-            vista_inv = st.radio(
-                "Vista",
-                ["Resumen por artículo", "Editar variantes", "Etiqueta QR"],
-                horizontal=True,
-                label_visibility="collapsed",
-            )
-
-            if vista_inv == "Resumen por artículo":
-                grupos = agrupar_por_maestro(inv_filtrado)
-                if grupos:
-                    for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
-                        g = grupos[key]
-                        variantes = g['variantes']
-                        stock_total = sum(int(v.get('stock', 0)) for v in variantes)
-                        titulo = (
-                            f"{g['descripcion']} | {g['vehiculo']} | "
-                            f"Cód. {g['codigo']} | {len(variantes)} marca(s) | Stock: {stock_total}"
-                        )
-                        with st.expander(titulo, expanded=bool(busqueda_inv)):
-                            filas_var = []
-                            for v in variantes:
-                                filas_var.append({
-                                    "Marca": v.get('marca', ''),
-                                    "Stock": int(v.get('stock', 0)),
-                                    "Precio": f"${float(v.get('precio_venta', 0)):,.0f}",
-                                    "Proveedor": v.get('proveedor', ''),
-                                    "ID": v.get('id', '')
-                                })
-                            st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
-                else:
-                    st.info("Sin coincidencias para la búsqueda.")
-
-            elif vista_inv == "Editar variantes":
-                ayuda(
-                    "Ayuda — Edición",
-                    "Editá descripción, vehículo (varios separados por coma), marca, stock, precio y ubicación. "
-                    "El vehículo se aplica al código maestro (todas las variantes). Luego **Guardar cambios**.",
+            if not term_busqueda:
+                metricas_inventario(inv)
+                st.info(
+                    "Escribí en el buscador para ver repuestos. "
+                    "Podés buscar por código, descripción, marca, vehículo o proveedor."
                 )
-                df = pd.DataFrame(inv_filtrado)
-                cols_deseadas = [
-                    'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
-                    'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
-                ]
-                cols_existentes = [c for c in cols_deseadas if c in df.columns]
-                df_filtrado = df[cols_existentes].reset_index(drop=True)
-
-                st.data_editor(
-                    df_filtrado,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "id": st.column_config.TextColumn("ID variante", disabled=True, width="small"),
-                        "id_maestro": st.column_config.TextColumn("ID maestro", disabled=True, width="small"),
-                        "codigo": st.column_config.TextColumn("Cód. maestro", disabled=True, width="small"),
-                        "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
-                        "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
-                        "Marca": st.column_config.TextColumn("Marca", width="small"),
-                        "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
-                        "Precio Final": st.column_config.NumberColumn("Precio", min_value=0, step=10, width="small"),
-                        "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
-                        "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
-                        "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
-                        "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
-                    },
-                    key="grilla_inv"
-                )
-
-                if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
-                    if st.button("Guardar cambios", type="primary"):
-                        cambios = st.session_state.grilla_inv["edited_rows"]
-                        errores = []
-                        guardados = 0
-                        for row_idx, dict_cambios in cambios.items():
-                            fila = df_filtrado.iloc[int(row_idx)]
-                            id_prod = str(fila['id'])
-                            id_m = str(fila.get('id_maestro') or fila.get('codigo') or '').strip()
-                            prefijo = f"{id_m}_"
-                            if id_m and id_prod.startswith(prefijo):
-                                marca_fila = id_prod[len(prefijo):].upper()
-                            else:
-                                marca_fila = str(fila.get('Marca', 'GENERICO')).upper()
-                            for col_name, new_val in dict_cambios.items():
-                                ok, msj = actualizar_producto_desde_grilla(
-                                    id_prod, col_name, new_val,
-                                    id_maestro=id_m, marca=marca_fila
-                                )
-                                if ok:
-                                    guardados += 1
-                                else:
-                                    errores.append(f"{col_name}: {msj}")
-                        if errores:
-                            st.error("Algunos cambios no se guardaron:\n" + "\n".join(errores))
-                        if guardados:
-                            st.success(f"Inventario actualizado ({guardados} celda(s)).")
-                            st.rerun()
-                        elif not errores:
-                            st.info("No hubo cambios para guardar.")
-
             else:
-                opciones = {
-                    f"{item.get('id', '')} - {item.get('descripcion', '')} ({item.get('marca', '')})": item
-                    for item in inv_filtrado
-                }
-                seleccion = st.selectbox("Producto para etiqueta QR", options=list(opciones.keys()))
-                if seleccion:
-                    prod = opciones[seleccion]
-                    marca_qr = prod.get('marca', '')
-                    desc_qr = f"{prod.get('descripcion', '')} ({marca_qr})"
-                    col_qr1, col_qr2 = st.columns([1, 2])
-                    qr_ind = generar_qr_producto(
-                        str(prod.get('id', '')),
-                        desc_qr,
-                        float(prod.get('precio_venta', 0.0))
+                inv_filtrado = filtrar_inventario(inv, busqueda_inv)
+                metricas_inventario(inv_filtrado)
+
+                if not inv_filtrado:
+                    st.info(f"Sin coincidencias para «{term_busqueda}».")
+                else:
+                    with st.expander("Edición masiva (resultados filtrados)", expanded=False):
+                        n_maestros = len({
+                            str(i.get("id_maestro") or i.get("codigo") or "")
+                            for i in inv_filtrado
+                        })
+                        st.caption(
+                            f"{len(inv_filtrado)} variantes · {n_maestros} código(s) maestro(s)"
+                        )
+                        col_desc, col_marca = st.columns(2)
+                        with col_desc:
+                            modo_desc = st.radio(
+                                "Descripción",
+                                ["Agregar texto", "Reemplazar descripción"],
+                                horizontal=True,
+                                key="mass_desc_mode",
+                            )
+                            texto_desc = st.text_input("Texto", key="mass_desc_text", label_visibility="collapsed")
+                            if st.button("Aplicar descripción al filtro", key="mass_desc_btn"):
+                                modo = "agregar" if modo_desc == "Agregar texto" else "reemplazar"
+                                exito, msg = edicion_masiva_descripcion(inv_filtrado, modo, texto_desc)
+                                if exito:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                        with col_marca:
+                            st.caption("Marca: solo códigos con una sola variante.")
+                            marca_nueva = st.text_input("Nueva marca", key="mass_marca_text")
+                            if st.button("Cambiar marca en filtro", key="mass_marca_btn"):
+                                exito, msg = edicion_masiva_marca(inv_filtrado, marca_nueva)
+                                if exito:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+
+                    vista_inv = st.radio(
+                        "Vista",
+                        ["Resumen por artículo", "Editar variantes", "Etiqueta QR"],
+                        horizontal=True,
+                        label_visibility="collapsed",
                     )
-                    col_qr1.image(qr_ind, width=140)
-                    col_qr2.download_button("Descargar PNG", qr_ind, f"QR_{prod.get('id', 'N')}.png", "image/png")
+
+                    if vista_inv == "Resumen por artículo":
+                        grupos = agrupar_por_maestro(inv_filtrado)
+                        if grupos:
+                            for key in sorted(grupos.keys(), key=lambda k: grupos[k]['descripcion']):
+                                g = grupos[key]
+                                variantes = g['variantes']
+                                stock_total = sum(int(v.get('stock', 0)) for v in variantes)
+                                titulo = (
+                                    f"{g['descripcion']} | {g['vehiculo']} | "
+                                    f"Cód. {g['codigo']} | {len(variantes)} marca(s) | Stock: {stock_total}"
+                                )
+                                with st.expander(titulo, expanded=True):
+                                    filas_var = []
+                                    for v in variantes:
+                                        filas_var.append({
+                                            "Marca": v.get('marca', ''),
+                                            "Stock": int(v.get('stock', 0)),
+                                            "Precio": f"${float(v.get('precio_venta', 0)):,.0f}",
+                                            "Proveedor": v.get('proveedor', ''),
+                                            "ID": v.get('id', '')
+                                        })
+                                    st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
+
+                    elif vista_inv == "Editar variantes":
+                        ayuda(
+                            "Ayuda — Edición",
+                            "Editá descripción, vehículo (varios separados por coma), marca, stock, precio y ubicación. "
+                            "El vehículo se aplica al código maestro (todas las variantes). Luego **Guardar cambios**.",
+                        )
+                        df = pd.DataFrame(inv_filtrado)
+                        cols_deseadas = [
+                            'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
+                            'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
+                        ]
+                        cols_existentes = [c for c in cols_deseadas if c in df.columns]
+                        df_filtrado = df[cols_existentes].reset_index(drop=True)
+
+                        st.data_editor(
+                            df_filtrado,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "id": st.column_config.TextColumn("ID variante", disabled=True, width="small"),
+                                "id_maestro": st.column_config.TextColumn("ID maestro", disabled=True, width="small"),
+                                "codigo": st.column_config.TextColumn("Cód. maestro", disabled=True, width="small"),
+                                "Descripción": st.column_config.TextColumn("Descripción", width="medium"),
+                                "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
+                                "Marca": st.column_config.TextColumn("Marca", width="small"),
+                                "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
+                                "Precio Final": st.column_config.NumberColumn("Precio", min_value=0, step=10, width="small"),
+                                "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
+                                "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
+                                "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
+                                "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
+                            },
+                            key="grilla_inv"
+                        )
+
+                        if "grilla_inv" in st.session_state and st.session_state.grilla_inv.get("edited_rows"):
+                            if st.button("Guardar cambios", type="primary"):
+                                cambios = st.session_state.grilla_inv["edited_rows"]
+                                errores = []
+                                guardados = 0
+                                for row_idx, dict_cambios in cambios.items():
+                                    fila = df_filtrado.iloc[int(row_idx)]
+                                    id_prod = str(fila['id'])
+                                    id_m = str(fila.get('id_maestro') or fila.get('codigo') or '').strip()
+                                    prefijo = f"{id_m}_"
+                                    if id_m and id_prod.startswith(prefijo):
+                                        marca_fila = id_prod[len(prefijo):].upper()
+                                    else:
+                                        marca_fila = str(fila.get('Marca', 'GENERICO')).upper()
+                                    for col_name, new_val in dict_cambios.items():
+                                        ok, msj = actualizar_producto_desde_grilla(
+                                            id_prod, col_name, new_val,
+                                            id_maestro=id_m, marca=marca_fila
+                                        )
+                                        if ok:
+                                            guardados += 1
+                                        else:
+                                            errores.append(f"{col_name}: {msj}")
+                                if errores:
+                                    st.error("Algunos cambios no se guardaron:\n" + "\n".join(errores))
+                                if guardados:
+                                    st.success(f"Inventario actualizado ({guardados} celda(s)).")
+                                    st.rerun()
+                                elif not errores:
+                                    st.info("No hubo cambios para guardar.")
+
+                    else:
+                        opciones = {
+                            f"{item.get('id', '')} - {item.get('descripcion', '')} ({item.get('marca', '')})": item
+                            for item in inv_filtrado
+                        }
+                        seleccion = st.selectbox("Producto para etiqueta QR", options=list(opciones.keys()))
+                        if seleccion:
+                            prod = opciones[seleccion]
+                            marca_qr = prod.get('marca', '')
+                            desc_qr = f"{prod.get('descripcion', '')} ({marca_qr})"
+                            col_qr1, col_qr2 = st.columns([1, 2])
+                            qr_ind = generar_qr_producto(
+                                str(prod.get('id', '')),
+                                desc_qr,
+                                float(prod.get('precio_venta', 0.0))
+                            )
+                            col_qr1.image(qr_ind, width=140)
+                            col_qr2.download_button("Descargar PNG", qr_ind, f"QR_{prod.get('id', 'N')}.png", "image/png")
         else:
             st.info("El inventario está vacío.")
 
