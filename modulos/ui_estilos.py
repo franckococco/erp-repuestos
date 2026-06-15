@@ -72,6 +72,8 @@ def render_sidebar(cliente_activo):
         st.divider()
         st.markdown("**Cliente activo**")
         st.write(cliente_activo.get("nombre", "Particular"))
+        cbte = str(cliente_activo.get("tipo_comprobante", "6"))
+        st.caption(f"Factura {'A' if cbte == '1' else 'B'} · CUIT {cliente_activo.get('cuit', '—')}")
         if float(cliente_activo.get("descuento", 0)) > 0:
             st.caption(f"Descuento: {cliente_activo['descuento']}%")
 

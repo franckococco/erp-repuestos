@@ -28,6 +28,9 @@ _ARCHIVOS_MODULOS = (
     "factura_borrador.py",
     "ui_carga_factura.py",
     "carga_producto_voz.py",
+    "factura_arca_client.py",
+    "factura_arca_pdf.py",
+    "ui_mostrador.py",
 )
 
 _modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
@@ -82,6 +85,8 @@ try:
         obtener_clientes,
         configurar_cliente,
         eliminar_cliente,
+        cliente_consumidor_final,
+        cliente_db_a_activo,
         actualizar_ubicacion_relevamiento,
         actualizar_producto_desde_grilla,
         obtener_producto_por_codigo,
@@ -324,7 +329,9 @@ if "temp_datos" not in st.session_state:
 if "borrador_id" not in st.session_state:
     st.session_state.borrador_id = None
 if "cliente_activo" not in st.session_state:
-    st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
+    st.session_state.cliente_activo = cliente_consumidor_final()
+if "factura_arca_reciente" not in st.session_state:
+    st.session_state.factura_arca_reciente = None
 if "resultados_ia_mostrador" not in st.session_state:
     st.session_state.resultados_ia_mostrador = None
 if "msg_ia_mostrador" not in st.session_state:
@@ -639,17 +646,14 @@ elif pagina == "inventario":
 
 # --- MOSTRADOR ---
 elif pagina == "mostrador":
-    titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
+    from modulos.ui_mostrador import (
+        render_seccion_cliente_mostrador,
+        render_buscador_productos,
+        render_acciones_carrito,
+    )
 
-    col_cli1, col_cli2 = st.columns([3, 1])
-    with col_cli1:
-        st.markdown(f"**Cliente:** {st.session_state.cliente_activo['nombre']}")
-        if st.session_state.cliente_activo['descuento'] > 0:
-            st.caption(f"Descuento: {st.session_state.cliente_activo['descuento']}%")
-    with col_cli2:
-        if st.button("Limpiar cliente", use_container_width=True):
-            st.session_state.cliente_activo = {"nombre": "Particular", "descuento": 0.0}
-            st.rerun()
+    titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
+    render_seccion_cliente_mostrador()
 
     vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
 
@@ -658,32 +662,7 @@ elif pagina == "mostrador":
     with t_buscar:
         inv_completo = obtener_inventario_completo() or []
         if inv_completo:
-            opciones_desc = {}
-            for item in inv_completo:
-                if isinstance(item, dict):
-                    marca_item = item.get('marca', item.get('condicion', ''))
-                    desc = (
-                        f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - "
-                        f"{marca_item} | {item.get('descripcion', '')} - ${item.get('precio_venta', 0)}"
-                    )
-                    opciones_desc[desc] = item.get('id')
-
-            sel_prod = st.selectbox("Buscar por nombre, código, vehículo o marca:", options=[""] + list(opciones_desc.keys()))
-
-            col_b1, col_b2 = st.columns([1, 3])
-            cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
-
-            if col_b2.button("➕ Agregar al Presupuesto", use_container_width=True, type="primary"):
-                if sel_prod:
-                    id_real = opciones_desc[sel_prod]
-                    exito, msj = agregar_al_carrito(str(vendedor), id_real, int(cant_b))
-                    if exito:
-                        st.success(msj)
-                        st.rerun()
-                    else:
-                        st.error(msj)
-                else:
-                    st.warning("Seleccione un producto del menú desplegable primero.")
+            render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario)
         else:
             st.info("El inventario está vacío. Agregue productos primero.")
 
@@ -747,10 +726,7 @@ elif pagina == "mostrador":
                         )
 
                         if cliente_encontrado:
-                            st.session_state.cliente_activo = {
-                                "nombre": cliente_encontrado['nombre'],
-                                "descuento": float(cliente_encontrado.get('descuento', 0.0))
-                            }
+                            st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
                             st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
                             st.session_state.resultados_ia_mostrador = None
                             st.rerun()
@@ -821,37 +797,11 @@ elif pagina == "mostrador":
     carrito = obtener_carrito(str(vendedor)) or []
     if carrito:
         total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
-        desc_porc = st.session_state.cliente_activo['descuento']
+        desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
         total_final = total_bruto * (1 - desc_porc / 100)
-
-        st.table(carrito)
-
-        st.write(f"### Subtotal: ${total_bruto:,.2f}")
-        if desc_porc > 0:
-            st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
-        st.write(f"## TOTAL: ${total_final:,.2f}")
-
-        col_cob, col_pdf, col_vac = st.columns(3)
-        if col_cob.button("✅ Confirmar Venta", type="primary", use_container_width=True):
-            exito, msj = confirmar_venta(str(vendedor))
-            if exito:
-                st.success(msj)
-                st.rerun()
-            else:
-                st.error(msj)
-
-        pdf_bytes = generar_pdf_presupuesto(
-            str(vendedor), carrito, total_bruto,
-            st.session_state.cliente_activo['nombre'], desc_porc
+        render_acciones_carrito(
+            vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
         )
-        col_pdf.download_button(
-            "📄 Imprimir PDF", pdf_bytes, f"Presupuesto_{vendedor}.pdf", "application/pdf",
-            use_container_width=True
-        )
-
-        if col_vac.button("🗑️ Vaciar", use_container_width=True):
-            vaciar_carrito(str(vendedor))
-            st.rerun()
 
 # --- ASISTENTE ---
 elif pagina == "asistente":
@@ -960,17 +910,19 @@ elif pagina == "asistente":
                 )
 
                 if cliente_encontrado:
-                    st.session_state.cliente_activo = {
-                        "nombre": cliente_encontrado['nombre'],
-                        "descuento": float(cliente_encontrado.get('descuento', 0.0))
-                    }
+                    st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
                     st.session_state.ultima_respuesta = (
                         f"✅ Listo. Cliente {cliente_encontrado['nombre']} activado "
-                        f"({cliente_encontrado['descuento']}% descuento)."
+                        f"({cliente_encontrado.get('descuento', 0)}% descuento)."
                     )
                     st.session_state.ultimo_estado = "success"
                 else:
-                    st.session_state.cliente_activo = {"nombre": nombre_det, "descuento": 0.0}
+                    st.session_state.cliente_activo = {
+                        "nombre": nombre_det,
+                        "cuit": "00000000000",
+                        "descuento": 0.0,
+                        "tipo_comprobante": "6",
+                    }
                     st.session_state.ultima_respuesta = (
                         f"⚠️ Activado. (Nota: '{nombre_det}' no está en la base de datos, aplicará 0% descuento)."
                     )
@@ -1347,14 +1299,19 @@ elif pagina == "config":
     with tab_clientes:
         st.subheader("Alta y Edición de Clientes")
         with st.form("conf_cliente"):
-            c1, c2, c3 = st.columns([3, 2, 1])
+            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
             nombre_cli = c1.text_input("Nombre / Razón Social").upper()
             cuit_cli = c2.text_input("DNI o CUIT")
             desc_cli = c3.number_input("% Descuento", min_value=0.0, step=1.0)
+            tipo_cli = c4.selectbox(
+                "Comprobante",
+                options=["6", "1"],
+                format_func=lambda x: "Factura A" if x == "1" else "Factura B",
+            )
 
             if st.form_submit_button("Guardar Cliente"):
                 if nombre_cli and cuit_cli:
-                    configurar_cliente(nombre_cli, cuit_cli, desc_cli)
+                    configurar_cliente(nombre_cli, cuit_cli, desc_cli, tipo_cli)
                     st.success(f"Cliente {nombre_cli} guardado.")
                     st.rerun()
                 else:
@@ -1369,7 +1326,8 @@ elif pagina == "config":
                 datos_cli.append({
                     "Nombre": d_cli.get("nombre", ""),
                     "CUIT/DNI": id_c,
-                    "Descuento": f"{d_cli.get('descuento', 0)}%"
+                    "Descuento": f"{d_cli.get('descuento', 0)}%",
+                    "Comprobante": "A" if str(d_cli.get("tipo_comprobante", "6")) == "1" else "B",
                 })
             st.dataframe(datos_cli, use_container_width=True)
 

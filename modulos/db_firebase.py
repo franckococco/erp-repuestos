@@ -282,17 +282,61 @@ def obtener_clientes() -> dict:
     docs = get_db().collection("clientes").get()
     return {d.id: d.to_dict() or {} for d in docs}
 
-def configurar_cliente(nombre, cuit_dni, descuento=0.0):
+def cliente_consumidor_final() -> dict:
+    return {
+        "nombre": "CONSUMIDOR FINAL",
+        "cuit": "00000000000",
+        "descuento": 0.0,
+        "tipo_comprobante": "6",
+    }
+
+
+def configurar_cliente(nombre, cuit_dni, descuento=0.0, tipo_comprobante="6"):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     if not id_cli:
         return False, "CUIT/DNI inválido."
+    cbte = str(tipo_comprobante).strip()
+    if cbte not in ("1", "6"):
+        cbte = "6"
     get_db().collection("clientes").document(id_cli).set({
         "nombre": str(nombre).upper(),
         "cuit_dni": id_cli,
         "descuento": float(descuento),
+        "tipo_comprobante": cbte,
         "actualizado": datetime.now(timezone.utc)
     }, merge=True)
     return True, "Cliente configurado."
+
+
+def cliente_db_a_activo(datos: dict) -> dict:
+    if not isinstance(datos, dict):
+        return cliente_consumidor_final()
+    cbte = str(datos.get("tipo_comprobante", "6")).strip()
+    if cbte not in ("1", "6"):
+        cbte = "6"
+    cuit = str(datos.get("cuit_dni") or datos.get("cuit") or "00000000000")
+    cuit = "".join(filter(str.isdigit, cuit)) or "00000000000"
+    return {
+        "nombre": str(datos.get("nombre", "CONSUMIDOR FINAL")).upper(),
+        "cuit": cuit,
+        "descuento": float(datos.get("descuento", 0.0)),
+        "tipo_comprobante": cbte,
+    }
+
+
+def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pago, total):
+    get_db().collection("comprobantes_arca").add({
+        "vendedor": str(vendedor),
+        "cliente": cliente,
+        "cae": respuesta_arca.get("cae"),
+        "vencimiento_cae": respuesta_arca.get("vencimiento_cae"),
+        "punto_venta": respuesta_arca.get("punto_venta"),
+        "numero_factura": respuesta_arca.get("numero_factura"),
+        "items": items,
+        "forma_pago": forma_pago,
+        "total": float(total),
+        "fecha": datetime.now(timezone.utc),
+    })
 
 def eliminar_cliente(cuit_dni):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
@@ -1368,11 +1412,10 @@ def vaciar_carrito(vendedor):
     for d in docs:
         d.reference.delete()
 
-def confirmar_venta(vendedor):
+def validar_carrito_para_venta(vendedor):
     items = obtener_carrito(vendedor)
-
     if not items:
-        return False, "Vacío."
+        return False, "Vacío.", []
 
     lineas_ok = []
     errores = []
@@ -1403,8 +1446,11 @@ def confirmar_venta(vendedor):
         })
 
     if errores:
-        return False, "No se confirmó la venta:\n" + "\n".join(errores)
+        return False, "No se confirmó la venta:\n" + "\n".join(errores), []
+    return True, "", lineas_ok
 
+
+def _descontar_stock_lineas_carrito(vendedor, lineas_ok):
     batch = get_db().batch()
     operaciones = 0
 
@@ -1437,6 +1483,13 @@ def confirmar_venta(vendedor):
     if operaciones % _BATCH_LIMIT != 0:
         batch.commit()
     invalidar_cache_datos()
+
+
+def confirmar_venta(vendedor):
+    ok, msg, lineas_ok = validar_carrito_para_venta(vendedor)
+    if not ok:
+        return False, msg
+    _descontar_stock_lineas_carrito(vendedor, lineas_ok)
     return True, "Venta confirmada."
 
 def borrar_toda_la_base_de_datos():
