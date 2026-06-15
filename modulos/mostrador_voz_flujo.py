@@ -11,6 +11,7 @@ from modulos.db_firebase import (
     cliente_consumidor_final,
     cliente_db_a_activo,
     obtener_clientes,
+    formatear_id_variante,
 )
 from modulos.ia_asistente import normalizar_texto_basico
 
@@ -34,7 +35,38 @@ def preprocesar_texto_mostrador(texto):
 
 
 def _limpiar_termino_item(termino):
-    return str(termino or "").strip().upper().replace("/", "-").strip(",.;:")
+    t = str(termino or "").strip().upper().replace("/", "-")
+    t = re.sub(r"\s+", "-", t)
+    return t.strip(",.;:")
+
+
+def _id_carrito_desde_item(item):
+    if not isinstance(item, dict):
+        return None
+    id_m = item.get("id_maestro") or item.get("codigo")
+    marca = item.get("marca")
+    if id_m and marca:
+        return formatear_id_variante(id_m, marca)
+    return item.get("id")
+
+
+def _normalizar_codigo_con_inventario(termino, inventario):
+    """Ajusta códigos dictados (1273 BH → 1273-BH) según inventario."""
+    directo = _limpiar_termino_item(termino)
+    if not directo:
+        return directo
+    coincidencias = _buscar_variantes_por_codigo(inventario, directo)
+    if coincidencias:
+        cod = _limpiar_termino_item(coincidencias[0].get("codigo", ""))
+        return cod or directo
+    compacto = directo.replace("-", "")
+    for p in inventario or []:
+        if not isinstance(p, dict):
+            continue
+        cod = _limpiar_termino_item(p.get("codigo", ""))
+        if cod.replace("-", "") == compacto:
+            return cod
+    return directo
 
 
 def extraer_items_orden_voz(texto):
@@ -60,10 +92,10 @@ def extraer_items_orden_voz(texto):
         items.append({"termino": term, "cantidad": cant})
 
     patrones = [
-        (r"(?:codigo)\s+(\S+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?)?\b", False),
-        (r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?(\S+?)\s+(\d{1,4})\s*(?:unidades?|u\.?)?\b", False),
-        (r"(?:codigo)\s+(\S+?)\s*(?:por|x|\*|con)\s*(\d{1,4})\b", False),
-        (r"(\d{1,4})\s*(?:unidades?|u\.?)\s+(?:del?\s+)?(?:codigo\s+)?(\S+)", True),
+        (r"(?:codigo)\s+([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?)?\b", False),
+        (r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidades?|u\.?)?\b", False),
+        (r"(?:codigo)\s+([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s*(?:por|x|\*|con)\s*(\d{1,4})\b", False),
+        (r"(\d{1,4})\s*(?:unidades?|u\.?)\s+(?:del?\s+)?(?:codigo\s+)?([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)", True),
     ]
     for patron, invertido in patrones:
         for m in re.finditer(patron, t):
@@ -132,15 +164,16 @@ def agregar_termino_voz(
     if not termino:
         return False, "Sin término de búsqueda.", None
 
-    id_limpio = _limpiar_termino_item(termino)
+    id_limpio = _normalizar_codigo_con_inventario(termino, inventario)
 
-    if _parece_codigo(termino):
+    if _parece_codigo(id_limpio):
         ok, msj = agregar_al_carrito(str(vendedor), id_limpio, cant)
         if ok:
             return True, msj, None
-        coincidencias = _buscar_variantes_por_codigo(inventario, termino)
+        coincidencias = _buscar_variantes_por_codigo(inventario, id_limpio)
         if len(coincidencias) == 1:
-            ok2, msj2 = agregar_al_carrito(str(vendedor), coincidencias[0].get("id"), cant)
+            id_cart = _id_carrito_desde_item(coincidencias[0])
+            ok2, msj2 = agregar_al_carrito(str(vendedor), id_cart, cant)
             return ok2, msj2, None
         if len(coincidencias) > 1:
             return (
@@ -149,9 +182,10 @@ def agregar_termino_voz(
                 coincidencias[:10],
             )
 
-    coincidencias_cod = _buscar_variantes_por_codigo(inventario, termino)
+    coincidencias_cod = _buscar_variantes_por_codigo(inventario, id_limpio)
     if len(coincidencias_cod) == 1:
-        ok, msj = agregar_al_carrito(str(vendedor), coincidencias_cod[0].get("id"), cant)
+        id_cart = _id_carrito_desde_item(coincidencias_cod[0])
+        ok, msj = agregar_al_carrito(str(vendedor), id_cart, cant)
         return ok, msj, None
     if len(coincidencias_cod) > 1:
         return (
@@ -283,33 +317,23 @@ def ejecutar_flujo_factura_voz(
         or flujo.get("imprimir")
         or flujo.get("accion") == "imprimir_ticket"
     )
-    if not imprimir:
-        if errores:
-            return False, "Flujo parcial:\n" + "\n".join(errores), None
-        return True, " | ".join(pasos_ok) if pasos_ok else "Listo.", None
-
-    carrito = obtener_carrito(str(vendedor)) or []
-    if not carrito:
-        if not items:
-            return (
-                False,
-                "No detecté código ni cantidad. Ejemplo: «código 3524150 5 unidades».",
-                None,
-            )
-        return False, "No hay ítems en el carrito para facturar.", None
     if errores:
-        return False, "Corregí estos errores antes de imprimir:\n" + "\n".join(errores), None
+        return False, "Flujo parcial:\n" + "\n".join(errores), None
 
-    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-    total_bruto = sum(float(i.get("subtotal", 0)) for i in carrito if isinstance(i, dict))
-    total_final = total_bruto * (1 - desc_porc / 100)
-    fp = st.session_state.get(f"mostrador_forma_pago_{vendedor}", "Contado")
+    if imprimir:
+        carrito = obtener_carrito(str(vendedor)) or []
+        if not carrito:
+            if not items:
+                return (
+                    False,
+                    "No detecté código ni cantidad. Ejemplo: «código 3524150 5 unidades».",
+                    None,
+                )
+            return False, "No hay ítems en el carrito. Revisá el código.", None
+        st.session_state.mostrador_listo_para_ticket = True
+        pasos_ok.append("Revisá la grilla y confirmá el ticket abajo")
 
-    ok, msj = emitir_factura_fn(
-        vendedor, carrito, total_final, desc_porc, fp, solo_ticket=True
-    )
-    if not ok:
-        return False, msj, None
-
-    resumen = " · ".join(pasos_ok) if pasos_ok else "Factura emitida"
-    return True, f"{msj} {resumen}", None
+    resumen = " · ".join(pasos_ok) if pasos_ok else "Listo."
+    if imprimir:
+        return True, f"{resumen} (sin imprimir hasta que confirmes)", None
+    return True, resumen, None

@@ -168,7 +168,7 @@ def procesar_orden_mostrador(texto_usuario):
     REGLAS:
     - Si la orden tiene VARIAS partes (cliente + productos + pago + imprimir), usá "flujo_factura".
     - "Factura B" -> tipo_comprobante "6". "Factura A" -> "1".
-    - "Imprimir" / "ticket" al final -> imprimir_ticket true (factura + ticket térmico, sin pedir confirmación).
+    - "Imprimir" / "ticket" al final -> imprimir_ticket true (arma carrito; NO factura sola: el usuario revisa la grilla y confirma).
     - Códigos de producto: números o CODIGO_MARCA (ej. 3524150, F00099C125_GENERICO).
     - "Agregá código X 5 unidades" -> items con termino X y cantidad 5.
     - "Cargame factura B para [cliente]" -> nombre_cliente + tipo 6 + vaciar_antes true si dice cargar/cargame.

@@ -379,8 +379,13 @@ if "resultados_ia_mostrador" not in st.session_state:
     st.session_state.resultados_ia_mostrador = None
 if "msg_ia_mostrador" not in st.session_state:
     st.session_state.msg_ia_mostrador = None
+if "mostrador_listo_para_ticket" not in st.session_state:
+    st.session_state.mostrador_listo_para_ticket = False
 if "pagina" not in st.session_state:
     st.session_state.pagina = "carga"
+
+from modulos.ui_mostrador import init_credenciales_arca_session
+init_credenciales_arca_session()
 
 pagina = render_sidebar(st.session_state.cliente_activo)
 

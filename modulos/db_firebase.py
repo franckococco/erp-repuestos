@@ -370,6 +370,37 @@ def eliminar_item_carrito(vendedor, item_id):
     return True, "Ítem quitado del presupuesto."
 
 
+def actualizar_cantidad_item_carrito(vendedor, item_id, nueva_cantidad):
+    cant = int(nueva_cantidad)
+    id_item = str(item_id).replace("/", "-")
+    if cant <= 0:
+        return eliminar_item_carrito(vendedor, id_item)
+
+    ref_item = (
+        get_db().collection("presupuestos_activos")
+        .document(str(vendedor))
+        .collection("items")
+        .document(id_item)
+    )
+    doc = ref_item.get()
+    if not doc.exists:
+        return False, "Ítem no encontrado en el presupuesto."
+
+    ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item)
+    err_val = _validar_resolucion_producto(ref_prod, id_m, marca, stock_disp, err)
+    if err_val:
+        return False, err_val
+    assert stock_disp is not None
+
+    if cant > stock_disp:
+        return False, (
+            f"Stock insuficiente. Disponible: {stock_disp} u. (pediste {cant})."
+        )
+
+    ref_item.update({"cantidad": cant})
+    return True, f"Cantidad actualizada a {cant} u."
+
+
 def obtener_comprobante_arca(comp_id):
     if not comp_id:
         return None
@@ -1224,6 +1255,37 @@ def _extraer_marca_variante(id_producto, id_maestro):
     return "GENERICO"
 
 
+def _normalizar_marca_en_variantes(marca_req, variantes, id_producto=None):
+    """Corrige marcas mal parseadas (ej. GENERICO_GENERICO → GENERICO)."""
+    if not variantes:
+        return marca_req
+    if marca_req and marca_req in variantes:
+        return marca_req
+    if not marca_req:
+        if len(variantes) == 1:
+            return list(variantes.keys())[0]
+        return marca_req
+
+    id_up = str(id_producto or "").upper().replace("/", "-")
+    coincidencias_sufijo = []
+    for clave in variantes:
+        suf = f"_{str(clave).upper()}"
+        if id_up.endswith(suf):
+            coincidencias_sufijo.append(clave)
+    if len(coincidencias_sufijo) == 1:
+        return coincidencias_sufijo[0]
+
+    for parte in reversed(str(marca_req).split("_")):
+        if parte in variantes:
+            return parte
+
+    marca_up = str(marca_req).upper()
+    for clave in variantes:
+        if str(clave).upper() in marca_up or marca_up in str(clave).upper():
+            return clave
+    return marca_req
+
+
 def _resolver_producto_y_stock(id_producto):
     """
     Resuelve documento Firebase y stock disponible para un ID variante (CODIGO_MARCA).
@@ -1250,6 +1312,8 @@ def _resolver_producto_y_stock(id_producto):
         marca_ant = datos.get("marca", datos.get("condicion", "GENERICO"))
         return ref_prod, id_m, marca_ant, int(datos.get("stock", 0)), None
 
+    marca_req = _normalizar_marca_en_variantes(marca_req, variantes, id_producto)
+
     if not marca_req:
         if len(variantes) == 1:
             marca_req = list(variantes.keys())[0]
@@ -1261,7 +1325,13 @@ def _resolver_producto_y_stock(id_producto):
     if marca_req not in variantes:
         return None, None, None, None, f"La marca '{marca_req}' no se encontró en este repuesto."
 
-    return ref_prod, id_m, marca_req, int(variantes[marca_req].get("stock", 0)), None
+    stock = int(variantes[marca_req].get("stock", 0))
+    if stock <= 0:
+        return None, None, None, None, (
+            f"Sin stock disponible para '{id_m}' ({marca_req}). Quedan 0 unidades."
+        )
+
+    return ref_prod, id_m, marca_req, stock, None
 
 
 def _validar_resolucion_producto(ref_prod, id_m, marca, stock, err):
@@ -1667,6 +1737,34 @@ def borrar_toda_la_base_de_datos():
 
     invalidar_cache_datos()
     return True, "Base de datos limpia."
+
+
+def obtener_credenciales_arca():
+    """Credenciales ARCA guardadas en Firebase (persisten entre sesiones)."""
+    try:
+        doc = get_db().collection("configuracion").document("mostrador_arca").get()
+        if doc.exists:
+            return doc.to_dict() or {}
+    except Exception:
+        pass
+    return {}
+
+
+def guardar_credenciales_arca(cuit, clave):
+    """Guarda CUIT y clave del facturador para no reingresarlos."""
+    cuit_l = str(cuit or "").strip()
+    clave_l = str(clave or "").strip()
+    if not cuit_l or not clave_l:
+        return False, "Completá CUIT y clave antes de guardar."
+    try:
+        get_db().collection("configuracion").document("mostrador_arca").set({
+            "cuit": cuit_l,
+            "clave": clave_l,
+            "actualizado": datetime.now(timezone.utc),
+        }, merge=True)
+        return True, "Credenciales ARCA guardadas."
+    except Exception as e:
+        return False, f"No se pudieron guardar: {e}"
 
 
 def invalidar_cache_datos():
