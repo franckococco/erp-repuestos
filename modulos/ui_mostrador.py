@@ -1718,6 +1718,30 @@ def render_panel_cobro_mostrador(
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_mostrador_accion_pendiente(vendedor):
+    if not st.session_state.get("mostrador_accion_pendiente"):
+        return
+    carrito_pend = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
+    dp = float(st.session_state.cliente_activo.get("descuento", 0))
+    _, tf = calcular_totales_carrito(carrito_pend, dp)
+    render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
+
+
+def render_mostrador_venta_actual(vendedor, generar_pdf_presupuesto):
+    st.markdown("#### Venta actual")
+    carrito = obtener_carrito(str(vendedor)) or []
+    if carrito:
+        carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
+        desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+        total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
+        render_acciones_carrito(
+            vendedor, carrito_ui, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+        )
+    else:
+        st.info("Carrito vacío — buscá productos o usá la IA de voz.")
+    render_historial_facturas_arca()
+
+
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
     """Compat: panel lateral de cobro (la grilla va aparte a ancho completo)."""
     render_panel_cobro_mostrador(
