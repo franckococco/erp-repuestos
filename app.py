@@ -281,47 +281,72 @@ def texto_resultados_agrupados(encontrados, termino):
 
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
 def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
+    from modulos.util_branding import NOMBRE_EMPRESA
+
     pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
     logo_pdf = ruta_logo_hafid()
     if logo_pdf:
         pdf.image(logo_pdf, x=85, y=10, w=40)
-        pdf.ln(35)
+        pdf.ln(32)
 
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(190, 10, "PRESUPUESTO - MAGNUM VALORES SAS", new_x="LMARGIN", new_y="NEXT", align="C")
-
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(190, 10, f"Cliente: {cliente_nombre} | Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.cell(190, 10, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(10)
-
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(40, 10, "Codigo", 1)
-    pdf.cell(80, 10, "Descripcion", 1)
-    pdf.cell(30, 10, "Cant.", 1)
-    pdf.cell(40, 10, "Subtotal", 1)
-    pdf.ln()
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(190, 9, f"PRESUPUESTO — {NOMBRE_EMPRESA}", new_x="LMARGIN", new_y="NEXT", align="C")
 
     pdf.set_font("Helvetica", "", 10)
+    pdf.cell(190, 7, f"Cliente: {cliente_nombre}  |  Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(190, 7, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(6)
+
+    w_cod, w_desc, w_cant, w_sub = 40, 85, 20, 45
+    row_h = 8
+
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.cell(w_cod, row_h, "Codigo", 1)
+    pdf.cell(w_desc, row_h, "Descripcion", 1)
+    pdf.cell(w_cant, row_h, "Cant.", 1, align="C")
+    pdf.cell(w_sub, row_h, "Subtotal", 1, align="R")
+    pdf.ln(row_h)
+
+    pdf.set_font("Helvetica", "", 8)
     for item in items:
-        codigo_display = str(item.get('id', item.get('codigo', '')))
-        pdf.cell(40, 10, codigo_display, 1)
-        pdf.cell(80, 10, str(item.get('descripcion', ''))[:35], 1)
-        pdf.cell(30, 10, str(item.get('cantidad', 1)), 1)
-        pdf.cell(40, 10, f"${item.get('subtotal', 0):,.2f}", 1)
-        pdf.ln()
+        if pdf.get_y() > 265:
+            pdf.add_page()
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(w_cod, row_h, "Codigo", 1)
+            pdf.cell(w_desc, row_h, "Descripcion", 1)
+            pdf.cell(w_cant, row_h, "Cant.", 1, align="C")
+            pdf.cell(w_sub, row_h, "Subtotal", 1, align="R")
+            pdf.ln(row_h)
+            pdf.set_font("Helvetica", "", 8)
 
-    pdf.ln(5)
+        codigo_raw = str(item.get("id", item.get("codigo", "")))
+        codigo_display = codigo_raw if len(codigo_raw) <= 22 else codigo_raw[:21] + "…"
+        desc = str(item.get("descripcion", ""))[:48]
+        cant = str(item.get("cantidad", 1))
+        sub = f"${float(item.get('subtotal', 0)):,.2f}"
+
+        pdf.cell(w_cod, row_h, codigo_display, 1)
+        pdf.cell(w_desc, row_h, desc, 1)
+        pdf.cell(w_cant, row_h, cant, 1, align="C")
+        pdf.cell(w_sub, row_h, sub, 1, align="R")
+        pdf.ln(row_h)
+
+    pdf.ln(8)
     if descuento_aplicado > 0:
         pdf.set_font("Helvetica", "I", 10)
         descuento_monto = total * (descuento_aplicado / 100)
-        pdf.cell(190, 8, f"Descuento Cliente ({descuento_aplicado}%): -${descuento_monto:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+        pdf.cell(
+            190, 8,
+            f"Descuento ({descuento_aplicado}%): -${descuento_monto:,.2f}",
+            new_x="LMARGIN", new_y="NEXT", align="R",
+        )
 
     pdf.set_font("Helvetica", "B", 12)
     total_final = total * (1 - descuento_aplicado / 100)
-    pdf.cell(190, 10, f"TOTAL FINAL: ${total_final:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
+    pdf.cell(190, 10, f"TOTAL: ${total_final:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
 
     return bytes(pdf.output())
 

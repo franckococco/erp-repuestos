@@ -1,6 +1,8 @@
 """Logo y rutas de assets de marca."""
 import os
 
+NOMBRE_EMPRESA = "HAFID AUTOPARTES"
+
 
 def ruta_logo_hafid():
     """Busca logo_hafid en modulos/ y en la raíz del proyecto."""

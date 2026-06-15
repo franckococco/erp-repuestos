@@ -1,7 +1,10 @@
 """Generación de PDF ticket (58mm) y A4 para comprobantes ARCA."""
-from typing import Dict, List, Any, Optional
-from fpdf import FPDF
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fpdf import FPDF
+
+from modulos.util_branding import NOMBRE_EMPRESA
 
 
 def _get_str(d: Dict[str, Any], k: str, default: str = "") -> str:
@@ -45,7 +48,7 @@ def crear_ticket(
 
     pdf.set_font("Helvetica", "B", font_base + 2)
     pdf.multi_cell(
-        ancho_util, 4, _get_str(datos_respuesta, "nombre_empresa", "MAGNUM VALORES SAS"), align="C"
+        ancho_util, 4, _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA), align="C"
     )
 
     pdf.set_font("Helvetica", "", font_base - 1)
@@ -172,7 +175,7 @@ def crear_a4(
 
     pdf.set_font("Helvetica", "B", 14)
     pdf.set_xy(12, 12)
-    pdf.cell(80, 8, _get_str(datos_respuesta, "nombre_empresa", "MAGNUM VALORES SAS"))
+    pdf.cell(80, 8, _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA))
 
     pdf.set_font("Helvetica", "", 9)
     pdf.set_xy(12, 22)
