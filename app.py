@@ -32,6 +32,7 @@ _ARCHIVOS_MODULOS = (
     "factura_arca_pdf.py",
     "ui_mostrador.py",
     "ia_mostrador.py",
+    "util_pdf.py",
 )
 
 _modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
@@ -282,6 +283,7 @@ def texto_resultados_agrupados(encontrados, termino):
 # --- FUNCIÓN PARA EL GENERADOR DE PDF ---
 def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
     from modulos.util_branding import NOMBRE_EMPRESA
+    from modulos.util_pdf import texto_para_pdf
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=18)
@@ -293,10 +295,18 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
         pdf.ln(32)
 
     pdf.set_font("Helvetica", "B", 15)
-    pdf.cell(190, 9, f"PRESUPUESTO — {NOMBRE_EMPRESA}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(
+        190, 9,
+        texto_para_pdf(f"PRESUPUESTO - {NOMBRE_EMPRESA}"),
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
 
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(190, 7, f"Cliente: {cliente_nombre}  |  Vendedor: {vendedor}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(
+        190, 7,
+        texto_para_pdf(f"Cliente: {cliente_nombre}  |  Vendedor: {vendedor}"),
+        new_x="LMARGIN", new_y="NEXT", align="C",
+    )
     pdf.cell(190, 7, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
     pdf.ln(6)
 
@@ -323,13 +333,13 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
             pdf.set_font("Helvetica", "", 8)
 
         codigo_raw = str(item.get("id", item.get("codigo", "")))
-        codigo_display = codigo_raw if len(codigo_raw) <= 22 else codigo_raw[:21] + "…"
+        codigo_display = codigo_raw if len(codigo_raw) <= 22 else codigo_raw[:21] + "..."
         desc = str(item.get("descripcion", ""))[:48]
         cant = str(item.get("cantidad", 1))
         sub = f"${float(item.get('subtotal', 0)):,.2f}"
 
-        pdf.cell(w_cod, row_h, codigo_display, 1)
-        pdf.cell(w_desc, row_h, desc, 1)
+        pdf.cell(w_cod, row_h, texto_para_pdf(codigo_display), 1)
+        pdf.cell(w_desc, row_h, texto_para_pdf(desc), 1)
         pdf.cell(w_cant, row_h, cant, 1, align="C")
         pdf.cell(w_sub, row_h, sub, 1, align="R")
         pdf.ln(row_h)
@@ -340,7 +350,7 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
         descuento_monto = total * (descuento_aplicado / 100)
         pdf.cell(
             190, 8,
-            f"Descuento ({descuento_aplicado}%): -${descuento_monto:,.2f}",
+            texto_para_pdf(f"Descuento ({descuento_aplicado}%): -${descuento_monto:,.2f}"),
             new_x="LMARGIN", new_y="NEXT", align="R",
         )
 

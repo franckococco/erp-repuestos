@@ -5,11 +5,13 @@ from typing import Any, Dict, List, Optional
 from fpdf import FPDF
 
 from modulos.util_branding import NOMBRE_EMPRESA
+from modulos.util_pdf import texto_para_pdf
 
 
 def _get_str(d: Dict[str, Any], k: str, default: str = "") -> str:
     val = d.get(k)
-    return str(val) if val is not None else default
+    raw = str(val) if val is not None else default
+    return texto_para_pdf(raw)
 
 
 def _get_float(d: Dict[str, Any], k: str, default: float = 0.0) -> float:
