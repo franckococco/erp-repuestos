@@ -653,15 +653,18 @@ elif pagina == "inventario":
 elif pagina == "mostrador":
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
+        render_credenciales_arca,
         render_buscador_productos,
         render_acciones_carrito,
         render_presupuestos_guardados,
         render_ia_mostrador,
         render_confirmacion_pendiente_mostrador,
+        render_panel_coincidencias_mostrador,
     )
 
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
     render_seccion_cliente_mostrador()
+    render_credenciales_arca()
 
     vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
     render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
@@ -672,6 +675,7 @@ elif pagina == "mostrador":
         inv_completo = obtener_inventario_completo() or []
         if inv_completo:
             render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario)
+            render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
         else:
             st.info("El inventario está vacío. Agregue productos primero.")
 

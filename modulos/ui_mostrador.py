@@ -59,17 +59,44 @@ def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     }
 
 
-def _leer_secrets_facturador():
+def _defaults_desde_streamlit_secrets():
     cuit = ""
     clave = ""
-    config_ticket = dict(CONFIG_TICKET_DEFAULT)
     try:
-        cuit = st.secrets.get("FACTURADOR_CUIT", "") or ""
-        clave = st.secrets.get("FACTURADOR_CLAVE_SECRETA", "") or ""
+        cuit = str(st.secrets.get("FACTURADOR_CUIT", "") or "")
+        clave = str(st.secrets.get("FACTURADOR_CLAVE_SECRETA", "") or "")
         bloque = st.secrets.get("facturador", {})
         if isinstance(bloque, dict):
-            cuit = cuit or bloque.get("cuit", "")
-            clave = clave or bloque.get("clave", "")
+            cuit = cuit or str(bloque.get("cuit", "") or "")
+            clave = clave or str(bloque.get("clave", "") or "")
+    except Exception:
+        pass
+    return cuit.strip(), clave.strip()
+
+
+def init_credenciales_arca_session():
+    if st.session_state.get("_credenciales_arca_inited"):
+        return
+    cuit_def, clave_def = _defaults_desde_streamlit_secrets()
+    if "facturador_cuit_ui" not in st.session_state:
+        st.session_state.facturador_cuit_ui = cuit_def
+    if "facturador_clave_ui" not in st.session_state:
+        st.session_state.facturador_clave_ui = clave_def
+    st.session_state._credenciales_arca_inited = True
+
+
+def _leer_secrets_facturador():
+    init_credenciales_arca_session()
+    config_ticket = dict(CONFIG_TICKET_DEFAULT)
+    cuit = str(st.session_state.get("facturador_cuit_ui", "") or "").strip()
+    clave = str(st.session_state.get("facturador_clave_ui", "") or "").strip()
+    if not cuit or not clave:
+        cuit_sec, clave_sec = _defaults_desde_streamlit_secrets()
+        cuit = cuit or cuit_sec
+        clave = clave or clave_sec
+    try:
+        bloque = st.secrets.get("facturador", {})
+        if isinstance(bloque, dict):
             cfg = bloque.get("config_ticket")
             if isinstance(cfg, dict):
                 config_ticket.update(cfg)
@@ -80,7 +107,41 @@ def _leer_secrets_facturador():
         pass
     if cuit and not config_ticket.get("cuit_emisor"):
         config_ticket["cuit_emisor"] = cuit
-    return str(cuit).strip(), str(clave).strip(), config_ticket
+    return cuit, clave, config_ticket
+
+
+def render_credenciales_arca():
+    init_credenciales_arca_session()
+    cuit, clave, _ = _leer_secrets_facturador()
+    configurado = bool(cuit and clave)
+
+    with st.expander(
+        "🔑 Facturación ARCA — CUIT emisor y clave secreta",
+        expanded=not configurado,
+    ):
+        col_cuit, col_clave = st.columns(2)
+        with col_cuit:
+            st.text_input(
+                "CUIT emisor (facturador)",
+                key="facturador_cuit_ui",
+                placeholder="30716713179",
+            )
+        with col_clave:
+            st.text_input(
+                "Clave secreta",
+                key="facturador_clave_ui",
+                type="password",
+                placeholder="Clave del backend ARCA",
+            )
+        if configurado:
+            mask = f"{cuit[:2]}…{cuit[-2:]}" if len(cuit) >= 4 else cuit
+            st.caption(f"Listo para facturar · CUIT {mask}")
+        else:
+            st.warning("Completá ambos campos para habilitar «Emitir factura ARCA».")
+        st.caption(
+            "Quedan guardados mientras la app esté abierta. "
+            "Para dejarlos fijos: Settings → Secrets en Streamlit Cloud."
+        )
 
 
 def _tipo_comprobante_label(cbte: str) -> str:
@@ -258,6 +319,51 @@ def render_seccion_cliente_mostrador():
                     st.error("Nombre y CUIT/DNI son obligatorios.")
 
 
+def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito):
+    """Lista compacta de variantes encontradas (IA o búsqueda)."""
+    resultados = st.session_state.get("resultados_ia_mostrador")
+    if not resultados:
+        return
+
+    col_msg, col_x = st.columns([11, 1])
+    with col_msg:
+        st.caption(st.session_state.get("msg_ia_mostrador", "Coincidencias"))
+    with col_x:
+        if st.button("✕", key="cerrar_coinc_most", help="Cerrar coincidencias"):
+            st.session_state.resultados_ia_mostrador = None
+            st.session_state.msg_ia_mostrador = None
+            st.rerun()
+
+    grupos_most = agrupar_por_maestro(resultados)
+    for gkey in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]["descripcion"]):
+        g = grupos_most[gkey]
+        titulo = f"{g['descripcion'][:45]} · {g['codigo']}"
+        if g.get("vehiculo"):
+            titulo += f" · {str(g['vehiculo'])[:20]}"
+        st.markdown(f"<p style='margin:0.2rem 0;font-size:0.85rem;font-weight:600'>{titulo}</p>", unsafe_allow_html=True)
+        for res in g["variantes"]:
+            marca_res = res.get("marca", res.get("condicion", ""))
+            precio_f = float(res.get("precio_venta", 0))
+            stock = res.get("stock", 0)
+            rid = res.get("id", "N")
+            c_txt, c_btn = st.columns([6, 1])
+            with c_txt:
+                st.markdown(
+                    f"<span style='font-size:0.8rem;color:#555'>"
+                    f"{marca_res} · {stock} u. · ${precio_f:,.0f}</span>",
+                    unsafe_allow_html=True,
+                )
+            with c_btn:
+                if st.button("➕", key=f"btn_add_most_{rid}", help="Agregar al carrito"):
+                    exito, msj_db = agregar_al_carrito(str(vendedor), rid, 1)
+                    if exito:
+                        st.session_state.resultados_ia_mostrador = None
+                        st.session_state.msg_ia_mostrador = None
+                        st.rerun()
+                    else:
+                        st.error(msj_db)
+
+
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
     busqueda = st.text_input(
         "Buscar por código, descripción, vehículo o marca",
@@ -404,7 +510,7 @@ def _set_forma_pago(vendedor, forma):
 def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, forma_pago):
     cuit_fact, clave_fact, config_ticket = _leer_secrets_facturador()
     if not cuit_fact or not clave_fact:
-        return False, "Configurá FACTURADOR_CUIT y FACTURADOR_CLAVE_SECRETA en Streamlit Secrets."
+        return False, "Completá CUIT emisor y clave secreta en «Facturación ARCA» (arriba en Mostrador)."
 
     ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
     if not ok_val:
@@ -642,7 +748,7 @@ def render_ia_mostrador(
                     else:
                         cuit_fact, clave_fact, _ = _leer_secrets_facturador()
                         if not cuit_fact or not clave_fact:
-                            st.error("Falta configurar credenciales ARCA en Streamlit Secrets.")
+                            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
                         else:
                             ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
                             if not ok_val:
@@ -694,30 +800,7 @@ def render_ia_mostrador(
                     st.info(msg)
                     st.session_state.resultados_ia_mostrador = None
 
-    if st.session_state.get("resultados_ia_mostrador"):
-        st.markdown(f"### {st.session_state.msg_ia_mostrador}")
-        grupos_most = agrupar_por_maestro(st.session_state.resultados_ia_mostrador)
-        for key in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]["descripcion"]):
-            g = grupos_most[key]
-            st.markdown(f"**{g['descripcion']}** ({g['vehiculo']}) — Cód. {g['codigo']}")
-            for res in g["variantes"]:
-                precio_f = float(res.get("precio_venta", 0))
-                marca_res = res.get("marca", res.get("condicion", ""))
-                btn_label = (
-                    f"➕ {marca_res}: {res.get('stock', 0)} u. — ${precio_f:,.2f}"
-                )
-                if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
-                    exito, msj_db = agregar_al_carrito(str(vendedor), res.get("id"), 1)
-                    if exito:
-                        st.success("🛒 Agregado al carrito!")
-                        st.session_state.resultados_ia_mostrador = None
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Error: {msj_db}")
-
-        if st.button("❌ Cancelar Búsqueda", key="btn_cancel_search_most"):
-            st.session_state.resultados_ia_mostrador = None
-            st.rerun()
+    render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
 
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
@@ -781,7 +864,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
                 st.error(msj)
 
     if not puede_facturar:
-        col_fc.caption("Secrets: FACTURADOR_CUIT + FACTURADOR_CLAVE_SECRETA")
+        col_fc.caption("Completá CUIT y clave en «Facturación ARCA» arriba.")
 
     pdf_bytes = generar_pdf_presupuesto(
         str(vendedor), carrito, total_bruto,
