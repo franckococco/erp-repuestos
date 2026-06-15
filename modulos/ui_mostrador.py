@@ -15,9 +15,15 @@ from modulos.db_firebase import (
     confirmar_venta,
     validar_carrito_para_venta,
     guardar_comprobante_arca,
+    guardar_presupuesto,
+    listar_presupuestos_guardados,
+    reabrir_presupuesto_en_carrito,
+    actualizar_estado_presupuesto,
+    eliminar_presupuesto_guardado,
 )
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
+from modulos.util_fechas import formatear_fecha_ar
 
 
 CONFIG_TICKET_DEFAULT = {
@@ -74,6 +80,104 @@ def _leer_secrets_facturador():
 
 def _tipo_comprobante_label(cbte: str) -> str:
     return "Factura A" if str(cbte) == "1" else "Factura B"
+
+
+def _cerrar_presupuesto_cargado(estado: str):
+    pres_id = st.session_state.get("presupuesto_cargado_id")
+    if pres_id:
+        actualizar_estado_presupuesto(pres_id, estado)
+        st.session_state.presupuesto_cargado_id = None
+
+
+def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
+    with st.expander("📁 Presupuestos guardados", expanded=False):
+        solo_abiertos = st.checkbox("Solo abiertos", value=True, key="pres_solo_abiertos")
+        lista = listar_presupuestos_guardados(solo_abiertos=solo_abiertos, limite=30)
+
+        if not lista:
+            st.info("No hay presupuestos guardados.")
+            return
+
+        filas = []
+        for p in lista:
+            cli = p.get("cliente") or {}
+            filas.append({
+                "ID": p.get("id", "")[:8],
+                "Fecha": formatear_fecha_ar(p.get("creado")),
+                "Cliente": cli.get("nombre", "—"),
+                "Total": f"${float(p.get('total_final', 0)):,.2f}",
+                "Estado": p.get("estado", "abierto"),
+                "Vendedor": p.get("vendedor", "—"),
+            })
+        st.dataframe(filas, use_container_width=True, hide_index=True)
+
+        opciones = {p["id"]: p for p in lista}
+        sel_id = st.selectbox(
+            "Seleccionar presupuesto",
+            options=list(opciones.keys()),
+            format_func=lambda x: (
+                f"{x[:8]}… · {(opciones[x].get('cliente') or {}).get('nombre', '')} · "
+                f"${float(opciones[x].get('total_final', 0)):,.0f} · {opciones[x].get('estado', '')}"
+            ),
+            key="pres_sel_detalle",
+        )
+        pres = opciones.get(sel_id) or {}
+        if pres.get("nota"):
+            st.caption(f"Nota: {pres['nota']}")
+
+        col_r, col_pdf, col_anu, col_del = st.columns(4)
+        if col_r.button("↩️ Reabrir en carrito", use_container_width=True, key="pres_reabrir"):
+            ok, msj, cliente = reabrir_presupuesto_en_carrito(str(vendedor), sel_id, reemplazar=True)
+            if ok:
+                st.session_state.cliente_activo = normalizar_cliente_activo(cliente)
+                st.session_state.presupuesto_cargado_id = sel_id
+                if "advertencias" in msj.lower() or "stock" in msj.lower():
+                    st.warning(msj)
+                else:
+                    st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
+
+        items_pres = pres.get("items") or []
+        cli_pres = pres.get("cliente") or {}
+        desc_pres = float(cli_pres.get("descuento", 0))
+        total_bruto_pres = float(pres.get("total_bruto", 0))
+        pdf_pres = generar_pdf_presupuesto(
+            pres.get("vendedor", vendedor),
+            items_pres,
+            total_bruto_pres,
+            cli_pres.get("nombre", "Particular"),
+            desc_pres,
+        )
+        col_pdf.download_button(
+            "📄 PDF",
+            pdf_pres,
+            f"Presupuesto_{sel_id[:8]}.pdf",
+            "application/pdf",
+            use_container_width=True,
+            key="pres_dl_pdf",
+        )
+
+        if col_anu.button("Anular", use_container_width=True, key="pres_anular"):
+            ok, msj = actualizar_estado_presupuesto(sel_id, "anulado")
+            if ok:
+                if st.session_state.get("presupuesto_cargado_id") == sel_id:
+                    st.session_state.presupuesto_cargado_id = None
+                st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
+
+        if col_del.button("🗑️ Eliminar", use_container_width=True, key="pres_eliminar"):
+            ok, msj = eliminar_presupuesto_guardado(sel_id)
+            if ok:
+                if st.session_state.get("presupuesto_cargado_id") == sel_id:
+                    st.session_state.presupuesto_cargado_id = None
+                st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
 
 
 def render_seccion_cliente_mostrador():
@@ -289,6 +393,21 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
         st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
     st.write(f"## TOTAL: ${total_final:,.2f}")
 
+    pres_id = st.session_state.get("presupuesto_cargado_id")
+    if pres_id:
+        st.caption(f"Presupuesto cargado: `{pres_id[:8]}…`")
+
+    nota_pres = st.text_input("Nota interna (opcional, al guardar)", key=f"nota_pres_{vendedor}")
+    if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}"):
+        ok, msj, nuevo_id = guardar_presupuesto(
+            str(vendedor), st.session_state.cliente_activo, nota_pres
+        )
+        if ok:
+            st.session_state.presupuesto_cargado_id = nuevo_id
+            st.success(msj)
+        else:
+            st.error(msj)
+
     forma_pago = st.selectbox(
         "Forma de pago (factura ARCA)",
         ["Contado", "Transferencia", "Tarjeta", "Cheque", "MercadoPago"],
@@ -300,6 +419,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
     if col_cob.button("✅ Confirmar venta", type="primary", use_container_width=True):
         exito, msj = confirmar_venta(str(vendedor))
         if exito:
+            _cerrar_presupuesto_cargado("vendido")
             st.success(msj)
             st.rerun()
         else:
@@ -348,6 +468,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
                             guardar_comprobante_arca(
                                 vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
                             )
+                            _cerrar_presupuesto_cargado("facturado")
                             st.session_state.factura_arca_reciente = {
                                 "respuesta": datos_resp,
                                 "pdf_ticket": pdf_ticket,

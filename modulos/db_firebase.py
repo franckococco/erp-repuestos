@@ -338,6 +338,120 @@ def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pag
         "fecha": datetime.now(timezone.utc),
     })
 
+
+# --- PRESUPUESTOS GUARDADOS (mostrador) ---
+def guardar_presupuesto(vendedor, cliente_activo, nota=""):
+    carrito = obtener_carrito(vendedor)
+    if not carrito:
+        return False, "El carrito está vacío.", None
+
+    total_bruto = sum(float(i.get("subtotal", 0)) for i in carrito)
+    desc_porc = float((cliente_activo or {}).get("descuento", 0.0))
+    total_final = total_bruto * (1 - desc_porc / 100.0)
+    cli = cliente_db_a_activo(cliente_activo if isinstance(cliente_activo, dict) else {})
+
+    items_snap = []
+    for item in carrito:
+        items_snap.append({
+            "id": item.get("id"),
+            "id_maestro": item.get("id_maestro"),
+            "marca": item.get("marca"),
+            "descripcion": item.get("descripcion"),
+            "precio_unitario": float(item.get("precio_unitario", 0)),
+            "cantidad": int(item.get("cantidad", 0)),
+            "subtotal": float(item.get("subtotal", 0)),
+        })
+
+    ahora = datetime.now(timezone.utc)
+    ref = get_db().collection("presupuestos_guardados").document()
+    ref.set({
+        "vendedor": str(vendedor),
+        "cliente": cli,
+        "items": items_snap,
+        "total_bruto": total_bruto,
+        "total_final": total_final,
+        "descuento_pct": desc_porc,
+        "estado": "abierto",
+        "nota": str(nota or "").strip(),
+        "creado": ahora,
+        "actualizado": ahora,
+    })
+    return True, f"Presupuesto guardado ({ref.id[:8]}…).", ref.id
+
+
+def listar_presupuestos_guardados(solo_abiertos=False, limite=40):
+    fetch_lim = limite * 5 if solo_abiertos else limite
+    docs = (
+        get_db().collection("presupuestos_guardados")
+        .order_by("creado", direction=firestore.Query.DESCENDING)  # type: ignore
+        .limit(fetch_lim)
+        .stream()
+    )
+    out = []
+    for d in docs:
+        data = d.to_dict() or {}
+        if solo_abiertos and data.get("estado") != "abierto":
+            continue
+        out.append({"id": d.id, **data})
+        if len(out) >= limite:
+            break
+    return out
+
+
+def obtener_presupuesto_guardado(pres_id):
+    if not pres_id:
+        return None
+    doc = get_db().collection("presupuestos_guardados").document(str(pres_id)).get()
+    if not doc.exists:
+        return None
+    return {"id": doc.id, **(doc.to_dict() or {})}
+
+
+def actualizar_estado_presupuesto(pres_id, estado):
+    estados_ok = ("abierto", "vendido", "facturado", "anulado")
+    est = str(estado).strip().lower()
+    if est not in estados_ok:
+        return False, "Estado inválido."
+    ref = get_db().collection("presupuestos_guardados").document(str(pres_id))
+    if not ref.get().exists:
+        return False, "Presupuesto no encontrado."
+    ref.update({"estado": est, "actualizado": datetime.now(timezone.utc)})
+    return True, "Estado actualizado."
+
+
+def eliminar_presupuesto_guardado(pres_id):
+    ref = get_db().collection("presupuestos_guardados").document(str(pres_id))
+    if not ref.get().exists:
+        return False, "Presupuesto no encontrado."
+    ref.delete()
+    return True, "Presupuesto eliminado."
+
+
+def reabrir_presupuesto_en_carrito(vendedor, pres_id, reemplazar=True):
+    pres = obtener_presupuesto_guardado(pres_id)
+    if not pres:
+        return False, "Presupuesto no encontrado.", None
+    if pres.get("estado") not in ("abierto", None, ""):
+        return False, f"El presupuesto ya está marcado como {pres.get('estado')}.", None
+
+    if reemplazar:
+        vaciar_carrito(vendedor)
+
+    errores = []
+    for item in pres.get("items") or []:
+        id_prod = item.get("id")
+        cant = int(item.get("cantidad", 1))
+        if not id_prod:
+            continue
+        ok, msg = agregar_al_carrito(vendedor, id_prod, cant)
+        if not ok:
+            errores.append(f"{item.get('descripcion', id_prod)}: {msg}")
+
+    cliente = pres.get("cliente") or cliente_consumidor_final()
+    if errores:
+        return True, "Cargado con advertencias de stock:\n" + "\n".join(errores), cliente
+    return True, "Presupuesto cargado en el carrito.", cliente
+
 def eliminar_cliente(cuit_dni):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     get_db().collection("clientes").document(id_cli).delete()

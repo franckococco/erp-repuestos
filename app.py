@@ -332,6 +332,8 @@ if "cliente_activo" not in st.session_state:
     st.session_state.cliente_activo = cliente_consumidor_final()
 if "factura_arca_reciente" not in st.session_state:
     st.session_state.factura_arca_reciente = None
+if "presupuesto_cargado_id" not in st.session_state:
+    st.session_state.presupuesto_cargado_id = None
 if "resultados_ia_mostrador" not in st.session_state:
     st.session_state.resultados_ia_mostrador = None
 if "msg_ia_mostrador" not in st.session_state:
@@ -650,12 +652,14 @@ elif pagina == "mostrador":
         render_seccion_cliente_mostrador,
         render_buscador_productos,
         render_acciones_carrito,
+        render_presupuestos_guardados,
     )
 
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
     render_seccion_cliente_mostrador()
 
     vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
+    render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
 
     t_buscar, t_manual, t_ia, t_qr = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
 
