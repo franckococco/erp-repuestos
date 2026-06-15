@@ -325,18 +325,41 @@ def cliente_db_a_activo(datos: dict) -> dict:
 
 
 def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pago, total):
-    get_db().collection("comprobantes_arca").add({
+    ref = get_db().collection("comprobantes_arca").document()
+    ref.set({
         "vendedor": str(vendedor),
         "cliente": cliente,
         "cae": respuesta_arca.get("cae"),
         "vencimiento_cae": respuesta_arca.get("vencimiento_cae"),
         "punto_venta": respuesta_arca.get("punto_venta"),
         "numero_factura": respuesta_arca.get("numero_factura"),
+        "nombre_empresa": respuesta_arca.get("nombre_empresa"),
+        "direccion_empresa": respuesta_arca.get("direccion_empresa"),
         "items": items,
         "forma_pago": forma_pago,
         "total": float(total),
         "fecha": datetime.now(timezone.utc),
     })
+    return ref.id
+
+
+def listar_comprobantes_arca(limite=40):
+    docs = (
+        get_db().collection("comprobantes_arca")
+        .order_by("fecha", direction=firestore.Query.DESCENDING)  # type: ignore
+        .limit(limite)
+        .stream()
+    )
+    return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+
+
+def obtener_comprobante_arca(comp_id):
+    if not comp_id:
+        return None
+    doc = get_db().collection("comprobantes_arca").document(str(comp_id)).get()
+    if not doc.exists:
+        return None
+    return {"id": doc.id, **(doc.to_dict() or {})}
 
 
 # --- PRESUPUESTOS GUARDADOS (mostrador) ---

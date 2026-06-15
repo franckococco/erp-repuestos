@@ -17,6 +17,7 @@ from modulos.db_firebase import (
     guardar_comprobante_arca,
     guardar_presupuesto,
     listar_presupuestos_guardados,
+    listar_comprobantes_arca,
     reabrir_presupuesto_en_carrito,
     actualizar_estado_presupuesto,
     eliminar_presupuesto_guardado,
@@ -451,47 +452,148 @@ def _mostrar_boton_imprimir_pdf(pdf_bytes):
     )
 
 
+def _formato_nro_comprobante(datos):
+    try:
+        return (
+            f"{int(float(datos.get('punto_venta', 0))):04d}-"
+            f"{int(float(datos.get('numero_factura', 0))):08d}"
+        )
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _cliente_para_pdf(cliente):
+    cli = cliente if isinstance(cliente, dict) else {}
+    cbte = str(cli.get("cbte_tipo") or cli.get("tipo_comprobante") or "6")
+    return {
+        "cuit": cli.get("cuit", "00000000000"),
+        "nombre": cli.get("nombre", "CONSUMIDOR FINAL"),
+        "cbte_tipo": cbte,
+    }
+
+
+def _respuesta_para_pdf(comp):
+    return {
+        "cae": comp.get("cae"),
+        "vencimiento_cae": comp.get("vencimiento_cae"),
+        "punto_venta": comp.get("punto_venta"),
+        "numero_factura": comp.get("numero_factura"),
+        "nombre_empresa": comp.get("nombre_empresa"),
+        "direccion_empresa": comp.get("direccion_empresa"),
+    }
+
+
+def regenerar_pdfs_comprobante(comp):
+    _, _, cfg = _leer_secrets_facturador()
+    datos_resp = _respuesta_para_pdf(comp)
+    datos_cliente = _cliente_para_pdf(comp.get("cliente"))
+    items = comp.get("items") or []
+    ticket = crear_ticket(datos_resp, datos_cliente, items, cfg)
+    a4 = crear_a4(datos_resp, datos_cliente, items, cfg)
+    return ticket, a4, datos_resp
+
+
+def _render_botones_factura_pdf(nro, pdf_ticket, pdf_a4, key_prefix):
+    col_t, col_a = st.columns(2)
+    with col_t:
+        st.markdown("**Ticket 58 mm**")
+        if pdf_ticket:
+            _mostrar_boton_imprimir_pdf(pdf_ticket)
+            st.download_button(
+                "Descargar ticket",
+                pdf_ticket,
+                file_name=f"Ticket_{nro}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"{key_prefix}_ticket",
+            )
+    with col_a:
+        st.markdown("**Factura A4**")
+        if pdf_a4:
+            _mostrar_boton_imprimir_pdf(pdf_a4)
+            st.download_button(
+                "Descargar A4",
+                pdf_a4,
+                file_name=f"Factura_{nro}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"{key_prefix}_a4",
+            )
+
+
 def render_factura_arca_exitosa():
     rec = st.session_state.get("factura_arca_reciente")
     if not rec:
         return False
 
-    st.success("✅ Factura ARCA emitida y stock descontado.")
     datos = rec.get("respuesta", {})
-    nro = (
-        f"{int(float(datos.get('punto_venta', 0))):04d}-"
-        f"{int(float(datos.get('numero_factura', 0))):08d}"
-    )
-    st.caption(f"Comprobante {nro} · CAE {datos.get('cae', '')}")
+    nro = _formato_nro_comprobante(datos)
+    cae = datos.get("cae", "")
+    vto = datos.get("vencimiento_cae", "")
+    total = rec.get("total")
 
-    col_t, col_a = st.columns(2)
-    with col_t:
-        st.markdown("**Ticket (58mm)**")
-        if rec.get("pdf_ticket"):
-            _mostrar_boton_imprimir_pdf(rec["pdf_ticket"])
-            st.download_button(
-                "Descargar ticket",
-                rec["pdf_ticket"],
-                file_name=f"Ticket_{nro}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-    with col_a:
-        st.markdown("**Formato A4**")
-        if rec.get("pdf_a4"):
-            _mostrar_boton_imprimir_pdf(rec["pdf_a4"])
-            st.download_button(
-                "Descargar A4",
-                rec["pdf_a4"],
-                file_name=f"Factura_{nro}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-
-    if st.button("Cerrar comprobante", key="cerrar_factura_arca"):
-        st.session_state.factura_arca_reciente = None
-        st.rerun()
+    with st.container(border=True):
+        st.success("Factura ARCA autorizada — CAE otorgado por AFIP")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Nro. comprobante", nro)
+        c2.metric("CAE", str(cae) if cae else "—")
+        c3.metric("Vto. CAE", str(vto) if vto else "—")
+        if total is not None:
+            c4.metric("Total", f"${float(total):,.2f}")
+        _render_botones_factura_pdf(nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), "fact_reciente")
+        if st.button("Cerrar aviso", key="cerrar_factura_arca"):
+            st.session_state.factura_arca_reciente = None
+            st.rerun()
     return True
+
+
+def render_historial_facturas_arca():
+    with st.expander("Facturas ARCA emitidas — reimprimir", expanded=False):
+        lista = listar_comprobantes_arca(40)
+        if not lista:
+            st.info("Todavía no hay facturas ARCA guardadas.")
+            return
+
+        filas = []
+        for c in lista:
+            cli = c.get("cliente") or {}
+            filas.append({
+                "Nro": _formato_nro_comprobante(c),
+                "Fecha": formatear_fecha_ar(c.get("fecha")),
+                "Cliente": cli.get("nombre", "—"),
+                "CAE": c.get("cae", "—"),
+                "Total": f"${float(c.get('total', 0)):,.2f}",
+            })
+        st.dataframe(filas, use_container_width=True, hide_index=True)
+
+        opciones = {x["id"]: x for x in lista}
+        sel_id = st.selectbox(
+            "Elegir factura para reimprimir",
+            options=list(opciones.keys()),
+            format_func=lambda x: (
+                f"{_formato_nro_comprobante(opciones[x])} · "
+                f"{(opciones[x].get('cliente') or {}).get('nombre', '')} · "
+                f"CAE {opciones[x].get('cae', '')}"
+            ),
+            key="hist_arca_sel",
+        )
+        comp = opciones.get(sel_id) or {}
+        st.caption(
+            f"Vto. CAE: {comp.get('vencimiento_cae', '—')} · "
+            f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
+        )
+
+        if st.button("Mostrar PDFs para imprimir", key="hist_arca_reimprimir", type="primary"):
+            pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
+            nro = _formato_nro_comprobante(datos)
+            st.session_state.factura_arca_reciente = {
+                "respuesta": datos,
+                "pdf_ticket": pdf_t,
+                "pdf_a4": pdf_a,
+                "total": comp.get("total"),
+                "comprobante_id": sel_id,
+            }
+            st.rerun()
 
 
 def _forma_pago_actual(vendedor):
@@ -544,7 +646,7 @@ def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, form
             "Revisá inventario manualmente."
         )
 
-    guardar_comprobante_arca(
+    comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
     _cerrar_presupuesto_cargado("facturado")
@@ -552,6 +654,8 @@ def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, form
         "respuesta": datos_resp,
         "pdf_ticket": pdf_ticket,
         "pdf_a4": pdf_a4,
+        "total": total_final,
+        "comprobante_id": comp_id,
     }
     return True, "Factura ARCA emitida y stock descontado."
 
@@ -804,9 +908,6 @@ def render_ia_mostrador(
 
 
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
-    if render_factura_arca_exitosa():
-        st.divider()
-
     st.table(carrito)
     st.write(f"### Subtotal: ${total_bruto:,.2f}")
     if desc_porc > 0:

@@ -289,26 +289,28 @@ def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular",
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
+    y_cursor = 10
     logo_pdf = ruta_logo_hafid()
     if logo_pdf:
-        pdf.image(logo_pdf, x=85, y=10, w=40)
-        pdf.ln(32)
+        pdf.image(logo_pdf, x=10, y=8, h=14)
+        y_cursor = 26
 
-    pdf.set_font("Helvetica", "B", 15)
+    pdf.set_xy(10, y_cursor)
+    pdf.set_font("Helvetica", "B", 14)
     pdf.cell(
-        190, 9,
+        190, 8,
         texto_para_pdf(f"PRESUPUESTO - {NOMBRE_EMPRESA}"),
-        new_x="LMARGIN", new_y="NEXT", align="C",
+        new_x="LMARGIN", new_y="NEXT", align="L",
     )
 
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(
-        190, 7,
+        190, 6,
         texto_para_pdf(f"Cliente: {cliente_nombre}  |  Vendedor: {vendedor}"),
-        new_x="LMARGIN", new_y="NEXT", align="C",
+        new_x="LMARGIN", new_y="NEXT", align="L",
     )
-    pdf.cell(190, 7, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="C")
-    pdf.ln(6)
+    pdf.cell(190, 6, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="L")
+    pdf.ln(8)
 
     w_cod, w_desc, w_cant, w_sub = 40, 85, 20, 45
     row_h = 8
@@ -695,11 +697,14 @@ elif pagina == "mostrador":
         render_ia_mostrador,
         render_confirmacion_pendiente_mostrador,
         render_panel_coincidencias_mostrador,
+        render_factura_arca_exitosa,
+        render_historial_facturas_arca,
     )
 
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
     render_seccion_cliente_mostrador()
     render_credenciales_arca()
+    render_historial_facturas_arca()
 
     vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
     render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
@@ -759,6 +764,8 @@ elif pagina == "mostrador":
         dp = float(st.session_state.cliente_activo.get("descuento", 0))
         tf = tb * (1 - dp / 100)
         render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
+
+    render_factura_arca_exitosa()
 
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []
