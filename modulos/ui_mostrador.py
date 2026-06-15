@@ -185,6 +185,18 @@ def _cerrar_presupuesto_cargado(estado: str):
         st.session_state.presupuesto_cargado_id = None
 
 
+def limpiar_venta_mostrador(vendedor, reset_cliente=True):
+    """Vacía carrito y flags de sesión tras cerrar una venta."""
+    vaciar_carrito(str(vendedor))
+    st.session_state.mostrador_listo_para_ticket = False
+    st.session_state.mostrador_accion_pendiente = None
+    st.session_state[f"mostrador_cart_rev_{vendedor}"] = (
+        int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)) + 1
+    )
+    if reset_cliente:
+        st.session_state.cliente_activo = cliente_consumidor_final()
+
+
 def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
     with st.expander("📁 Presupuestos guardados", expanded=False):
         solo_abiertos = st.checkbox("Solo abiertos", value=True, key="pres_solo_abiertos")
@@ -714,6 +726,7 @@ def ejecutar_emitir_factura_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
     _cerrar_presupuesto_cargado("facturado")
+    limpiar_venta_mostrador(vendedor, reset_cliente=True)
     st.session_state.mostrador_voz_solo_ticket = bool(solo_ticket)
     st.session_state.factura_arca_reciente = {
         "respuesta": datos_resp,
@@ -722,7 +735,7 @@ def ejecutar_emitir_factura_arca(
         "total": total_final,
         "comprobante_id": comp_id,
     }
-    return True, "Factura ARCA emitida y stock descontado."
+    return True, "Factura ARCA emitida. Carrito listo para la próxima venta."
 
 
 def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False):
@@ -730,8 +743,6 @@ def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pag
         ok, msj = ejecutar_emitir_factura_arca(
             vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
         )
-    if ok:
-        st.session_state.mostrador_listo_para_ticket = False
     return ok, msj
 
 
@@ -743,25 +754,20 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         exito, msj = confirmar_venta(str(vendedor))
         if exito:
             _cerrar_presupuesto_cargado("vendido")
+            limpiar_venta_mostrador(vendedor, reset_cliente=True)
         return exito, msj
 
     if tipo == "facturar":
         with st.spinner("Solicitando CAE a ARCA/AFIP…"):
-            ok, msj = ejecutar_emitir_factura_arca(
+            return ejecutar_emitir_factura_arca(
                 vendedor, carrito, total_final, desc_porc, forma_pago
             )
-        if ok:
-            st.session_state.mostrador_listo_para_ticket = False
-        return ok, msj
 
     if tipo == "imprimir_ticket":
         with st.spinner("Solicitando CAE e imprimiendo ticket…"):
-            ok, msj = ejecutar_emitir_factura_arca(
+            return ejecutar_emitir_factura_arca(
                 vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
             )
-        if ok:
-            st.session_state.mostrador_listo_para_ticket = False
-        return ok, msj
 
     if tipo == "guardar_presupuesto":
         ok, msj, nuevo_id = guardar_presupuesto(
@@ -772,8 +778,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         return ok, msj
 
     if tipo == "vaciar_carrito":
-        vaciar_carrito(str(vendedor))
-        st.session_state.mostrador_listo_para_ticket = False
+        limpiar_venta_mostrador(vendedor, reset_cliente=False)
         return True, "Carrito vaciado."
 
     return False, "Acción pendiente desconocida."
@@ -1124,7 +1129,7 @@ def render_carrito_grilla(vendedor, carrito):
         },
         use_container_width=True,
         hide_index=True,
-        key=f"cart_editor_{vendedor}",
+        key=f"cart_editor_{vendedor}_{st.session_state.get(f'mostrador_cart_rev_{vendedor}', 0)}",
     )
 
     act1, act2, act3 = st.columns([2, 2, 3])
@@ -1245,14 +1250,13 @@ def render_panel_cobro_mostrador(
                 exito, msj = confirmar_venta(str(vendedor))
                 if exito:
                     _cerrar_presupuesto_cargado("vendido")
-                    st.session_state.mostrador_listo_para_ticket = False
+                    limpiar_venta_mostrador(vendedor, reset_cliente=True)
                     st.success(msj)
                     st.rerun()
                 else:
                     st.error(msj)
             if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
-                vaciar_carrito(str(vendedor))
-                st.session_state.mostrador_listo_para_ticket = False
+                limpiar_venta_mostrador(vendedor, reset_cliente=False)
                 st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)

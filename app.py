@@ -794,20 +794,21 @@ elif pagina == "mostrador":
             render_factura_arca_exitosa("panel")
 
         carrito = obtener_carrito(str(vendedor)) or []
-        if carrito:
+        factura_emitida = bool(st.session_state.get("factura_arca_reciente"))
+        if carrito and not factura_emitida:
             total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
             desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
             total_final = total_bruto * (1 - desc_porc / 100)
             render_acciones_carrito(
                 vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
             )
-        elif not st.session_state.get("factura_arca_reciente"):
+        elif not factura_emitida:
             st.info("Carrito vacío — buscá productos o usá la IA de voz.")
 
         render_historial_facturas_arca()
 
     carrito_full = obtener_carrito(str(vendedor)) or []
-    if carrito_full:
+    if carrito_full and not st.session_state.get("factura_arca_reciente"):
         st.divider()
         render_carrito_grilla(vendedor, carrito_full)
 

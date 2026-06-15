@@ -1733,6 +1733,7 @@ def confirmar_venta(vendedor):
     if not ok:
         return False, msg
     _descontar_stock_lineas_carrito(vendedor, lineas_ok)
+    vaciar_carrito(vendedor)
     return True, "Venta confirmada."
 
 def borrar_toda_la_base_de_datos():
