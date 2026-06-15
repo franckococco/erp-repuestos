@@ -27,6 +27,8 @@ from modulos.db_firebase import (
     eliminar_presupuesto_guardado,
     obtener_credenciales_arca,
     guardar_credenciales_arca,
+    obtener_config_ticket_mostrador,
+    guardar_config_ticket_mostrador,
 )
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
@@ -48,11 +50,17 @@ CONFIG_TICKET_DEFAULT = {
     "margen_x": 2.0,
     "margen_y": 2.0,
     "font_size": 8,
+    "nombre_empresa": "HAFID AUTOPARTES",
+    "direccion": "",
     "condicion_iva": "IVA Responsable Inscripto",
     "cuit_emisor": "",
     "iibb": "Ingresos Brutos: A-76154",
     "inicio_act": "Inicio de Actividades: 02/05/2023",
     "leyenda_extra": "¡Gracias por su compra!",
+    "impresora_modo": "navegador",
+    "impresora_nombre": "",
+    "impresora_ip": "",
+    "impresora_puerto": 9100,
 }
 
 
@@ -103,26 +111,62 @@ def init_credenciales_arca_session():
     st.session_state._credenciales_arca_inited = True
 
 
+def _merge_config_ticket(base: dict) -> dict:
+    cfg = dict(CONFIG_TICKET_DEFAULT)
+    cfg.update({k: v for k, v in (base or {}).items() if v is not None and v != ""})
+    return cfg
+
+
+def _cargar_config_ticket_persistida() -> dict:
+    cfg = _merge_config_ticket({})
+    try:
+        fb = obtener_config_ticket_mostrador() or {}
+        cfg = _merge_config_ticket(fb)
+    except Exception:
+        pass
+    try:
+        bloque = st.secrets.get("facturador", {})
+        if isinstance(bloque, dict):
+            sec = bloque.get("config_ticket")
+            if isinstance(sec, dict):
+                cfg = _merge_config_ticket({**cfg, **sec})
+        sec_top = st.secrets.get("FACTURADOR_CONFIG_TICKET")
+        if isinstance(sec_top, dict):
+            cfg = _merge_config_ticket({**cfg, **sec_top})
+    except Exception:
+        pass
+    return cfg
+
+
+def init_config_ticket_session():
+    if st.session_state.get("_ticket_cfg_inited"):
+        return
+    cfg = _cargar_config_ticket_persistida()
+    for k, v in cfg.items():
+        st.session_state[f"ticket_cfg_{k}"] = v
+    st.session_state._ticket_cfg_inited = True
+
+
+def _config_ticket_desde_session() -> dict:
+    init_config_ticket_session()
+    out = dict(CONFIG_TICKET_DEFAULT)
+    for k in CONFIG_TICKET_DEFAULT:
+        sk = f"ticket_cfg_{k}"
+        if sk in st.session_state:
+            out[k] = st.session_state[sk]
+    return out
+
+
 def _leer_secrets_facturador():
     init_credenciales_arca_session()
-    config_ticket = dict(CONFIG_TICKET_DEFAULT)
+    init_config_ticket_session()
+    config_ticket = _config_ticket_desde_session()
     cuit = str(st.session_state.get("facturador_cuit_ui", "") or "").strip()
     clave = str(st.session_state.get("facturador_clave_ui", "") or "").strip()
     if not cuit or not clave:
         cuit_sec, clave_sec = _defaults_desde_streamlit_secrets()
         cuit = cuit or cuit_sec
         clave = clave or clave_sec
-    try:
-        bloque = st.secrets.get("facturador", {})
-        if isinstance(bloque, dict):
-            cfg = bloque.get("config_ticket")
-            if isinstance(cfg, dict):
-                config_ticket.update(cfg)
-        cfg_top = st.secrets.get("FACTURADOR_CONFIG_TICKET")
-        if isinstance(cfg_top, dict):
-            config_ticket.update(cfg_top)
-    except Exception:
-        pass
     if cuit and not config_ticket.get("cuit_emisor"):
         config_ticket["cuit_emisor"] = cuit
     return cuit, clave, config_ticket
@@ -172,6 +216,155 @@ def render_credenciales_arca():
                 "Quedan guardadas en Firebase al pulsar Guardar. "
                 "Alternativa permanente: Secrets en Streamlit Cloud."
             )
+
+
+def _listar_impresoras_instaladas():
+    """Solo funciona si la app corre en Windows local (no en Streamlit Cloud)."""
+    import sys
+    if sys.platform != "win32":
+        return []
+    try:
+        import win32print  # type: ignore
+        flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+        return sorted({p[2] for p in win32print.EnumPrinters(flags) if p[2]})
+    except Exception:
+        return []
+
+
+def render_config_ticket_mostrador():
+    """Encabezados del ticket e impresora preferida."""
+    init_config_ticket_session()
+
+    with st.expander("🧾 Configuración del ticket", expanded=False):
+        st.caption(
+            "Editá los textos que salen arriba y abajo del ticket fiscal. "
+            "Los cambios aplican al próximo comprobante que emitas."
+        )
+
+        impresoras = _listar_impresoras_instaladas()
+        en_nube = not impresoras
+
+        with st.form("form_config_ticket", clear_on_submit=False):
+            st.markdown("**Encabezado del comercio**")
+            nombre = st.text_input(
+                "Nombre / razón social",
+                key="ticket_cfg_nombre_empresa",
+                placeholder="HAFID AUTOPARTES",
+            )
+            direccion = st.text_area(
+                "Dirección",
+                key="ticket_cfg_direccion",
+                height=68,
+                placeholder="Calle, localidad, provincia",
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                cuit_t = st.text_input("CUIT emisor (en ticket)", key="ticket_cfg_cuit_emisor")
+                iibb = st.text_input("Ingresos brutos", key="ticket_cfg_iibb")
+            with c2:
+                inicio = st.text_input("Inicio de actividades", key="ticket_cfg_inicio_act")
+                cond_iva = st.text_input("Condición IVA", key="ticket_cfg_condicion_iva")
+
+            st.markdown("**Pie de ticket**")
+            leyenda = st.text_input(
+                "Leyenda final",
+                key="ticket_cfg_leyenda_extra",
+                placeholder="¡Gracias por su compra!",
+            )
+
+            st.markdown("**Impresora**")
+            if en_nube:
+                st.info(
+                    "La app en la nube **no puede ver las impresoras de tu PC**. "
+                    "Al imprimir se abre el diálogo del navegador y elegís la impresora ahí. "
+                    "Podés guardar acá el nombre o la IP para referencia."
+                )
+            else:
+                st.success("Impresoras detectadas en esta PC.")
+
+            modo_opts = {
+                "navegador": "Diálogo del navegador (recomendado)",
+                "red": "Impresora térmica por red (IP)",
+            }
+            st.radio(
+                "Modo de impresión",
+                ["navegador", "red"],
+                format_func=lambda x: modo_opts[x],
+                key="ticket_cfg_impresora_modo",
+                horizontal=True,
+            )
+            modo = st.session_state.get("ticket_cfg_impresora_modo", "navegador")
+
+            if modo == "navegador":
+                if impresoras:
+                    nombre_guardado = str(st.session_state.get("ticket_cfg_impresora_nombre", "") or "")
+                    opciones = list(impresoras)
+                    if nombre_guardado and nombre_guardado not in opciones:
+                        opciones = [nombre_guardado] + opciones
+                    st.selectbox(
+                        "Impresora instalada en esta PC",
+                        opciones,
+                        key="ticket_cfg_impresora_nombre",
+                    )
+                else:
+                    st.text_input(
+                        "Nombre de impresora (referencia)",
+                        key="ticket_cfg_impresora_nombre",
+                        placeholder="Ej: EPSON TM-T20",
+                        help="Configurala como predeterminada en Windows. Al imprimir, elegila en el diálogo del navegador.",
+                    )
+            else:
+                col_ip, col_puerto = st.columns([2, 1])
+                with col_ip:
+                    st.text_input(
+                        "IP de la impresora",
+                        key="ticket_cfg_impresora_ip",
+                        placeholder="192.168.1.100",
+                    )
+                with col_puerto:
+                    st.number_input(
+                        "Puerto",
+                        key="ticket_cfg_impresora_puerto",
+                        min_value=1,
+                        max_value=65535,
+                        step=1,
+                    )
+                st.text_input(
+                    "Nombre (opcional)",
+                    key="ticket_cfg_impresora_nombre",
+                    placeholder="Caja 1 — térmica depósito",
+                )
+                st.caption(
+                    "Impresión directa por red estará disponible en una próxima versión. "
+                    "Por ahora usá el modo navegador."
+                )
+
+            guardar = st.form_submit_button("💾 Guardar configuración del ticket", type="primary")
+
+        if guardar:
+            payload = _config_ticket_desde_session()
+            ok, msj = guardar_config_ticket_mostrador(payload)
+            if ok:
+                st.success(msj)
+            else:
+                st.error(msj)
+
+        cfg = _config_ticket_desde_session()
+        with st.container(border=True):
+            st.markdown("**Vista previa del encabezado**")
+            prev = [
+                str(cfg.get("nombre_empresa") or "—"),
+                str(cfg.get("direccion") or "").strip(),
+                f"CUIT: {cfg.get('cuit_emisor') or '—'}",
+                str(cfg.get("iibb") or ""),
+                str(cfg.get("inicio_act") or ""),
+                str(cfg.get("condicion_iva") or ""),
+                "────────────────",
+                "FACTURA B Nro: 0001-00000001",
+                "────────────────",
+                f"… {cfg.get('leyenda_extra') or ''}",
+            ]
+            st.code("\n".join(l for l in prev if l), language=None)
 
 
 def _tipo_comprobante_label(cbte: str) -> str:

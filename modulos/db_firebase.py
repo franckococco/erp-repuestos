@@ -1838,6 +1838,37 @@ def guardar_credenciales_arca(cuit, clave):
         return False, f"No se pudieron guardar: {e}"
 
 
+def obtener_config_ticket_mostrador():
+    """Textos del ticket y preferencia de impresora (persisten en Firebase)."""
+    try:
+        doc = get_db().collection("configuracion").document("mostrador_ticket").get()
+        if doc.exists:
+            return doc.to_dict() or {}
+    except Exception:
+        pass
+    return {}
+
+
+def guardar_config_ticket_mostrador(config: dict):
+    """Guarda encabezados del ticket e impresora preferida."""
+    if not isinstance(config, dict):
+        return False, "Configuración inválida."
+    permitidos = {
+        "nombre_empresa", "direccion", "condicion_iva", "iibb", "inicio_act",
+        "leyenda_extra", "cuit_emisor", "impresora_modo", "impresora_nombre",
+        "impresora_ip", "impresora_puerto",
+    }
+    limpio = {k: v for k, v in config.items() if k in permitidos and v is not None}
+    try:
+        get_db().collection("configuracion").document("mostrador_ticket").set({
+            **limpio,
+            "actualizado": datetime.now(timezone.utc),
+        }, merge=True)
+        return True, "Configuración del ticket guardada."
+    except Exception as e:
+        return False, f"No se pudo guardar: {e}"
+
+
 def invalidar_cache_datos():
     """Limpia caches de Streamlit tras cambios en inventario o proveedores."""
     _limpiar_cache_streamlit(obtener_inventario_completo)

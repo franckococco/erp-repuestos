@@ -697,6 +697,7 @@ elif pagina == "mostrador":
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
         render_credenciales_arca,
+        render_config_ticket_mostrador,
         render_buscador_productos,
         render_acciones_carrito,
         render_carrito_grilla,
@@ -719,6 +720,8 @@ elif pagina == "mostrador":
         render_seccion_cliente_mostrador()
     with bar_cred:
         render_credenciales_arca()
+
+    render_config_ticket_mostrador()
 
     vendedor = st.radio(
         "Punto de venta",

@@ -48,13 +48,19 @@ def crear_ticket(
     tipo_letra = "A" if es_factura_a else "B"
     ancho_util = 58.0 - (margen_x * 2)
 
-    pdf.set_font("Helvetica", "B", font_base + 2)
-    pdf.multi_cell(
-        ancho_util, 4, _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA), align="C"
+    nombre_emp = (
+        _get_str(config, "nombre_empresa", "")
+        or _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA)
+    )
+    dir_emp = (
+        _get_str(config, "direccion", "")
+        or _get_str(datos_respuesta, "direccion_empresa", "")
     )
 
+    pdf.set_font("Helvetica", "B", font_base + 2)
+    pdf.multi_cell(ancho_util, 4, nombre_emp, align="C")
+
     pdf.set_font("Helvetica", "", font_base - 1)
-    dir_emp = _get_str(datos_respuesta, "direccion_empresa", "")
     if dir_emp:
         pdf.multi_cell(ancho_util, 3, dir_emp, align="C")
 
