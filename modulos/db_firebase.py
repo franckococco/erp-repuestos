@@ -615,57 +615,115 @@ def obtener_producto_por_codigo(codigo_base):
     return None
 
 
-def _descomponer_id_variante(id_producto):
+def _ref_producto(id_m):
+    if not id_m:
+        return None
+    return get_db().collection("productos").document(str(id_m))
+
+
+@st.cache_data(ttl=45)
+def _indice_resolucion_productos():
     """
-    Separa ID variante (CODIGO_MARCA) probando prefijos contra Firebase.
+    Índice en memoria (desde inventario cacheado) para resolver CODIGO_MARCA
+    sin lecturas repetidas a Firestore por cada prefijo.
+    """
+    inventario = obtener_inventario_completo()
+    ids_maestro = set()
+    codigo_a_maestros = {}
+    variantes_por_maestro = {}
+    id_variante_exacto = {}
+    items_por_variante = {}
+
+    for item in inventario:
+        id_m = str(item.get("id_maestro") or "").strip().upper().replace("/", "-")
+        if not id_m:
+            continue
+        id_var = str(item.get("id") or "").strip().upper().replace("/", "-")
+        marca = item.get("marca")
+        codigo = str(item.get("codigo", id_m)).strip().upper().replace("/", "-")
+
+        ids_maestro.add(id_m)
+        if id_m not in codigo_a_maestros.get(codigo, []):
+            codigo_a_maestros.setdefault(codigo, []).append(id_m)
+
+        variantes_por_maestro.setdefault(id_m, {})[marca] = int(item.get("stock", 0))
+        id_variante_exacto[id_var] = (id_m, marca)
+        items_por_variante[(id_m, marca)] = {
+            "stock": int(item.get("stock", 0)),
+            "precio_venta": float(item.get("precio_venta", 0.0)),
+            "descripcion": str(item.get("descripcion", "")),
+        }
+
+    return {
+        "ids_maestro": ids_maestro,
+        "codigo_a_maestros": codigo_a_maestros,
+        "variantes_por_maestro": variantes_por_maestro,
+        "id_variante_exacto": id_variante_exacto,
+        "items_por_variante": items_por_variante,
+    }
+
+
+def _descomponer_id_variante(id_producto, indice=None):
+    """
+    Separa ID variante (CODIGO_MARCA) usando el índice en memoria.
     Soporta códigos maestros que contienen guion bajo (ej: ABC_123 + SKF).
     Retorna (id_maestro, marca_o_None, ref_prod_o_None).
     """
+    if indice is None:
+        indice = _indice_resolucion_productos()
+
+    ids_maestro = indice["ids_maestro"]
+    codigo_a_maestros = indice["codigo_a_maestros"]
+    variantes_por_maestro = indice["variantes_por_maestro"]
+    id_variante_exacto = indice["id_variante_exacto"]
+
     id_full = str(id_producto or "").strip().upper().replace("/", "-")
     if not id_full:
         return None, None, None
 
-    def doc_existe(id_cand):
-        ref = get_db().collection("productos").document(id_cand)
-        return ref, ref.get().exists
+    if id_full in id_variante_exacto:
+        id_m, marca = id_variante_exacto[id_full]
+        return id_m, marca, _ref_producto(id_m)
 
-    ref, ok = doc_existe(id_full)
-    if ok:
-        return id_full, None, ref
+    if id_full in ids_maestro:
+        return id_full, None, _ref_producto(id_full)
 
     if "_" not in id_full:
-        docs = get_db().collection("productos").where("codigo", "==", id_full).limit(1).get()
-        if docs:
-            ref = get_db().collection("productos").document(docs[0].id)
-            return docs[0].id, None, ref
+        maestros = codigo_a_maestros.get(id_full, [])
+        if len(maestros) == 1:
+            return maestros[0], None, _ref_producto(maestros[0])
         return id_full, None, None
 
     partes = id_full.split("_")
     for i in range(len(partes) - 1, 0, -1):
         id_cand = "_".join(partes[:i])
         marca_cand = "_".join(partes[i:])
-        ref, ok = doc_existe(id_cand)
-        if ok:
-            datos = ref.get().to_dict() or {}
-            variantes = datos.get("variantes", {})
-            if variantes and marca_cand in variantes:
-                return id_cand, marca_cand, ref
-            if not variantes:
-                return id_cand, marca_cand, ref
 
-        docs = get_db().collection("productos").where("codigo", "==", id_cand).limit(1).get()
-        if docs:
-            ref = get_db().collection("productos").document(docs[0].id)
-            datos = ref.get().to_dict() or {}
-            variantes = datos.get("variantes", {})
+        if id_cand in ids_maestro:
+            variantes = variantes_por_maestro.get(id_cand, {})
             if not variantes or marca_cand in variantes:
-                return docs[0].id, marca_cand, ref
+                return id_cand, marca_cand, _ref_producto(id_cand)
+            marca_norm = _normalizar_marca_en_variantes(marca_cand, variantes, id_producto)
+            if marca_norm in variantes:
+                return id_cand, marca_norm, _ref_producto(id_cand)
+
+        maestros = codigo_a_maestros.get(id_cand, [])
+        if len(maestros) == 1:
+            id_m = maestros[0]
+            variantes = variantes_por_maestro.get(id_m, {})
+            if not variantes or marca_cand in variantes:
+                return id_m, marca_cand, _ref_producto(id_m)
+            marca_norm = _normalizar_marca_en_variantes(marca_cand, variantes, id_producto)
+            if marca_norm in variantes:
+                return id_m, marca_norm, _ref_producto(id_m)
 
     id_m = partes[0]
     marca = "_".join(partes[1:]) if len(partes) > 1 else None
-    ref, ok = doc_existe(id_m)
-    if ok:
-        return id_m, marca, ref
+    if id_m in ids_maestro:
+        return id_m, marca, _ref_producto(id_m)
+    maestros = codigo_a_maestros.get(id_m, [])
+    if len(maestros) == 1:
+        return maestros[0], marca, _ref_producto(maestros[0])
     return id_m, marca, None
 
 
@@ -1227,37 +1285,34 @@ def cambiar_vehiculos_por_codigo(codigo, vehiculos, modo="reemplazar"):
 
 
 def _obtener_ref_producto_maestro(id_producto, id_maestro=None):
-    """Resuelve el documento Firebase del artículo maestro (el ID del doc puede ≠ campo codigo)."""
-    vistos = set()
-    id_full = str(id_producto or "").strip().replace("/", "-")
+    """Resuelve el documento Firebase del artículo maestro (sin lecturas repetidas)."""
+    indice = _indice_resolucion_productos()
+    _, _, ref = _descomponer_id_variante(id_producto, indice)
+    if ref is not None:
+        id_m = ref.id
+        return ref, id_m
 
-    def probar(id_cand):
-        id_c = str(id_cand or "").strip().replace("/", "-")
-        if not id_c or id_c in vistos:
-            return None, None
-        vistos.add(id_c)
-        ref = get_db().collection("productos").document(id_c)
-        if ref.get().exists:
-            return ref, id_c
-        return None, None
+    if id_maestro:
+        id_c = str(id_maestro).strip().replace("/", "-").upper()
+        if id_c in indice["ids_maestro"]:
+            return _ref_producto(id_c), id_c
 
-    for candidato in (id_maestro, id_full):
-        ref, id_m = probar(candidato)
-        if ref:
-            return ref, id_m
-
+    id_full = str(id_producto or "").strip().replace("/", "-").upper()
     if "_" in id_full:
-        ref, id_m = probar(id_full.rsplit("_", 1)[0])
-        if ref:
-            return ref, id_m
+        prefijo = id_full.rsplit("_", 1)[0]
+        if prefijo in indice["ids_maestro"]:
+            return _ref_producto(prefijo), prefijo
+        maestros = indice["codigo_a_maestros"].get(prefijo, [])
+        if len(maestros) == 1:
+            return _ref_producto(maestros[0]), maestros[0]
 
-    codigo_buscar = str(id_maestro or "").strip().replace("/", "-")
+    codigo_buscar = str(id_maestro or "").strip().replace("/", "-").upper()
     if not codigo_buscar and "_" in id_full:
         codigo_buscar = id_full.rsplit("_", 1)[0]
     if codigo_buscar:
-        docs = get_db().collection("productos").where("codigo", "==", codigo_buscar).limit(1).get()
-        if docs:
-            return get_db().collection("productos").document(docs[0].id), docs[0].id
+        maestros = indice["codigo_a_maestros"].get(codigo_buscar, [])
+        if len(maestros) == 1:
+            return _ref_producto(maestros[0]), maestros[0]
 
     return None, None
 
@@ -1305,31 +1360,22 @@ def _normalizar_marca_en_variantes(marca_req, variantes, id_producto=None):
     return marca_req
 
 
-def _resolver_producto_y_stock(id_producto):
+def _resolver_producto_y_stock(id_producto, indice=None):
     """
     Resuelve documento Firebase y stock disponible para un ID variante (CODIGO_MARCA).
     Retorna (ref_prod, id_m, marca, stock, error). error es None si todo OK.
     """
-    id_m, marca_req, ref_prod = _descomponer_id_variante(id_producto)
+    if indice is None:
+        indice = _indice_resolucion_productos()
+
+    id_m, marca_req, ref_prod = _descomponer_id_variante(id_producto, indice)
 
     if not ref_prod:
-        docs_codigo = get_db().collection("productos").where("codigo", "==", id_m).limit(1).get()
-        if docs_codigo:
-            ref_prod = get_db().collection("productos").document(docs_codigo[0].id)
-            id_m = docs_codigo[0].id
-        else:
-            return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
-
-    doc = ref_prod.get()
-    if not doc.exists:
         return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
 
-    datos = doc.to_dict() or {}
-    variantes = datos.get("variantes", {})
-
+    variantes = indice["variantes_por_maestro"].get(id_m, {})
     if not variantes:
-        marca_ant = datos.get("marca", datos.get("condicion", "GENERICO"))
-        return ref_prod, id_m, marca_ant, int(datos.get("stock", 0)), None
+        return None, None, None, None, f"El código '{id_m}' no se encontró en el inventario."
 
     marca_req = _normalizar_marca_en_variantes(marca_req, variantes, id_producto)
 
@@ -1344,7 +1390,7 @@ def _resolver_producto_y_stock(id_producto):
     if marca_req not in variantes:
         return None, None, None, None, f"La marca '{marca_req}' no se encontró en este repuesto."
 
-    stock = int(variantes[marca_req].get("stock", 0))
+    stock = int(variantes[marca_req])
     if stock <= 0:
         return None, None, None, None, (
             f"Sin stock disponible para '{id_m}' ({marca_req}). Quedan 0 unidades."
@@ -1593,14 +1639,17 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     if cant <= 0:
         return False, "La cantidad debe ser mayor a cero."
 
-    ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto)
+    indice = _indice_resolucion_productos()
+    ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto, indice)
     err_val = _validar_resolucion_producto(ref_prod, id_m, marca_req, stock_disp, err)
     if err_val:
         return False, err_val
     assert ref_prod is not None and id_m is not None and marca_req is not None and stock_disp is not None
 
-    datos = ref_prod.get().to_dict() or {}
-    variantes = datos.get("variantes", {})
+    info = indice["items_por_variante"].get((id_m, marca_req), {})
+    precio = float(info.get("precio_venta", 0.0))
+    descripcion = str(info.get("descripcion", id_m))
+
     id_item = f"{id_m}_{marca_req}"
     ref_item = get_db().collection("presupuestos_activos").document(vendedor).collection("items").document(id_item)
 
@@ -1616,27 +1665,15 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
             f"(en carrito: {qty_carrito}, stock total: {stock_disp})."
         )
 
-    if not variantes:
-        precio = float(datos.get('precio_venta', 0.0))
-        marca_mostrar = datos.get('marca', datos.get('condicion', ''))
-        ref_item.set({
-            "id_maestro": id_m, "marca": marca_mostrar,
-            "descripcion": f"{datos.get('descripcion')} ({marca_mostrar})",
-            "precio_unitario": precio,
-            "cantidad": firestore.Increment(cant) # type: ignore
-        }, merge=True)
-        return True, f"Agregado: {datos.get('descripcion')}"
-
-    precio = float(variantes[marca_req].get('precio_venta', 0.0))
     ref_item.set({
         "id_maestro": id_m,
         "marca": marca_req,
-        "descripcion": f"{datos.get('descripcion')} ({marca_req})",
+        "descripcion": f"{descripcion} ({marca_req})",
         "precio_unitario": precio,
-        "cantidad": firestore.Increment(cant) # type: ignore
+        "cantidad": firestore.Increment(cant),  # type: ignore
     }, merge=True)
 
-    return True, f"Agregado: {datos.get('descripcion')} ({marca_req})"
+    return True, f"Agregado: {descripcion} ({marca_req})"
 
 def obtener_carrito(vendedor) -> list:
     docs = get_db().collection("presupuestos_activos").document(vendedor).collection("items").get()
@@ -1790,4 +1827,5 @@ def guardar_credenciales_arca(cuit, clave):
 def invalidar_cache_datos():
     """Limpia caches de Streamlit tras cambios en inventario o proveedores."""
     _limpiar_cache_streamlit(obtener_inventario_completo)
+    _limpiar_cache_streamlit(_indice_resolucion_productos)
     _limpiar_cache_streamlit(obtener_proveedores)
