@@ -479,6 +479,30 @@ def obtener_comprobante_arca(comp_id):
 
 
 # --- PRESUPUESTOS GUARDADOS (mostrador) ---
+def siguiente_numero_presupuesto() -> int:
+    """Contador anual global de presupuestos (transaccional)."""
+    db = get_db()
+    ref = db.collection("configuracion").document("contador_presupuestos")
+
+    @firestore.transactional  # type: ignore[attr-defined]
+    def _txn(transaction):
+        snap = ref.get(transaction=transaction)
+        data = (snap.to_dict() or {}) if snap.exists else {}
+        anio_actual = datetime.now(timezone.utc).year
+        if data.get("anio") != anio_actual:
+            numero = 1
+        else:
+            numero = int(data.get("numero", 0) or 0) + 1
+        transaction.set(ref, {
+            "anio": anio_actual,
+            "numero": numero,
+            "actualizado": datetime.now(timezone.utc),
+        })
+        return numero
+
+    return _txn(db.transaction())
+
+
 def guardar_presupuesto(vendedor, cliente_activo, nota=""):
     carrito = obtener_carrito(vendedor)
     if not carrito:
@@ -502,6 +526,7 @@ def guardar_presupuesto(vendedor, cliente_activo, nota=""):
         })
 
     ahora = datetime.now(timezone.utc)
+    numero = siguiente_numero_presupuesto()
     ref = get_db().collection("presupuestos_guardados").document()
     ref.set({
         "vendedor": str(vendedor),
@@ -510,12 +535,13 @@ def guardar_presupuesto(vendedor, cliente_activo, nota=""):
         "total_bruto": total_bruto,
         "total_final": total_final,
         "descuento_pct": desc_porc,
+        "numero_presupuesto": numero,
         "estado": "abierto",
         "nota": str(nota or "").strip(),
         "creado": ahora,
         "actualizado": ahora,
     })
-    return True, f"Presupuesto guardado ({ref.id[:8]}…).", ref.id
+    return True, f"Presupuesto Nº {numero:04d} guardado.", ref.id
 
 
 def listar_presupuestos_guardados(solo_abiertos=False, limite=40):

@@ -281,87 +281,7 @@ def texto_resultados_agrupados(encontrados, termino):
     return lista_txt
 
 
-# --- FUNCIÓN PARA EL GENERADOR DE PDF ---
-def generar_pdf_presupuesto(vendedor, items, total, cliente_nombre="Particular", descuento_aplicado=0.0):
-    from modulos.util_branding import NOMBRE_EMPRESA
-    from modulos.util_pdf import texto_para_pdf
-
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.add_page()
-
-    y_cursor = 10
-    logo_pdf = ruta_logo_hafid()
-    if logo_pdf:
-        pdf.image(logo_pdf, x=10, y=8, h=14)
-        y_cursor = 26
-
-    pdf.set_xy(10, y_cursor)
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(
-        190, 8,
-        texto_para_pdf(f"PRESUPUESTO - {NOMBRE_EMPRESA}"),
-        new_x="LMARGIN", new_y="NEXT", align="L",
-    )
-
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(
-        190, 6,
-        texto_para_pdf(f"Cliente: {cliente_nombre}  |  Vendedor: {vendedor}"),
-        new_x="LMARGIN", new_y="NEXT", align="L",
-    )
-    pdf.cell(190, 6, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", new_x="LMARGIN", new_y="NEXT", align="L")
-    pdf.ln(8)
-
-    w_cod, w_desc, w_cant, w_sub = 40, 85, 20, 45
-    row_h = 8
-
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(w_cod, row_h, "Codigo", 1)
-    pdf.cell(w_desc, row_h, "Descripcion", 1)
-    pdf.cell(w_cant, row_h, "Cant.", 1, align="C")
-    pdf.cell(w_sub, row_h, "Subtotal", 1, align="R")
-    pdf.ln(row_h)
-
-    pdf.set_font("Helvetica", "", 8)
-    for item in items:
-        if pdf.get_y() > 265:
-            pdf.add_page()
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(w_cod, row_h, "Codigo", 1)
-            pdf.cell(w_desc, row_h, "Descripcion", 1)
-            pdf.cell(w_cant, row_h, "Cant.", 1, align="C")
-            pdf.cell(w_sub, row_h, "Subtotal", 1, align="R")
-            pdf.ln(row_h)
-            pdf.set_font("Helvetica", "", 8)
-
-        codigo_raw = str(item.get("id", item.get("codigo", "")))
-        codigo_display = codigo_raw if len(codigo_raw) <= 22 else codigo_raw[:21] + "..."
-        desc = str(item.get("descripcion", ""))[:48]
-        cant = str(item.get("cantidad", 1))
-        sub = f"${float(item.get('subtotal', 0)):,.2f}"
-
-        pdf.cell(w_cod, row_h, texto_para_pdf(codigo_display), 1)
-        pdf.cell(w_desc, row_h, texto_para_pdf(desc), 1)
-        pdf.cell(w_cant, row_h, cant, 1, align="C")
-        pdf.cell(w_sub, row_h, sub, 1, align="R")
-        pdf.ln(row_h)
-
-    pdf.ln(8)
-    if descuento_aplicado > 0:
-        pdf.set_font("Helvetica", "I", 10)
-        descuento_monto = total * (descuento_aplicado / 100)
-        pdf.cell(
-            190, 8,
-            texto_para_pdf(f"Descuento ({descuento_aplicado}%): -${descuento_monto:,.2f}"),
-            new_x="LMARGIN", new_y="NEXT", align="R",
-        )
-
-    pdf.set_font("Helvetica", "B", 12)
-    total_final = total * (1 - descuento_aplicado / 100)
-    pdf.cell(190, 10, f"TOTAL: ${total_final:,.2f}", new_x="LMARGIN", new_y="NEXT", align="R")
-
-    return bytes(pdf.output())
+# --- FUNCIÓN PARA EL GENERADOR DE PDF (presupuesto → modulos/presupuesto_pdf.py) ---
 
 if "temp_datos" not in st.session_state:
     st.session_state.temp_datos = None
@@ -710,6 +630,7 @@ elif pagina == "mostrador":
         render_panel_coincidencias_mostrador,
         render_mostrador_venta_actual,
         render_mostrador_accion_pendiente,
+        VENDEDOR_MOSTRADOR,
     )
 
     from modulos.ui_estilos import aplicar_estilos_mostrador
@@ -726,12 +647,7 @@ elif pagina == "mostrador":
 
     render_config_ticket_mostrador()
 
-    vendedor = st.radio(
-        "Punto de venta",
-        ["Caja Principal", "Celular Depósito"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+    vendedor = VENDEDOR_MOSTRADOR
 
     carrito_full = obtener_carrito(str(vendedor)) or []
     if carrito_full:
@@ -742,7 +658,7 @@ elif pagina == "mostrador":
     inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
 
     with col_izq:
-        render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
+        render_presupuestos_guardados(vendedor)
 
         t_buscar, t_manual, t_ia, t_qr = st.tabs(
             ["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"]
@@ -798,7 +714,7 @@ elif pagina == "mostrador":
             render_mostrador_accion_pendiente(vendedor)
 
     with col_der:
-        render_mostrador_venta_actual(vendedor, generar_pdf_presupuesto)
+        render_mostrador_venta_actual(vendedor)
 
 # --- ASISTENTE ---
 elif pagina == "asistente":

@@ -33,7 +33,9 @@ from modulos.db_firebase import (
     guardar_credenciales_arca,
     obtener_config_ticket_mostrador,
     guardar_config_ticket_mostrador,
+    obtener_presupuesto_guardado,
 )
+from modulos.presupuesto_pdf import crear_pdf_presupuesto, VALIDEZ_PRESUPUESTO_DIAS
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
 from modulos.util_fechas import formatear_fecha_ar, TZ_ARGENTINA
@@ -48,6 +50,9 @@ from modulos.mostrador_voz_flujo import (
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
 )
+
+
+VENDEDOR_MOSTRADOR = "Caja Principal"
 
 
 CONFIG_TICKET_DEFAULT = {
@@ -429,6 +434,8 @@ def limpiar_venta_mostrador(vendedor, reset_cliente=True):
     st.session_state.mostrador_listo_para_ticket = False
     st.session_state.mostrador_accion_pendiente = None
     st.session_state.factura_arca_reciente = None
+    st.session_state.pop("presupuesto_pdf_descarga", None)
+    st.session_state.pop("presupuesto_pdf_nombre", None)
     st.session_state[f"mostrador_cart_rev_{vendedor}"] = (
         int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)) + 1
     )
@@ -436,7 +443,88 @@ def limpiar_venta_mostrador(vendedor, reset_cliente=True):
         st.session_state.cliente_activo = cliente_consumidor_final()
 
 
-def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
+def _numero_presupuesto_en_sesion():
+    pres_id = st.session_state.get("presupuesto_cargado_id")
+    if not pres_id:
+        return None
+    pres = obtener_presupuesto_guardado(pres_id)
+    if not pres:
+        return None
+    n = pres.get("numero_presupuesto")
+    return int(n) if n is not None else None
+
+
+def _nombre_archivo_presupuesto(numero, cliente_nombre):
+    nro = f"{int(numero):04d}" if numero else "BORRADOR"
+    safe = "".join(c if c.isalnum() else "_" for c in str(cliente_nombre).upper())[:24] or "CLIENTE"
+    return f"Presupuesto_{nro}_{safe}.pdf"
+
+
+def generar_pdf_presupuesto_mostrador(vendedor, carrito, total_bruto, desc_porc, numero=None, nota=""):
+    _, _, cfg = _leer_secrets_facturador()
+    cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+    if numero is None:
+        numero = _numero_presupuesto_en_sesion()
+    return crear_pdf_presupuesto(
+        str(vendedor),
+        carrito,
+        float(total_bruto),
+        cli,
+        float(desc_porc),
+        numero,
+        cfg,
+        nota,
+    )
+
+
+def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agregar_al_carrito):
+    """Agrega varios ítems; devuelve (ok_count, mensajes, ambiguos)."""
+    ok_count = 0
+    mensajes = []
+    errores = []
+    ambiguos_finales = None
+
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        termino = raw.get("termino") or raw.get("codigo") or raw.get("descripcion")
+        cant = raw.get("cantidad", 1)
+        ok, msj, ambiguos = agregar_termino_voz(
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+        )
+        if ok:
+            ok_count += 1
+            mensajes.append(msj)
+        elif ambiguos:
+            ambiguos_finales = ambiguos
+            return ok_count, f"Varias opciones para '{termino}'. Elegí en la lista.", ambiguos
+        else:
+            errores.append(msj)
+
+    if ok_count and errores:
+        return ok_count, "\n".join(mensajes + errores), None
+    if ok_count:
+        return ok_count, "\n".join(mensajes), None
+    if errores:
+        return 0, "\n".join(errores), None
+    return 0, "No se detectaron productos.", None
+
+
+def _render_banner_armado_voz(vendedor):
+    carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
+    cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+    desc = float(cli.get("descuento", 0))
+    _, total = calcular_totales_carrito(carrito, desc)
+    n_items = len(carrito)
+    st.info(
+        f"**Modo armado** · Cliente: {cli['nombre']}"
+        + (f" ({desc:g}% dto.)" if desc else "")
+        + f" · {n_items} ítem(s) · Total **${total:,.2f}** · "
+        f"Seguí dictando (ej. `111 3`) o decí **presupuesto** / **facturar**."
+    )
+
+
+def render_presupuestos_guardados(vendedor):
     with st.expander("📁 Presupuestos guardados", expanded=False):
         solo_abiertos = st.checkbox("Solo abiertos", value=True, key="pres_solo_abiertos")
         lista = listar_presupuestos_guardados(solo_abiertos=solo_abiertos, limite=30)
@@ -449,6 +537,7 @@ def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
         for p in lista:
             cli = p.get("cliente") or {}
             filas.append({
+                "Nº": f"{int(p.get('numero_presupuesto', 0)):04d}" if p.get("numero_presupuesto") else "—",
                 "ID": p.get("id", "")[:8],
                 "Fecha": formatear_fecha_ar(p.get("creado")),
                 "Cliente": cli.get("nombre", "—"),
@@ -463,6 +552,10 @@ def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
             "Seleccionar presupuesto",
             options=list(opciones.keys()),
             format_func=lambda x: (
+                f"Nº {int((opciones[x].get('numero_presupuesto') or 0)):04d} · "
+                f"{x[:8]}… · {(opciones[x].get('cliente') or {}).get('nombre', '')} · "
+                f"${float(opciones[x].get('total_final', 0)):,.0f} · {opciones[x].get('estado', '')}"
+            ) if opciones[x].get("numero_presupuesto") else (
                 f"{x[:8]}… · {(opciones[x].get('cliente') or {}).get('nombre', '')} · "
                 f"${float(opciones[x].get('total_final', 0)):,.0f} · {opciones[x].get('estado', '')}"
             ),
@@ -490,17 +583,19 @@ def render_presupuestos_guardados(vendedor, generar_pdf_presupuesto):
         cli_pres = pres.get("cliente") or {}
         desc_pres = float(cli_pres.get("descuento", 0))
         total_bruto_pres = float(pres.get("total_bruto", 0))
-        pdf_pres = generar_pdf_presupuesto(
+        pdf_pres = generar_pdf_presupuesto_mostrador(
             pres.get("vendedor", vendedor),
             items_pres,
             total_bruto_pres,
-            cli_pres.get("nombre", "Particular"),
             desc_pres,
+            numero=pres.get("numero_presupuesto"),
+            nota=pres.get("nota", ""),
         )
+        nro_pres = pres.get("numero_presupuesto")
         col_pdf.download_button(
             "📄 PDF",
             pdf_pres,
-            f"Presupuesto_{sel_id[:8]}.pdf",
+            _nombre_archivo_presupuesto(nro_pres, cli_pres.get("nombre", "CLIENTE")),
             "application/pdf",
             use_container_width=True,
             key="pres_dl_pdf",
@@ -1272,233 +1367,308 @@ def render_ia_mostrador(
     agregar_al_carrito,
 ):
     st.caption(
-        "Ejemplos: *cargame factura B para García, código 3524150 5 unidades, contado, imprimir* · "
-        "*agregá 2 bujes gol* · *cliente García*. "
-        "Con *imprimir* arma el carrito a la derecha; revisás y pulsás **Facturar e imprimir ticket** (un solo paso)."
+        f"**Modo armado:** dictá código y cantidad (`111 3`, `codigo 3524150 5 unidades`) y seguí agregando. "
+        f"Decí **presupuesto** (PDF borrador, validez {VALIDEZ_PRESUPUESTO_DIAS} días), **listo**, **cliente García** o "
+        "**facturar** / **imprimir ticket** para cerrar."
     )
 
-    with st.form("form_ia_mostrador", clear_on_submit=True):
-        col_ia1, col_ia2 = st.columns([4, 1])
-        orden = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
-        submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
+    if obtener_carrito(str(vendedor)):
+        _render_banner_armado_voz(vendedor)
 
-        if submit_ia and orden:
-            with st.spinner("Hafid IA procesando..."):
-                resp = procesar_orden_mostrador(orden) or {}
-                accion = resp.get("accion")
-                inventario = inventario_cache_mostrador(obtener_inventario_completo)
-                carrito = obtener_carrito(str(vendedor)) or []
-                total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
-                desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-                total_final = total_bruto * (1 - desc_porc / 100)
+    pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
+    if pdf_ready:
+        st.download_button(
+            "⬇️ Descargar presupuesto generado",
+            pdf_ready,
+            st.session_state.get("presupuesto_pdf_nombre", "Presupuesto.pdf"),
+            "application/pdf",
+            key=f"dl_pres_voz_{vendedor}",
+            use_container_width=True,
+        )
 
-                if accion == "flujo_factura":
-                    if not resp.get("items"):
-                        items_extra = extraer_items_orden_voz(orden)
-                        if items_extra:
-                            resp["items"] = items_extra
-                    with st.spinner("Facturación por voz…"):
-                        ok, msj, ambiguos = ejecutar_flujo_factura_voz(
-                            vendedor,
-                            resp,
-                            inventario,
-                            buscar_en_inventario,
-                            agregar_al_carrito,
-                            ejecutar_emitir_factura_arca,
-                            texto_orden=orden,
-                        )
+    col_ia1, col_ia2 = st.columns([4, 1])
+    orden = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
+    submit_ia = col_ia2.button("🤖 Agregar / Ejecutar", use_container_width=True, type="primary")
+
+    if submit_ia and orden:
+        with st.spinner("Hafid IA procesando..."):
+            resp = procesar_orden_mostrador(orden) or {}
+            accion = resp.get("accion")
+            inventario = inventario_cache_mostrador(obtener_inventario_completo)
+            carrito = obtener_carrito(str(vendedor)) or []
+            carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
+            desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+            total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
+
+            if accion == "flujo_factura":
+                if not resp.get("items"):
+                    items_extra = extraer_items_orden_voz(orden)
+                    if items_extra:
+                        resp["items"] = items_extra
+                with st.spinner("Facturación por voz…"):
+                    ok, msj, ambiguos = ejecutar_flujo_factura_voz(
+                        vendedor,
+                        resp,
+                        inventario,
+                        buscar_en_inventario,
+                        agregar_al_carrito,
+                        ejecutar_emitir_factura_arca,
+                        texto_orden=orden,
+                    )
+                if ok:
+                    st.success(msj)
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
+                elif ambiguos:
+                    st.warning(msj)
+                    st.session_state.resultados_ia_mostrador = ambiguos
+                    st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
+                else:
+                    st.error(msj)
+
+            elif accion == "imprimir_ticket":
+                if not carrito:
+                    st.error("El carrito está vacío.")
+                else:
+                    ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                    if not ok_val:
+                        st.error(msg_val)
+                    else:
+                        st.success(_marcar_listo_para_ticket(vendedor, total_final))
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+
+            elif accion == "confirmar_pendiente":
+                pend = st.session_state.get("mostrador_accion_pendiente")
+                if pend:
+                    ok, msj = _ejecutar_accion_pendiente(
+                        vendedor, pend, carrito, total_final, desc_porc
+                    )
+                    _limpiar_accion_pendiente()
                     if ok:
                         st.success(msj)
                         st.session_state.resultados_ia_mostrador = None
                         st.rerun()
-                    elif ambiguos:
-                        st.warning(msj)
-                        st.session_state.resultados_ia_mostrador = ambiguos
-                        st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
                     else:
                         st.error(msj)
+                else:
+                    st.info("No hay ninguna acción pendiente de confirmación.")
 
-                elif accion == "imprimir_ticket":
-                    if not carrito:
-                        st.error("El carrito está vacío.")
-                    else:
-                        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-                        if not ok_val:
-                            st.error(msg_val)
-                        else:
-                            st.success(_marcar_listo_para_ticket(vendedor, total_final))
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
+            elif accion == "cancelar_pendiente":
+                _limpiar_accion_pendiente()
+                st.info("Acción cancelada.")
+                st.session_state.resultados_ia_mostrador = None
+                st.rerun()
 
-                elif accion == "confirmar_pendiente":
-                    pend = st.session_state.get("mostrador_accion_pendiente")
-                    if pend:
-                        ok, msj = _ejecutar_accion_pendiente(
-                            vendedor, pend, carrito, total_final, desc_porc
-                        )
-                        _limpiar_accion_pendiente()
-                        if ok:
-                            st.success(msj)
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
-                        else:
-                            st.error(msj)
-                    else:
-                        st.info("No hay ninguna acción pendiente de confirmación.")
+            elif accion == "agregar_items":
+                n, msj, ambiguos = _agregar_items_voz(
+                    vendedor,
+                    resp.get("items"),
+                    inventario,
+                    buscar_en_inventario,
+                    agregar_al_carrito,
+                )
+                if ambiguos:
+                    st.warning(msj)
+                    st.session_state.resultados_ia_mostrador = ambiguos
+                    st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
+                elif n:
+                    carrito_n = carrito_efectivo_mostrador(
+                        vendedor, obtener_carrito(str(vendedor)) or []
+                    )
+                    _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+                    st.toast(f"{n} ítem(s) · Total ${tf:,.2f}. Seguí dictando.")
+                    st.success(msj)
+                    st.rerun()
+                else:
+                    st.error(msj)
 
-                elif accion == "cancelar_pendiente":
-                    _limpiar_accion_pendiente()
-                    st.info("Acción cancelada.")
-                    st.session_state.resultados_ia_mostrador = None
+            elif accion == "presupuesto_pdf":
+                sincronizar_grilla_carrito_firebase(vendedor, carrito_ui)
+                carrito_n = obtener_carrito(str(vendedor)) or []
+                if not carrito_n:
+                    st.error("El carrito está vacío.")
+                else:
+                    _, tb = calcular_totales_carrito(carrito_n, desc_porc)
+                    pdf = generar_pdf_presupuesto_mostrador(
+                        vendedor, carrito_n, tb, desc_porc
+                    )
+                    cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
+                    st.session_state.presupuesto_pdf_descarga = pdf
+                    st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
+                        None, cli_nom
+                    )
+                    _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+                    st.success(
+                        f"Presupuesto BORRADOR (${tf:,.2f}). "
+                        f"Validez {VALIDEZ_PRESUPUESTO_DIAS} días. Descargalo abajo."
+                    )
                     st.rerun()
 
-                elif accion == "agregar_carrito":
-                    termino = str(resp.get("termino", ""))
-                    cant_raw = resp.get("cantidad")
-                    cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-                    ok, msj, ambiguos = agregar_termino_voz(
-                        vendedor, termino, cant, inventario,
-                        buscar_en_inventario, agregar_al_carrito,
+            elif accion == "listo_armado":
+                carrito_n = carrito_efectivo_mostrador(
+                    vendedor, obtener_carrito(str(vendedor)) or []
+                )
+                if not carrito_n:
+                    st.info("Carrito vacío.")
+                else:
+                    _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+                    st.success(
+                        f"Listo: {len(carrito_n)} ítem(s) · Total ${tf:,.2f}. "
+                        "Podés facturar, guardar presupuesto o seguir agregando."
                     )
 
-                    if ok:
-                        st.success(f"🛒 {msj}")
-                        st.session_state.resultados_ia_mostrador = None
-                        st.rerun()
-                    elif ambiguos:
-                        st.warning(f"Encontré {len(ambiguos)} alternativas para '{termino}'.")
-                        st.session_state.resultados_ia_mostrador = ambiguos
-                        st.session_state.msg_ia_mostrador = (
-                            f"Elegí qué variante de '{termino}' querés agregar:"
-                        )
-                    else:
-                        st.error(f"❌ {msj}")
+            elif accion == "agregar_carrito":
+                termino = str(resp.get("termino", ""))
+                cant_raw = resp.get("cantidad")
+                cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
+                ok, msj, ambiguos = agregar_termino_voz(
+                    vendedor, termino, cant, inventario,
+                    buscar_en_inventario, agregar_al_carrito,
+                )
 
-                elif accion == "set_cliente":
-                    nombre_det = str(resp.get("nombre_cliente", "")).upper()
-                    clientes_db = obtener_clientes() or {}
-                    cliente_encontrado = next(
-                        (c for c in clientes_db.values()
-                         if nombre_det in str(c.get("nombre", "")).upper()),
-                        None,
+                if ok:
+                    carrito_n = carrito_efectivo_mostrador(
+                        vendedor, obtener_carrito(str(vendedor)) or []
                     )
-                    if cliente_encontrado:
-                        st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
-                        tipo = resp.get("tipo_comprobante")
-                        if tipo in ("1", "6", "A", "B", "a", "b"):
-                            t = str(tipo).upper()
-                            st.session_state.cliente_activo["tipo_comprobante"] = (
-                                "1" if t in ("1", "A") else "6"
-                            )
-                        st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
-                        st.session_state.resultados_ia_mostrador = None
-                        st.rerun()
-                    else:
-                        st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
-
-                elif accion == "set_tipo_factura":
-                    tipo = resp.get("tipo_comprobante", "6")
-                    cli = dict(st.session_state.cliente_activo or cliente_consumidor_final())
-                    t = str(tipo).upper()
-                    cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
-                    st.session_state.cliente_activo = cli
-                    st.success(f"✅ Factura {_tipo_comprobante_label(cli['tipo_comprobante'])}.")
-                    st.session_state.resultados_ia_mostrador = None
+                    _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+                    st.toast(f"Agregado · Total ${tf:,.2f}. Seguí dictando.")
+                    st.success(f"🛒 {msj}")
                     st.rerun()
+                elif ambiguos:
+                    st.warning(f"Encontré {len(ambiguos)} alternativas para '{termino}'.")
+                    st.session_state.resultados_ia_mostrador = ambiguos
+                    st.session_state.msg_ia_mostrador = (
+                        f"Elegí qué variante de '{termino}' querés agregar:"
+                    )
+                else:
+                    st.error(f"❌ {msj}")
 
-                elif accion == "consumidor_final":
+            elif accion == "set_cliente":
+                nombre_det = str(resp.get("nombre_cliente", "")).upper()
+                clientes_db = obtener_clientes() or {}
+                cliente_encontrado = next(
+                    (c for c in clientes_db.values()
+                     if nombre_det in str(c.get("nombre", "")).upper()),
+                    None,
+                )
+                if cliente_encontrado:
+                    st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
                     tipo = resp.get("tipo_comprobante")
-                    cli = cliente_consumidor_final()
                     if tipo in ("1", "6", "A", "B", "a", "b"):
                         t = str(tipo).upper()
-                        cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
-                    st.session_state.cliente_activo = cli
-                    st.success("✅ Consumidor final activado.")
+                        st.session_state.cliente_activo["tipo_comprobante"] = (
+                            "1" if t in ("1", "A") else "6"
+                        )
+                    st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
                     st.session_state.resultados_ia_mostrador = None
                     st.rerun()
-
-                elif accion == "set_forma_pago":
-                    fp = _set_forma_pago(vendedor, resp.get("forma_pago", "Contado"))
-                    st.success(f"✅ Forma de pago: {fp}")
-                    st.session_state.resultados_ia_mostrador = None
-                    st.rerun()
-
-                elif accion == "guardar_presupuesto":
-                    if not carrito:
-                        st.error("El carrito está vacío.")
-                    else:
-                        nota = str(resp.get("nota", "") or "")
-                        st.session_state.mostrador_accion_pendiente = {
-                            "tipo": "guardar_presupuesto",
-                            "nota": nota,
-                            "mensaje": f"¿Guardar presupuesto de ${total_final:,.2f} para "
-                            f"{st.session_state.cliente_activo.get('nombre', 'CONSUMIDOR FINAL')}?",
-                        }
-                        st.rerun()
-
-                elif accion == "confirmar_venta":
-                    if not carrito:
-                        st.error("El carrito está vacío.")
-                    else:
-                        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-                        if not ok_val:
-                            st.error(msg_val)
-                        else:
-                            st.session_state.mostrador_accion_pendiente = {
-                                "tipo": "confirmar_venta",
-                                "mensaje": (
-                                    f"¿Confirmar venta por ${total_final:,.2f} "
-                                    f"(sin factura fiscal) y descontar stock?"
-                                ),
-                            }
-                            st.rerun()
-
-                elif accion == "facturar":
-                    if not carrito:
-                        st.error("El carrito está vacío.")
-                    else:
-                        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-                        if not ok_val:
-                            st.error(msg_val)
-                        else:
-                            st.success(_marcar_listo_para_ticket(vendedor, total_final))
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
-
-                elif accion == "vaciar_carrito":
-                    if not carrito:
-                        st.info("El carrito ya está vacío.")
-                    else:
-                        st.session_state.mostrador_accion_pendiente = {
-                            "tipo": "vaciar_carrito",
-                            "mensaje": "¿Vaciar el carrito actual?",
-                        }
-                        st.rerun()
-
-                elif accion == "buscar" or accion == "consulta":
-                    termino = str(resp.get("termino", "") or orden)
-                    if termino:
-                        encontrados = buscar_en_inventario(inventario, termino)
-                        if encontrados:
-                            st.session_state.resultados_ia_mostrador = encontrados[:10]
-                            st.session_state.msg_ia_mostrador = (
-                                f"🔍 Encontré estas opciones para '{termino}':"
-                            )
-                        else:
-                            st.warning(f"No encontré coincidencias para '{termino}'.")
-                            st.session_state.resultados_ia_mostrador = None
-                    else:
-                        st.warning("No detecté qué producto querés buscar.")
-                        st.session_state.resultados_ia_mostrador = None
-
-                elif accion == "error":
-                    st.error(resp.get("respuesta", "Error de IA."))
-                    st.session_state.resultados_ia_mostrador = None
-
                 else:
-                    msg = resp.get("respuesta") or "Orden no reconocida para el mostrador."
-                    st.info(msg)
+                    st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
+
+            elif accion == "set_tipo_factura":
+                tipo = resp.get("tipo_comprobante", "6")
+                cli = dict(st.session_state.cliente_activo or cliente_consumidor_final())
+                t = str(tipo).upper()
+                cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
+                st.session_state.cliente_activo = cli
+                st.success(f"✅ Factura {_tipo_comprobante_label(cli['tipo_comprobante'])}.")
+                st.session_state.resultados_ia_mostrador = None
+                st.rerun()
+
+            elif accion == "consumidor_final":
+                tipo = resp.get("tipo_comprobante")
+                cli = cliente_consumidor_final()
+                if tipo in ("1", "6", "A", "B", "a", "b"):
+                    t = str(tipo).upper()
+                    cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
+                st.session_state.cliente_activo = cli
+                st.success("✅ Consumidor final activado.")
+                st.session_state.resultados_ia_mostrador = None
+                st.rerun()
+
+            elif accion == "set_forma_pago":
+                fp = _set_forma_pago(vendedor, resp.get("forma_pago", "Contado"))
+                st.success(f"✅ Forma de pago: {fp}")
+                st.session_state.resultados_ia_mostrador = None
+                st.rerun()
+
+            elif accion == "guardar_presupuesto":
+                if not carrito:
+                    st.error("El carrito está vacío.")
+                else:
+                    nota = str(resp.get("nota", "") or "")
+                    st.session_state.mostrador_accion_pendiente = {
+                        "tipo": "guardar_presupuesto",
+                        "nota": nota,
+                        "mensaje": f"¿Guardar presupuesto de ${total_final:,.2f} para "
+                        f"{st.session_state.cliente_activo.get('nombre', 'CONSUMIDOR FINAL')}?",
+                    }
+                    st.rerun()
+
+            elif accion == "confirmar_venta":
+                if not carrito:
+                    st.error("El carrito está vacío.")
+                else:
+                    ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                    if not ok_val:
+                        st.error(msg_val)
+                    else:
+                        st.session_state.mostrador_accion_pendiente = {
+                            "tipo": "confirmar_venta",
+                            "mensaje": (
+                                f"¿Confirmar venta por ${total_final:,.2f} "
+                                f"(sin factura fiscal) y descontar stock?"
+                            ),
+                        }
+                        st.rerun()
+
+            elif accion == "facturar":
+                if not carrito:
+                    st.error("El carrito está vacío.")
+                else:
+                    ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                    if not ok_val:
+                        st.error(msg_val)
+                    else:
+                        st.success(_marcar_listo_para_ticket(vendedor, total_final))
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+
+            elif accion == "vaciar_carrito":
+                if not carrito:
+                    st.info("El carrito ya está vacío.")
+                else:
+                    st.session_state.mostrador_accion_pendiente = {
+                        "tipo": "vaciar_carrito",
+                        "mensaje": "¿Vaciar el carrito actual?",
+                    }
+                    st.rerun()
+
+            elif accion == "buscar" or accion == "consulta":
+                termino = str(resp.get("termino", "") or orden)
+                if termino:
+                    encontrados = buscar_en_inventario(inventario, termino)
+                    if encontrados:
+                        st.session_state.resultados_ia_mostrador = encontrados[:10]
+                        st.session_state.msg_ia_mostrador = (
+                            f"🔍 Encontré estas opciones para '{termino}':"
+                        )
+                    else:
+                        st.warning(f"No encontré coincidencias para '{termino}'.")
+                        st.session_state.resultados_ia_mostrador = None
+                else:
+                    st.warning("No detecté qué producto querés buscar.")
                     st.session_state.resultados_ia_mostrador = None
+
+            elif accion == "error":
+                st.error(resp.get("respuesta", "Error de IA."))
+                st.session_state.resultados_ia_mostrador = None
+
+            else:
+                msg = resp.get("respuesta") or "Orden no reconocida para el mostrador."
+                st.info(msg)
+                st.session_state.resultados_ia_mostrador = None
 
     render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
@@ -1614,7 +1784,7 @@ def render_carrito_grilla(vendedor, carrito):
 
 
 def render_panel_cobro_mostrador(
-    vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+    vendedor, carrito, total_bruto, total_final, desc_porc
 ):
     """Totales, pago y botones de facturación (columna lateral)."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
@@ -1672,14 +1842,16 @@ def render_panel_cobro_mostrador(
                 else:
                     st.error(msj)
 
-        pdf_bytes = generar_pdf_presupuesto(
-            str(vendedor), carrito, total_bruto,
-            st.session_state.cliente_activo["nombre"], desc_porc,
+        pdf_bytes = generar_pdf_presupuesto_mostrador(
+            str(vendedor), carrito, total_bruto, desc_porc,
         )
         b_pres.download_button(
             "📄 Presupuesto",
             pdf_bytes,
-            f"Presupuesto_{vendedor}.pdf",
+            _nombre_archivo_presupuesto(
+                _numero_presupuesto_en_sesion(),
+                st.session_state.cliente_activo.get("nombre", "CLIENTE"),
+            ),
             "application/pdf",
             use_container_width=True,
         )
@@ -1727,7 +1899,7 @@ def render_mostrador_accion_pendiente(vendedor):
     render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
 
 
-def render_mostrador_venta_actual(vendedor, generar_pdf_presupuesto):
+def render_mostrador_venta_actual(vendedor):
     st.markdown("#### Venta actual")
     carrito = obtener_carrito(str(vendedor)) or []
     if carrito:
@@ -1735,17 +1907,17 @@ def render_mostrador_venta_actual(vendedor, generar_pdf_presupuesto):
         desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         render_acciones_carrito(
-            vendedor, carrito_ui, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+            vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )
     else:
         st.info("Carrito vacío — buscá productos o usá la IA de voz.")
     render_historial_facturas_arca()
 
 
-def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
+def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc):
     """Compat: panel lateral de cobro (la grilla va aparte a ancho completo)."""
     render_panel_cobro_mostrador(
-        vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+        vendedor, carrito, total_bruto, total_final, desc_porc
     )
 
 

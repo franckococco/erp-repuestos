@@ -114,6 +114,42 @@ def parse_flujo_rapido_voz(texto_usuario):
     return None
 
 
+def parse_armado_rapido_voz(texto_usuario):
+    """Atajos para armado continuo de presupuesto/venta (sin Groq)."""
+    from modulos.mostrador_voz_flujo import extraer_items_orden_voz, preprocesar_texto_mostrador
+
+    raw = str(texto_usuario or "").strip()
+    t = preprocesar_texto_mostrador(raw).strip().lower()
+    if not t:
+        return None
+
+    if re.match(r"^(presupuesto|imprimir presupuesto|pdf presupuesto)\.?$", t):
+        return {"accion": "presupuesto_pdf"}
+    if t in ("listo", "termine", "terminé", "fin"):
+        return {"accion": "listo_armado"}
+
+    items = extraer_items_orden_voz(raw)
+    if items:
+        return {"accion": "agregar_items", "items": items}
+
+    m = re.match(r"^([\dA-Za-z][\dA-Za-z_\-]*)\s+(\d{1,4})$", raw.strip())
+    if m:
+        return {
+            "accion": "agregar_items",
+            "items": [{"termino": m.group(1), "cantidad": int(m.group(2))}],
+        }
+
+    if re.match(r"^(agreg\w*|sum\w*)\s+", t):
+        resto = re.sub(r"^(agreg\w*|sum\w*)\s+", "", raw, flags=re.I).strip()
+        items2 = extraer_items_orden_voz(resto) or extraer_items_orden_voz(raw)
+        if items2:
+            return {"accion": "agregar_items", "items": items2}
+        if resto:
+            return {"accion": "agregar_carrito", "termino": resto, "cantidad": 1}
+
+    return None
+
+
 def parse_rapido_voz(texto_usuario):
     """Atajos sin llamar a Groq (más rápido)."""
     from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador
@@ -140,9 +176,15 @@ def procesar_orden_mostrador(texto_usuario):
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
 
     if es_confirmacion_usuario(texto_usuario):
-        return {"accion": "confirmar_pendiente"}
+        if st.session_state.get("mostrador_accion_pendiente"):
+            return {"accion": "confirmar_pendiente"}
+        return {"accion": "listo_armado"}
     if es_cancelacion_usuario(texto_usuario):
         return {"accion": "cancelar_pendiente"}
+
+    armado = parse_armado_rapido_voz(texto_usuario)
+    if armado:
+        return armado
 
     rapido = parse_rapido_voz(texto_usuario)
     if rapido:
@@ -194,7 +236,9 @@ def procesar_orden_mostrador(texto_usuario):
     {{"accion": "consumidor_final", "tipo_comprobante": "6"}}
     {{"accion": "set_forma_pago", "forma_pago": "Contado"}}
     {{"accion": "imprimir_ticket"}}
-    {{"accion": "guardar_presupuesto", "nota": ""}}
+    {{"accion": "presupuesto_pdf"}}
+    {{"accion": "agregar_items", "items": [{{"termino": "CODIGO_O_DESC", "cantidad": N}}]}}
+    {{"accion": "listo_armado"}}
     {{"accion": "confirmar_venta"}}
     {{"accion": "facturar"}}
     {{"accion": "vaciar_carrito"}}
