@@ -113,12 +113,9 @@ def invalidar_cache_inventario_mostrador():
 
 
 def _parece_codigo(termino: str) -> bool:
-    t = str(termino or "").strip().upper().replace("/", "-")
-    if not t:
-        return False
-    if "_" in t:
-        return True
-    return bool(re.match(r"^[A-Z0-9\-]{4,}$", t))
+    from modulos.util_busqueda import parece_codigo_producto
+
+    return parece_codigo_producto(termino)
 
 
 def _buscar_variantes_por_codigo(inventario, termino):

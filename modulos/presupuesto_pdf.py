@@ -42,10 +42,13 @@ def crear_pdf_presupuesto(
     cuit_emp = str(cfg.get("cuit_emisor") or "")
     cond_iva = str(cfg.get("condicion_iva") or "")
 
+    MARGIN_L = 12
+    ANCHO_UTIL = 186
+
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
-    pdf.set_margins(12, 12, 12)
+    pdf.set_margins(MARGIN_L, 12, MARGIN_L)
 
     y = 12
     logo = ruta_logo_hafid()
@@ -64,17 +67,17 @@ def crear_pdf_presupuesto(
     if cond_iva:
         pdf.cell(95, 4, texto_para_pdf(cond_iva), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_xy(118, y)
+    pdf.set_xy(108, y)
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(80, 8, "PRESUPUESTO", align="R")
-    pdf.set_xy(118, y + 10)
+    pdf.cell(90, 8, "PRESUPUESTO", align="R")
+    pdf.set_xy(108, y + 10)
     pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(80, 6, f"Nro {nro_txt}", align="R")
+    pdf.cell(90, 6, f"Nro {nro_txt}", align="R")
     pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(118, y + 18)
-    pdf.cell(80, 4, f"Fecha: {ahora.strftime('%d/%m/%Y %H:%M')}", align="R")
-    pdf.set_xy(118, y + 23)
-    pdf.cell(80, 4, f"Valido hasta: {validez.strftime('%d/%m/%Y')}", align="R")
+    pdf.set_xy(108, y + 18)
+    pdf.cell(90, 4, f"Fecha: {ahora.strftime('%d/%m/%Y %H:%M')}", align="R")
+    pdf.set_xy(108, y + 23)
+    pdf.cell(90, 4, f"Valido hasta: {validez.strftime('%d/%m/%Y')}", align="R")
 
     box_y = max(pdf.get_y(), y + 28) + 4
     pdf.rect(12, box_y, 186, 16)
@@ -101,7 +104,7 @@ def crear_pdf_presupuesto(
     pdf.set_xy(12, box_y + 20)
     pdf.set_font("Helvetica", "B", 8)
     pdf.set_fill_color(230, 230, 230)
-    w_c, w_d, w_q, w_p, w_s = 28, 78, 16, 28, 28
+    w_c, w_d, w_q, w_p, w_s = 26, 82, 14, 32, 32
     h = 7
     pdf.cell(w_c, h, "Codigo", 1, align="C", fill=True)
     pdf.cell(w_d, h, "Descripcion", 1, align="C", fill=True)
@@ -134,7 +137,7 @@ def crear_pdf_presupuesto(
         pdf.cell(w_s, h, f"${sub:,.2f}", 1, align="R", new_x="LMARGIN", new_y="NEXT")
 
     pdf.ln(4)
-    x_tot = 12 + w_c + w_d + w_q + w_p
+    x_tot = MARGIN_L + w_c + w_d + w_q
     pdf.set_font("Helvetica", "", 10)
     pdf.set_x(x_tot)
     pdf.cell(w_p, 7, "Subtotal:", align="R")
@@ -160,6 +163,6 @@ def crear_pdf_presupuesto(
     if nota:
         leyendas.insert(0, texto_para_pdf(nota))
     for linea in leyendas:
-        pdf.multi_cell(186, 4, linea)
+        pdf.multi_cell(ANCHO_UTIL, 4, linea)
 
     return bytes(pdf.output())

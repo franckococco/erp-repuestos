@@ -760,16 +760,35 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
 
 
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
+    from modulos.ia_mostrador import parece_orden_voz_mostrador
+
     busqueda = st.text_input(
         "Buscar por código, descripción, vehículo o marca",
         key=f"busq_most_{vendedor}",
-        placeholder="Escribí al menos 2 caracteres…",
+        placeholder="Ej: 111, filtro aceite… (órdenes de voz → pestaña Asistente IA)",
     )
     if not busqueda or len(busqueda.strip()) < 2:
         st.info("Escribí en el buscador para ver productos (no se lista todo el inventario).")
         return
 
-    encontrados = filtrar_inventario(inv_completo, busqueda.strip())[:40]
+    busq = busqueda.strip()
+    if parece_orden_voz_mostrador(busq):
+        st.warning("Esto es una **orden de voz**, no una búsqueda de producto.")
+        st.caption(
+            "Ejemplo: «carga factura B para Juan código 111 2 unidades» → pestaña "
+            "**🤖 Asistente IA (Voz)**."
+        )
+        if st.button(
+            "🤖 Preparar en Asistente IA",
+            type="primary",
+            key=f"btn_voz_desde_busq_{vendedor}",
+        ):
+            st.session_state[f"ia_most_{vendedor}"] = busq
+            st.session_state[f"auto_run_ia_{vendedor}"] = True
+            st.success("Abrí la pestaña **🤖 Asistente IA (Voz)** — la orden se ejecutará sola.")
+        return
+
+    encontrados = filtrar_inventario(inv_completo, busq)[:40]
     if not encontrados:
         st.warning("Sin coincidencias.")
         return
@@ -1389,6 +1408,8 @@ def render_ia_mostrador(
     col_ia1, col_ia2 = st.columns([4, 1])
     orden = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
     submit_ia = col_ia2.button("🤖 Agregar / Ejecutar", use_container_width=True, type="primary")
+    if st.session_state.pop(f"auto_run_ia_{vendedor}", False) and orden:
+        submit_ia = True
 
     if submit_ia and orden:
         with st.spinner("Hafid IA procesando..."):

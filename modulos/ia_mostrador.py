@@ -51,6 +51,22 @@ def es_cancelacion_usuario(texto):
     return bool(re.search(r"\b(no|cancelá|cancelar|anulá|anular|detener|pará)\b", t))
 
 
+def parece_orden_voz_mostrador(texto):
+    """True si el texto es una orden compuesta (no búsqueda de producto)."""
+    from modulos.mostrador_voz_flujo import extraer_items_orden_voz
+
+    t = str(texto or "").strip()
+    if len(t) < 10:
+        return False
+    if parse_flujo_rapido_voz(t):
+        return True
+    tl = t.lower()
+    if re.search(r"\b(factura|carg\w+|presupuesto|cliente|unidad|codigo)\b", tl):
+        if extraer_items_orden_voz(t) or re.search(r"\bpara\b", tl):
+            return True
+    return False
+
+
 def _orden_es_flujo_complejo(texto):
     t = str(texto or "").lower()
     señales = (
@@ -65,8 +81,17 @@ def parse_flujo_rapido_voz(texto_usuario):
     from modulos.mostrador_voz_flujo import extraer_items_orden_voz
 
     t = normalizar_texto_basico(texto_usuario).lower()
-    imprimir = bool(re.search(r"\bimprimir\b|\bticket\b|\bfactur", t))
-    if not imprimir:
+    es_carga = bool(re.search(r"\bcarg", t))
+    imprimir = bool(re.search(r"\bimprimir\b|\bticket\b", t))
+    tiene_factura = bool(re.search(r"\bfactura\b", t))
+    items_prev = extraer_items_orden_voz(texto_usuario)
+    tiene_cliente = bool(re.search(r"\b(para|cliente)\b", t))
+
+    if not (
+        imprimir
+        or (es_carga and tiene_factura)
+        or (tiene_factura and (tiene_cliente or items_prev))
+    ):
         return None
     if sum(
         1 for s in ("factura", "cliente", "agreg", "codigo", "unidad", "contado", "para ")
@@ -76,8 +101,8 @@ def parse_flujo_rapido_voz(texto_usuario):
 
     flujo = {
         "accion": "flujo_factura",
-        "vaciar_antes": bool(re.search(r"\bcarg", t)),
-        "imprimir_ticket": True,
+        "vaciar_antes": es_carga,
+        "imprimir_ticket": imprimir,
     }
     if re.search(r"factura\s+b\b", t):
         flujo["tipo_comprobante"] = "6"
@@ -121,6 +146,9 @@ def parse_armado_rapido_voz(texto_usuario):
     raw = str(texto_usuario or "").strip()
     t = preprocesar_texto_mostrador(raw).strip().lower()
     if not t:
+        return None
+
+    if parse_flujo_rapido_voz(raw):
         return None
 
     if re.match(r"^(presupuesto|imprimir presupuesto|pdf presupuesto)\.?$", t):
@@ -182,6 +210,10 @@ def procesar_orden_mostrador(texto_usuario):
     if es_cancelacion_usuario(texto_usuario):
         return {"accion": "cancelar_pendiente"}
 
+    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
+    if flujo_rapido:
+        return flujo_rapido
+
     armado = parse_armado_rapido_voz(texto_usuario)
     if armado:
         return armado
@@ -189,10 +221,6 @@ def procesar_orden_mostrador(texto_usuario):
     rapido = parse_rapido_voz(texto_usuario)
     if rapido:
         return rapido
-
-    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
-    if flujo_rapido:
-        return flujo_rapido
 
     client = Groq(api_key=api_key)
     from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador
