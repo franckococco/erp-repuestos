@@ -47,11 +47,165 @@ def _limpiar_codigo_orden(termino):
     return re.sub(r"\s+", "-", t).strip(",.;:")
 
 
+def _extraer_ubicacion_orden(t):
+    ubi = {}
+    for key, pat in (
+        ("pasillo", r"pasillo\s+(\d+)"),
+        ("piso", r"piso\s+(\d+)"),
+        ("modulo", r"modulo\s+(\d+)"),
+        ("fila", r"fila\s+(\d+)"),
+    ):
+        m = re.search(pat, t)
+        if m:
+            ubi[key] = int(m.group(1))
+    return ubi
+
+
+def _inferir_vehiculos_desde_texto(texto):
+    t = normalizar_texto_basico(texto)
+    claves = (
+        ("volkswagen", "VOLKSWAGEN"),
+        ("gol", "VOLKSWAGEN"),
+        ("trend", "VOLKSWAGEN"),
+        ("voyage", "VOLKSWAGEN"),
+        ("suran", "VOLKSWAGEN"),
+        ("polo", "VOLKSWAGEN"),
+        ("vento", "VOLKSWAGEN"),
+        ("amarok", "VOLKSWAGEN"),
+        ("peugeot", "PEUGEOT"),
+        ("208", "PEUGEOT"),
+        ("207", "PEUGEOT"),
+        ("308", "PEUGEOT"),
+        ("citroen", "CITROEN"),
+        ("c4", "CITROEN"),
+        ("fiat", "FIAT"),
+        ("cronos", "FIAT"),
+        ("argo", "FIAT"),
+        ("ford", "FORD"),
+        ("ka", "FORD"),
+        ("ranger", "FORD"),
+        ("renault", "RENAULT"),
+        ("clio", "RENAULT"),
+        ("sandero", "RENAULT"),
+        ("chevrolet", "CHEVROLET"),
+        ("onix", "CHEVROLET"),
+        ("corsa", "CHEVROLET"),
+    )
+    found = []
+    for kw, marca in claves:
+        if re.search(rf"\b{re.escape(kw)}\b", t) and marca not in found:
+            found.append(marca)
+    return found or ["UNIVERSAL"]
+
+
+def _es_carga_producto_nuevo(t):
+    """True si la orden describe un producto nuevo, no sumar stock."""
+    if re.search(r"\b(?:carg\w*)\s+\d+\s*unidad\w*\s+(?:del?\s+|al?\s+)?", t):
+        return False
+    if re.search(r"\b(?:agreg\w*|sum\w*|aument\w*)\s+\d+\s*unidad", t):
+        return False
+    if re.search(r"\b(pasillo|piso|modulo|fila)\b", t):
+        if re.search(r"\b(carg\w*|registr\w*|ingres\w*)\b", t):
+            return True
+    if re.search(
+        r"\b(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
+        r"[\dA-Za-z]+(?:[-/][\dA-Za-z]+)?\s+[a-z]{4,}.+\d+\s*unidad",
+        t,
+    ):
+        return True
+    return False
+
+
+def parse_cargar_producto_rapido(texto_usuario):
+    """
+    Detecta alta de producto nuevo sin Groq.
+    Ej: cargame 111 embrague de gol trend 5 unidades pasillo 1 piso 0 fila 3
+    """
+    if not texto_usuario:
+        return None
+    t = normalizar_texto_basico(str(texto_usuario)).lower()
+
+    if not re.search(r"\b(carg\w*|registr\w*|ingres\w*)\b", t):
+        return None
+
+    # Alta simple de stock existente: cargá 5 unidades del 1252 / sumá 10 al 1491
+    if re.search(
+        r"\b(?:agreg\w*|sum\w*|aument\w*)\s+\d+\s*unidad\w*\s+(?:del?\s+|al?\s+)?",
+        t,
+    ):
+        return None
+    if re.search(
+        r"\b(?:carg\w*)\s+\d+\s*unidad\w*\s+(?:del?\s+|al?\s+)?(?:codigo\s+)?[\w/-]+\s*$",
+        t,
+    ):
+        return None
+    if not _es_carga_producto_nuevo(t):
+        return None
+
+    ubi = _extraer_ubicacion_orden(t)
+    t_sin_ubi = t
+    for pat in (
+        r"\bpasillo\s+\d+",
+        r"\bpiso\s+\d+",
+        r"\bmodulo\s+\d+",
+        r"\bfila\s+\d+",
+    ):
+        t_sin_ubi = re.sub(pat, " ", t_sin_ubi)
+    t_sin_ubi = re.sub(r"\s+", " ", t_sin_ubi).strip()
+
+    codigo = descripcion = None
+    stock = 1
+
+    m = re.search(
+        r"(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
+        r"([\dA-Za-z]+(?:[-/][\dA-Za-z]+)?)\s+"
+        r"(.+?)\s+"
+        r"(\d{1,4})\s*unidad",
+        t_sin_ubi,
+    )
+    if m:
+        codigo, descripcion, stock = m.group(1), m.group(2).strip(), int(m.group(3))
+    else:
+        m2 = re.search(
+            r"(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
+            r"([\dA-Za-z]+(?:[-/][\dA-Za-z]+)?)\s+"
+            r"(.++)",
+            t_sin_ubi,
+        )
+        if not m2:
+            return None
+        codigo, descripcion = m2.group(1), m2.group(2).strip()
+
+    descripcion = re.sub(r"\s+", " ", descripcion).strip(" ,.-")
+    if not descripcion or len(descripcion) < 3:
+        return None
+
+    codigo = str(codigo or "").strip().upper().replace("/", "-")
+    if not codigo:
+        return None
+
+    out = {
+        "accion": "cargar_producto",
+        "codigo": codigo,
+        "descripcion": descripcion.upper(),
+        "vehiculos": _inferir_vehiculos_desde_texto(f"{descripcion} {t}"),
+        "stock": max(1, int(stock)),
+        "marca": "GENERICO",
+    }
+    for k, v in ubi.items():
+        out[k] = v
+    return out
+
+
 def parse_alta_baja_rapido(texto_usuario):
     """Extrae alta/baja + código + cantidad sin llamar a Groq."""
     if not texto_usuario:
         return None
     t = normalizar_texto_basico(texto_usuario).lower()
+
+    if _es_carga_producto_nuevo(t):
+        return None
+
     es_baja = bool(re.search(r"\b(baj\w*|rest\w*|descont\w*|sac\w*)\b", t))
     es_alta = bool(re.search(r"\b(agreg\w*|sum\w*|carg\w*|aument\w*|ingres\w*)\b", t))
     if not es_alta and not es_baja:
@@ -61,21 +215,28 @@ def parse_alta_baja_rapido(texto_usuario):
     if es_baja and es_alta:
         accion = "baja" if t.find("baj") < t.find("agreg") and "baj" in t else "alta"
 
+    cod_pat = r"([\dA-Za-z]+(?:[-/][\dA-Za-z]+)?)"
     patrones = [
+        r"(?:agreg\w*|sum\w*|aument\w*)\s+(\d{1,4})\s*(?:unidad\w*)?\s+(?:al?\s+)?(?:codigo\s+)?" + cod_pat,
+        r"(?:carg\w*)\s+(\d{1,4})\s*unidad\w*\s+(?:del?\s+|al?\s+)?(?:codigo\s+)?" + cod_pat,
         r"(?:agreg\w*|sum\w*|carg\w*|aument\w*|baj\w*|rest\w*)\s+(?:al?\s+)?(?:codigo\s+)?"
-        r"([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidad)?",
-        r"(?:codigo\s+)([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidad)?",
-        r"(\d{1,4})\s*(?:unidad)?\s+(?:al?\s+)?(?:codigo\s+)([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)",
+        + cod_pat + r"\s+(\d{1,4})\s*(?:unidad)?",
+        r"(?:codigo\s+)" + cod_pat + r"\s+(\d{1,4})\s*(?:unidad)?",
+        r"(\d{1,4})\s*(?:unidad)?\s+(?:al?\s+)?(?:codigo\s+)" + cod_pat,
     ]
     for i, patron in enumerate(patrones):
         m = re.search(patron, t)
         if not m:
             continue
-        if i == 2:
+        if i in (0, 1):
+            cant, cod = m.group(1), m.group(2)
+        elif i == 4:
             cant, cod = m.group(1), m.group(2)
         else:
             cod, cant = m.group(1), m.group(2)
         cod = _limpiar_codigo_orden(cod)
+        if cod and "-" in cod and len(cod) > 20:
+            continue
         if cod:
             return {"accion": accion, "termino": cod, "cantidad": int(cant)}
     return None
@@ -90,6 +251,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
 
     if not api_key:
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
+
+    carga_nueva = parse_cargar_producto_rapido(texto_usuario)
+    if carga_nueva:
+        return carga_nueva
 
     rapido = parse_alta_baja_rapido(texto_usuario)
     if rapido:
