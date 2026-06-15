@@ -536,7 +536,7 @@ def render_seccion_cliente_mostrador():
     with col_info:
         st.markdown(f"**Cliente:** {cli['nombre']}")
         st.caption(
-            f"CUIT/DNI: {cli['cuit']} · {_tipo_comprobante_label(cli['tipo_comprobante'])}"
+            f"CUIT/DNI: {cli['cuit']} · {_tipo_comprobante_label_largo(cli['tipo_comprobante'])}"
             + (f" · Descuento: {cli['descuento']}%" if cli["descuento"] > 0 else "")
         )
     with col_cf:
@@ -548,13 +548,13 @@ def render_seccion_cliente_mostrador():
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
 
-    with st.expander("Buscar o cargar cliente", expanded=False):
+    with st.expander("🔍 Buscar o cargar cliente", expanded=True):
         if clientes_db:
-            st.caption(f"{len(clientes_db)} clientes registrados — buscá por nombre o CUIT/DNI.")
+            st.markdown("**Buscador de clientes**")
             buscar_cli = st.text_input(
-                "Buscar cliente",
+                "Nombre, CUIT o DNI",
                 key="mostrador_buscar_cliente",
-                placeholder="Ej: García, 30716, consumidor…",
+                placeholder="Ej: García, 30716, López…",
             )
             termino = (buscar_cli or "").strip()
             if len(termino) < 2:
@@ -587,12 +587,14 @@ def render_seccion_cliente_mostrador():
             nombre_nuevo = c1.text_input("Nombre / Razón Social")
             cuit_nuevo = c2.text_input("DNI o CUIT")
             desc_nuevo = c3.number_input("% Desc.", min_value=0.0, step=1.0, value=0.0)
+            st.markdown("**Tipo de factura**")
             tipo_nuevo = st.radio(
                 "Tipo de factura",
                 options=["6", "1"],
                 format_func=_tipo_comprobante_label_largo,
-                horizontal=True,
+                horizontal=False,
                 key="mostrador_tipo_fc_nuevo",
+                label_visibility="collapsed",
             )
             if st.form_submit_button("Guardar y usar"):
                 if nombre_nuevo and cuit_nuevo:

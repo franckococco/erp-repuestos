@@ -1313,14 +1313,20 @@ elif pagina == "config":
     with tab_clientes:
         st.subheader("Alta y Edición de Clientes")
         with st.form("conf_cliente"):
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1, c2, c3 = st.columns([3, 2, 1])
             nombre_cli = c1.text_input("Nombre / Razón Social").upper()
             cuit_cli = c2.text_input("DNI o CUIT")
             desc_cli = c3.number_input("% Descuento", min_value=0.0, step=1.0)
-            tipo_cli = c4.selectbox(
-                "Comprobante",
+            tipo_cli = st.radio(
+                "Tipo de factura",
                 options=["6", "1"],
-                format_func=lambda x: "Factura A" if x == "1" else "Factura B",
+                format_func=lambda x: (
+                    "Factura B — Consumidor final"
+                    if x == "6"
+                    else "Factura A — Responsable inscripto"
+                ),
+                horizontal=False,
+                key="conf_tipo_fc_cliente",
             )
 
             if st.form_submit_button("Guardar Cliente"):

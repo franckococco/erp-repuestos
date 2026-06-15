@@ -59,6 +59,14 @@ def aplicar_estilos_mostrador():
             .main .block-container { padding-left: 0.75rem; padding-right: 0.75rem; }
             div[data-testid="column"] { min-width: 100% !important; flex: 1 1 100% !important; }
         }
+        /* Select de clientes / facturas: texto completo legible */
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+            min-height: 2.75rem;
+        }
+        div[data-testid="stSelectbox"] [data-testid="stMarkdownContainer"] p {
+            white-space: normal !important;
+            line-height: 1.35;
+        }
         </style>
         """,
         unsafe_allow_html=True,
