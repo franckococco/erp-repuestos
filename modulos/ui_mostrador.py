@@ -518,10 +518,6 @@ def render_ia_mostrador(
         "*forma de pago transferencia*, *guardá el presupuesto*, *facturá* (pide confirmación)."
     )
 
-    total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
-    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-    total_final = total_bruto * (1 - desc_porc / 100)
-
     with st.form("form_ia_mostrador", clear_on_submit=True):
         col_ia1, col_ia2 = st.columns([4, 1])
         orden = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
