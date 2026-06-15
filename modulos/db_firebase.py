@@ -401,6 +401,25 @@ def actualizar_cantidad_item_carrito(vendedor, item_id, nueva_cantidad):
     return True, f"Cantidad actualizada a {cant} u."
 
 
+def actualizar_precio_item_carrito(vendedor, item_id, nuevo_precio):
+    precio = float(nuevo_precio)
+    if precio < 0:
+        return False, "El precio no puede ser negativo."
+
+    id_item = str(item_id).replace("/", "-")
+    ref_item = (
+        get_db().collection("presupuestos_activos")
+        .document(str(vendedor))
+        .collection("items")
+        .document(id_item)
+    )
+    if not ref_item.get().exists:
+        return False, "Ítem no encontrado en el presupuesto."
+
+    ref_item.update({"precio_unitario": precio})
+    return True, f"Precio actualizado a ${precio:,.2f}."
+
+
 def obtener_comprobante_arca(comp_id):
     if not comp_id:
         return None

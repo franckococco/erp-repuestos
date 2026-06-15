@@ -37,6 +37,34 @@ def aplicar_estilos_globales():
     )
 
 
+def aplicar_estilos_mostrador():
+    """PC: más ancho y grilla legible; móvil: columnas apiladas."""
+    st.markdown(
+        """
+        <style>
+        @media (min-width: 900px) {
+            .main .block-container { max-width: 96rem; padding-left: 1.5rem; padding-right: 1.5rem; }
+        }
+        div[data-testid="stDataEditor"] { width: 100% !important; }
+        div[data-testid="stDataEditor"] input[type="number"] { min-width: 4.5rem; font-size: 1rem; }
+        div[data-testid="stHorizontalBlock"]:has(div[data-testid="stDataEditor"]) {
+            width: 100% !important;
+        }
+        .mostrador-cobro-panel [data-testid="stMetric"] {
+            background: #f8fafc;
+            padding: 0.35rem 0.65rem;
+            border-radius: 0.5rem;
+        }
+        @media (max-width: 768px) {
+            .main .block-container { padding-left: 0.75rem; padding-right: 0.75rem; }
+            div[data-testid="column"] { min-width: 100% !important; flex: 1 1 100% !important; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_sidebar(cliente_activo):
     with st.sidebar:
         logo = ruta_logo_hafid()

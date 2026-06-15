@@ -2,6 +2,7 @@
 import base64
 from typing import Optional
 
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -14,6 +15,7 @@ from modulos.db_firebase import (
     vaciar_carrito,
     eliminar_item_carrito,
     actualizar_cantidad_item_carrito,
+    actualizar_precio_item_carrito,
     confirmar_venta,
     validar_carrito_para_venta,
     guardar_comprobante_arca,
@@ -1049,90 +1051,151 @@ def render_ia_mostrador(
     render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
 
-def render_carrito_editable(vendedor, carrito):
-    st.markdown("**Ítems del presupuesto** *(editá cantidades antes de facturar)*")
-    hdr = st.columns([2, 4, 1, 1, 2, 1])
-    hdr[0].caption("Código")
-    hdr[1].caption("Descripción")
-    hdr[2].caption("Cant.")
-    hdr[3].caption("")
-    hdr[4].caption("Subtotal")
-    hdr[5].caption("")
-
+def _carrito_a_dataframe(carrito):
+    filas = []
     for item in carrito:
         if not isinstance(item, dict):
             continue
-        iid = str(item.get("id", ""))
-        cant_actual = int(item.get("cantidad", 1))
-        cols = st.columns([2, 4, 1, 1, 2, 1])
-        cols[0].write(iid[:20] + ("…" if len(iid) > 20 else ""))
-        cols[1].write(str(item.get("descripcion", ""))[:42])
-        nueva_cant = cols[2].number_input(
-            "cant",
-            min_value=1,
-            max_value=9999,
-            value=cant_actual,
-            key=f"qty_cart_{vendedor}_{iid}",
+        cant = int(item.get("cantidad", 1))
+        precio = float(item.get("precio_unitario", 0))
+        filas.append({
+            "_id": str(item.get("id", "")),
+            "Código": str(item.get("id", "")),
+            "Descripción": str(item.get("descripcion", "")),
+            "Cant.": cant,
+            "Precio unit.": precio,
+        })
+    return pd.DataFrame(filas)
+
+
+def _aplicar_cambios_carrito(vendedor, carrito, df_editado):
+    """Sincroniza cantidad/precio editados en la grilla con Firebase."""
+    orig_map = {str(i.get("id", "")): i for i in carrito if isinstance(i, dict)}
+    errores = []
+    cambios = 0
+
+    for _, row in df_editado.iterrows():
+        iid = str(row.get("_id", ""))
+        if not iid or iid not in orig_map:
+            continue
+        orig = orig_map[iid]
+        cant_n = int(row.get("Cant.", orig.get("cantidad", 1)))
+        cant_o = int(orig.get("cantidad", 1))
+        precio_n = float(row.get("Precio unit.", orig.get("precio_unitario", 0)))
+        precio_o = float(orig.get("precio_unitario", 0))
+
+        if cant_n != cant_o:
+            ok, msj = actualizar_cantidad_item_carrito(str(vendedor), iid, cant_n)
+            if ok:
+                cambios += 1
+            else:
+                errores.append(msj)
+        if precio_n != precio_o:
+            ok, msj = actualizar_precio_item_carrito(str(vendedor), iid, precio_n)
+            if ok:
+                cambios += 1
+            else:
+                errores.append(msj)
+
+    return cambios, errores
+
+
+def render_carrito_grilla(vendedor, carrito):
+    """Grilla ancha editable (cantidad y precio) — PC y móvil."""
+    st.markdown("**Ítems del presupuesto**")
+    st.caption("Editá **Cant.** y **Precio unit.** en la tabla y pulsá «Aplicar cambios».")
+
+    df = _carrito_a_dataframe(carrito)
+    if df.empty:
+        return
+
+    df_edit = st.data_editor(
+        df,
+        column_config={
+            "_id": None,
+            "Código": st.column_config.TextColumn("Código", disabled=True, width="medium"),
+            "Descripción": st.column_config.TextColumn("Descripción", disabled=True, width="large"),
+            "Cant.": st.column_config.NumberColumn(
+                "Cant.", min_value=1, max_value=9999, step=1, format="%d"
+            ),
+            "Precio unit.": st.column_config.NumberColumn(
+                "Precio unit.", min_value=0.0, step=0.01, format="$ %.2f"
+            ),
+        },
+        use_container_width=True,
+        hide_index=True,
+        key=f"cart_editor_{vendedor}",
+    )
+
+    act1, act2, act3 = st.columns([2, 2, 3])
+    if act1.button("✅ Aplicar cambios", type="primary", use_container_width=True, key=f"cart_apply_{vendedor}"):
+        cambios, errores = _aplicar_cambios_carrito(vendedor, carrito, df_edit)
+        if errores:
+            st.error("\n".join(errores))
+        elif cambios:
+            st.rerun()
+        else:
+            st.toast("Sin cambios.")
+
+    ids = [str(i.get("id", "")) for i in carrito if isinstance(i, dict)]
+    labels = {
+        iid: f"{iid[:28]}…" if len(iid) > 28 else iid for iid in ids
+    }
+    with act2:
+        st.caption("Quitar ítem")
+        quitar = st.selectbox(
+            "Quitar ítem",
+            options=[""] + ids,
+            format_func=lambda x: "— Elegir —" if not x else labels.get(x, x),
+            key=f"cart_del_sel_{vendedor}",
             label_visibility="collapsed",
         )
-        if cols[3].button("✓", key=f"upd_cart_{vendedor}_{iid}", help="Aplicar cantidad"):
-            if int(nueva_cant) != cant_actual:
-                ok, msj = actualizar_cantidad_item_carrito(str(vendedor), iid, int(nueva_cant))
-                if ok:
-                    st.rerun()
-                else:
-                    st.error(msj)
-            else:
-                st.toast("Sin cambios.")
-        cols[4].write(f"${float(item.get('subtotal', 0)):,.2f}")
-        if cols[5].button("✕", key=f"del_cart_{vendedor}_{iid}", help="Quitar del presupuesto"):
-            ok, msj = eliminar_item_carrito(str(vendedor), iid)
+    if act3.button("🗑️ Quitar seleccionado", use_container_width=True, key=f"cart_del_btn_{vendedor}"):
+        if quitar:
+            ok, msj = eliminar_item_carrito(str(vendedor), quitar)
             if ok:
                 st.rerun()
             else:
                 st.error(msj)
+        else:
+            st.warning("Elegí un ítem para quitar.")
 
 
-def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
+def render_panel_cobro_mostrador(
+    vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+):
+    """Totales, pago y botones de facturación (columna lateral)."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
 
     with st.container(border=True):
+        st.markdown('<div class="mostrador-cobro-panel">', unsafe_allow_html=True)
         if listo_ticket:
-            st.info("Revisá ítems y cantidades; luego **Facturar e imprimir ticket** (un solo paso).")
+            st.info("Revisá la grilla abajo y facturá cuando esté listo.")
 
-        render_carrito_editable(vendedor, carrito)
-
-        tot_col, pago_col = st.columns([2, 2])
-        with tot_col:
+        if desc_porc > 0:
             st.metric("Subtotal", f"${total_bruto:,.2f}")
-            if desc_porc > 0:
-                st.caption(f"Descuento {desc_porc}%: -${(total_bruto * desc_porc / 100):,.2f}")
-            st.metric("Total", f"${total_final:,.2f}")
-        with pago_col:
-            forma_pago = st.selectbox(
-                "Forma de pago",
-                list(FORMAS_PAGO),
-                index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
-                key=f"pago_arca_{vendedor}",
-            )
-            _set_forma_pago(vendedor, forma_pago)
-            pres_id = st.session_state.get("presupuesto_cargado_id")
-            if pres_id:
-                st.caption(f"Presupuesto `{pres_id[:8]}…`")
+            st.caption(f"Descuento {desc_porc}%")
+        st.metric("Total", f"${total_final:,.2f}")
+
+        forma_pago = st.selectbox(
+            "Forma de pago",
+            list(FORMAS_PAGO),
+            index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
+            key=f"pago_arca_{vendedor}",
+        )
+        _set_forma_pago(vendedor, forma_pago)
 
         cuit_fact, clave_fact, _ = _leer_secrets_facturador()
         puede_facturar = bool(cuit_fact and clave_fact)
 
-        btn_tk, btn_a4, btn_pres = st.columns(3)
-        if btn_tk.button(
+        if st.button(
             "🖨️ Facturar e imprimir ticket",
             type="primary",
             use_container_width=True,
             disabled=not puede_facturar,
+            key=f"btn_ticket_{vendedor}",
         ):
-            if not puede_facturar:
-                st.error("Completá CUIT y clave en «Facturación ARCA».")
-            else:
+            if puede_facturar:
                 ok, msj = _facturar_desde_carrito(
                     vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
                 )
@@ -1141,14 +1204,9 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
                 else:
                     st.error(msj)
 
-        if btn_a4.button(
-            "🧾 Factura A4 + ticket",
-            use_container_width=True,
-            disabled=not puede_facturar,
-        ):
-            if not puede_facturar:
-                st.error("Completá CUIT y clave en «Facturación ARCA».")
-            else:
+        b_a4, b_pres = st.columns(2)
+        if b_a4.button("🧾 A4 + ticket", use_container_width=True, disabled=not puede_facturar):
+            if puede_facturar:
                 ok, msj = _facturar_desde_carrito(
                     vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
                 )
@@ -1161,7 +1219,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
             str(vendedor), carrito, total_bruto,
             st.session_state.cliente_activo["nombre"], desc_porc,
         )
-        btn_pres.download_button(
+        b_pres.download_button(
             "📄 Presupuesto",
             pdf_bytes,
             f"Presupuesto_{vendedor}.pdf",
@@ -1170,21 +1228,11 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
         )
 
         if not puede_facturar:
-            st.caption("Completá CUIT y clave en «Facturación ARCA» arriba.")
+            st.caption("Completá CUIT y clave en «Facturación ARCA».")
 
         with st.expander("Más acciones", expanded=False):
-            nota_pres = st.text_input("Nota al guardar presupuesto", key=f"nota_pres_{vendedor}")
-            ex1, ex2, ex3 = st.columns(3)
-            if ex1.button("✅ Venta sin factura", use_container_width=True):
-                exito, msj = confirmar_venta(str(vendedor))
-                if exito:
-                    _cerrar_presupuesto_cargado("vendido")
-                    st.session_state.mostrador_listo_para_ticket = False
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
-            if ex2.button("💾 Guardar presupuesto", use_container_width=True):
+            nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
+            if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
                 ok, msj, nuevo_id = guardar_presupuesto(
                     str(vendedor), st.session_state.cliente_activo, nota_pres
                 )
@@ -1193,10 +1241,28 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
                     st.success(msj)
                 else:
                     st.error(msj)
-            if ex3.button("🗑️ Vaciar carrito", use_container_width=True):
+            if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
+                exito, msj = confirmar_venta(str(vendedor))
+                if exito:
+                    _cerrar_presupuesto_cargado("vendido")
+                    st.session_state.mostrador_listo_para_ticket = False
+                    st.success(msj)
+                    st.rerun()
+                else:
+                    st.error(msj)
+            if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
                 vaciar_carrito(str(vendedor))
                 st.session_state.mostrador_listo_para_ticket = False
                 st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
+    """Compat: panel lateral de cobro (la grilla va aparte a ancho completo)."""
+    render_panel_cobro_mostrador(
+        vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+    )
 
 
 def sincronizar_config_ticket_desde_nube():

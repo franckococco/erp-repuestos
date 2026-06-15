@@ -699,6 +699,7 @@ elif pagina == "mostrador":
         render_credenciales_arca,
         render_buscador_productos,
         render_acciones_carrito,
+        render_carrito_grilla,
         render_presupuestos_guardados,
         render_ia_mostrador,
         render_confirmacion_pendiente_mostrador,
@@ -706,7 +707,9 @@ elif pagina == "mostrador":
         render_factura_arca_exitosa,
         render_historial_facturas_arca,
     )
+    from modulos.ui_estilos import aplicar_estilos_mostrador
 
+    aplicar_estilos_mostrador()
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
 
     bar_cli, bar_cred = st.columns([3, 2])
@@ -722,7 +725,7 @@ elif pagina == "mostrador":
         label_visibility="collapsed",
     )
 
-    col_izq, col_der = st.columns([3, 2])
+    col_izq, col_der = st.columns([3, 2], gap="large")
 
     with col_izq:
         render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
@@ -802,6 +805,11 @@ elif pagina == "mostrador":
             st.info("Carrito vacío — buscá productos o usá la IA de voz.")
 
         render_historial_facturas_arca()
+
+    carrito_full = obtener_carrito(str(vendedor)) or []
+    if carrito_full:
+        st.divider()
+        render_carrito_grilla(vendedor, carrito_full)
 
 # --- ASISTENTE ---
 elif pagina == "asistente":
