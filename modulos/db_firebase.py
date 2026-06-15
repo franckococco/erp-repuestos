@@ -344,13 +344,30 @@ def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pag
 
 
 def listar_comprobantes_arca(limite=40):
-    docs = (
-        get_db().collection("comprobantes_arca")
-        .order_by("fecha", direction=firestore.Query.DESCENDING)  # type: ignore
-        .limit(limite)
-        .stream()
+    try:
+        docs = list(get_db().collection("comprobantes_arca").limit(200).stream())
+    except Exception:
+        return []
+    items = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+    items.sort(
+        key=lambda x: x.get("fecha") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
     )
-    return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
+    return items[:limite]
+
+
+def eliminar_item_carrito(vendedor, item_id):
+    id_item = str(item_id).replace("/", "-")
+    ref = (
+        get_db().collection("presupuestos_activos")
+        .document(str(vendedor))
+        .collection("items")
+        .document(id_item)
+    )
+    if not ref.get().exists:
+        return False, "Ítem no encontrado en el presupuesto."
+    ref.delete()
+    return True, "Ítem quitado del presupuesto."
 
 
 def obtener_comprobante_arca(comp_id):

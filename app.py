@@ -704,6 +704,7 @@ elif pagina == "mostrador":
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
     render_seccion_cliente_mostrador()
     render_credenciales_arca()
+    render_factura_arca_exitosa("_top")
     render_historial_facturas_arca()
 
     vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
@@ -765,8 +766,6 @@ elif pagina == "mostrador":
         tf = tb * (1 - dp / 100)
         render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
 
-    render_factura_arca_exitosa()
-
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []
     if carrito:
@@ -776,6 +775,8 @@ elif pagina == "mostrador":
         render_acciones_carrito(
             vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
         )
+    elif st.session_state.get("factura_arca_reciente"):
+        render_factura_arca_exitosa("_abajo")
 
 # --- ASISTENTE ---
 elif pagina == "asistente":

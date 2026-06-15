@@ -12,6 +12,7 @@ from modulos.db_firebase import (
     cliente_db_a_activo,
     obtener_carrito,
     vaciar_carrito,
+    eliminar_item_carrito,
     confirmar_venta,
     validar_carrito_para_venta,
     guardar_comprobante_arca,
@@ -521,7 +522,7 @@ def _render_botones_factura_pdf(nro, pdf_ticket, pdf_a4, key_prefix):
             )
 
 
-def render_factura_arca_exitosa():
+def render_factura_arca_exitosa(key_suffix=""):
     rec = st.session_state.get("factura_arca_reciente")
     if not rec:
         return False
@@ -531,25 +532,38 @@ def render_factura_arca_exitosa():
     cae = datos.get("cae", "")
     vto = datos.get("vencimiento_cae", "")
     total = rec.get("total")
+    ks = key_suffix or "top"
 
     with st.container(border=True):
-        st.success("Factura ARCA autorizada — CAE otorgado por AFIP")
+        if cae:
+            st.success("AFIP autorizó la factura — CAE otorgado")
+        else:
+            st.error("Factura procesada pero sin CAE en la respuesta")
+
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Nro. comprobante", nro)
-        c2.metric("CAE", str(cae) if cae else "—")
+        c2.metric("CAE", str(cae) if cae else "Sin CAE")
         c3.metric("Vto. CAE", str(vto) if vto else "—")
         if total is not None:
             c4.metric("Total", f"${float(total):,.2f}")
-        _render_botones_factura_pdf(nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), "fact_reciente")
-        if st.button("Cerrar aviso", key="cerrar_factura_arca"):
+
+        _render_botones_factura_pdf(
+            nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), f"fact_{ks}"
+        )
+        if st.button("Cerrar aviso", key=f"cerrar_factura_arca_{ks}"):
             st.session_state.factura_arca_reciente = None
             st.rerun()
     return True
 
 
 def render_historial_facturas_arca():
-    with st.expander("Facturas ARCA emitidas — reimprimir", expanded=False):
-        lista = listar_comprobantes_arca(40)
+    expandido = bool(st.session_state.get("factura_arca_reciente"))
+    with st.expander("Facturas ARCA emitidas — reimprimir", expanded=expandido):
+        try:
+            lista = listar_comprobantes_arca(40)
+        except Exception as ex:
+            st.error(f"No se pudo leer el historial: {ex}")
+            return
         if not lista:
             st.info("Todavía no hay facturas ARCA guardadas.")
             return
@@ -907,8 +921,34 @@ def render_ia_mostrador(
     render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
 
+def render_carrito_editable(vendedor, carrito):
+    st.markdown("**Ítems del presupuesto**")
+    hdr = st.columns([2, 4, 1, 2, 1])
+    hdr[0].caption("Código")
+    hdr[1].caption("Descripción")
+    hdr[2].caption("Cant.")
+    hdr[3].caption("Subtotal")
+    hdr[4].caption("")
+
+    for item in carrito:
+        if not isinstance(item, dict):
+            continue
+        iid = str(item.get("id", ""))
+        cols = st.columns([2, 4, 1, 2, 1])
+        cols[0].write(iid[:20] + ("…" if len(iid) > 20 else ""))
+        cols[1].write(str(item.get("descripcion", ""))[:42])
+        cols[2].write(str(item.get("cantidad", 1)))
+        cols[3].write(f"${float(item.get('subtotal', 0)):,.2f}")
+        if cols[4].button("✕", key=f"del_cart_{vendedor}_{iid}", help="Quitar del presupuesto"):
+            ok, msj = eliminar_item_carrito(str(vendedor), iid)
+            if ok:
+                st.rerun()
+            else:
+                st.error(msj)
+
+
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
-    st.table(carrito)
+    render_carrito_editable(vendedor, carrito)
     st.write(f"### Subtotal: ${total_bruto:,.2f}")
     if desc_porc > 0:
         st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
@@ -960,6 +1000,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
                     vendedor, carrito, total_final, desc_porc, forma_pago
                 )
             if ok:
+                st.success(f"{msj} Revisá el panel verde arriba con el CAE.")
                 st.rerun()
             else:
                 st.error(msj)
