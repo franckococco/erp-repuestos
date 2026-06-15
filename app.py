@@ -709,6 +709,8 @@ elif pagina == "mostrador":
     )
     from modulos.ui_estilos import aplicar_estilos_mostrador
 
+    from modulos.mostrador_voz_flujo import inventario_cache_mostrador
+
     aplicar_estilos_mostrador()
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
 
@@ -726,6 +728,7 @@ elif pagina == "mostrador":
     )
 
     col_izq, col_der = st.columns([3, 2], gap="large")
+    inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
 
     with col_izq:
         render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
@@ -735,9 +738,8 @@ elif pagina == "mostrador":
         )
 
         with t_buscar:
-            inv_completo = obtener_inventario_completo() or []
-            if inv_completo:
-                render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario)
+            if inv_mostrador:
+                render_buscador_productos(vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario)
                 render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
             else:
                 st.info("El inventario está vacío. Agregue productos primero.")

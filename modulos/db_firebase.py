@@ -621,7 +621,7 @@ def _ref_producto(id_m):
     return get_db().collection("productos").document(str(id_m))
 
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=300)
 def _indice_resolucion_productos():
     """
     Índice en memoria (desde inventario cacheado) para resolver CODIGO_MARCA
@@ -652,6 +652,7 @@ def _indice_resolucion_productos():
             "stock": int(item.get("stock", 0)),
             "precio_venta": float(item.get("precio_venta", 0.0)),
             "descripcion": str(item.get("descripcion", "")),
+            "usa_variantes_fs": bool(item.get("usa_variantes_fs")),
         }
 
     return {
@@ -1578,7 +1579,7 @@ def registrar_aumento_stock(id_producto, cantidad):
     return True, f"Aumento de {cantidad} unidades en marca {marca_req} registrado exitosamente."
 
 # --- INVENTARIO Y VENTAS ---
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=300)
 def obtener_inventario_completo() -> list:
     docs = get_db().collection("productos").get()
     inventario = []
@@ -1607,7 +1608,8 @@ def obtener_inventario_completo() -> list:
                 "ultimo_costo_base": master.get("ultimo_costo_base", 0.0),
                 "proveedor": master.get("proveedor", "DESCONOCIDO"),
                 "cuit_proveedor": master.get("cuit_proveedor", "0"),
-                "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0})
+                "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}),
+                "usa_variantes_fs": False,
             }
             inventario.append(item)
         else:
@@ -1628,7 +1630,8 @@ def obtener_inventario_completo() -> list:
                     "ultimo_costo_base": v_data.get("ultimo_costo_base", 0.0),
                     "proveedor": v_data.get("proveedor", ""),
                     "cuit_proveedor": v_data.get("cuit_proveedor", ""),
-                    "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0})
+                    "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}),
+                    "usa_variantes_fs": True,
                 }
                 inventario.append(item)
                 
@@ -1639,41 +1642,50 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     if cant <= 0:
         return False, "La cantidad debe ser mayor a cero."
 
-    indice = _indice_resolucion_productos()
-    ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto, indice)
-    err_val = _validar_resolucion_producto(ref_prod, id_m, marca_req, stock_disp, err)
-    if err_val:
-        return False, err_val
-    assert ref_prod is not None and id_m is not None and marca_req is not None and stock_disp is not None
+    try:
+        indice = _indice_resolucion_productos()
+        ref_prod, id_m, marca_req, stock_disp, err = _resolver_producto_y_stock(id_producto, indice)
+        err_val = _validar_resolucion_producto(ref_prod, id_m, marca_req, stock_disp, err)
+        if err_val:
+            return False, err_val
+        assert ref_prod is not None and id_m is not None and marca_req is not None and stock_disp is not None
 
-    info = indice["items_por_variante"].get((id_m, marca_req), {})
-    precio = float(info.get("precio_venta", 0.0))
-    descripcion = str(info.get("descripcion", id_m))
+        info = indice["items_por_variante"].get((id_m, marca_req), {})
+        precio = float(info.get("precio_venta", 0.0))
+        descripcion = str(info.get("descripcion", id_m))
 
-    id_item = f"{id_m}_{marca_req}"
-    ref_item = get_db().collection("presupuestos_activos").document(vendedor).collection("items").document(id_item)
+        id_item = f"{id_m}_{marca_req}"
+        ref_item = get_db().collection("presupuestos_activos").document(vendedor).collection("items").document(id_item)
 
-    qty_carrito = 0
-    doc_carrito = ref_item.get()
-    if doc_carrito.exists:
-        qty_carrito = int((doc_carrito.to_dict() or {}).get("cantidad", 0))
+        qty_carrito = 0
+        doc_carrito = ref_item.get()
+        if doc_carrito.exists:
+            qty_carrito = int((doc_carrito.to_dict() or {}).get("cantidad", 0))
 
-    if qty_carrito + cant > stock_disp:
-        libre = max(0, stock_disp - qty_carrito)
-        return False, (
-            f"Stock insuficiente. Disponible para agregar: {libre} u. "
-            f"(en carrito: {qty_carrito}, stock total: {stock_disp})."
-        )
+        if qty_carrito + cant > stock_disp:
+            libre = max(0, stock_disp - qty_carrito)
+            return False, (
+                f"Stock insuficiente. Disponible para agregar: {libre} u. "
+                f"(en carrito: {qty_carrito}, stock total: {stock_disp})."
+            )
 
-    ref_item.set({
-        "id_maestro": id_m,
-        "marca": marca_req,
-        "descripcion": f"{descripcion} ({marca_req})",
-        "precio_unitario": precio,
-        "cantidad": firestore.Increment(cant),  # type: ignore
-    }, merge=True)
+        ref_item.set({
+            "id_maestro": id_m,
+            "marca": marca_req,
+            "descripcion": f"{descripcion} ({marca_req})",
+            "precio_unitario": precio,
+            "cantidad": firestore.Increment(cant),  # type: ignore
+        }, merge=True)
 
-    return True, f"Agregado: {descripcion} ({marca_req})"
+        return True, f"Agregado: {descripcion} ({marca_req})"
+    except Exception as exc:
+        nombre = type(exc).__name__
+        if nombre == "ResourceExhausted" or "resource exhausted" in str(exc).lower():
+            return False, (
+                "Cuota diaria de Firebase agotada. Esperá al reset (medianoche UTC) "
+                "o activá el plan Blaze en Firebase Console para continuar hoy."
+            )
+        raise
 
 def obtener_carrito(vendedor) -> list:
     docs = get_db().collection("presupuestos_activos").document(vendedor).collection("items").get()
@@ -1699,11 +1711,12 @@ def validar_carrito_para_venta(vendedor):
 
     lineas_ok = []
     errores = []
+    indice = _indice_resolucion_productos()
 
     for item in items:
         cant = int(item.get("cantidad", 0))
         id_item = str(item.get("id", "")).replace("/", "-")
-        ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item)
+        ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item, indice)
         err_val = _validar_resolucion_producto(ref_prod, id_m, marca, stock_disp, err)
         if err_val:
             errores.append(f"{id_item}: {err_val}")
@@ -1718,11 +1731,13 @@ def validar_carrito_para_venta(vendedor):
                 f"(pedido {cant}, disponible {stock_disp})."
             )
             continue
+        info = indice["items_por_variante"].get((id_m, marca), {})
         lineas_ok.append({
             "item": item,
             "ref_prod": ref_prod,
             "marca": marca,
             "cantidad": cant,
+            "usa_variantes_fs": bool(info.get("usa_variantes_fs")),
         })
 
     if errores:
@@ -1746,8 +1761,7 @@ def _descontar_stock_lineas_carrito(vendedor, lineas_ok):
             .document(item["id"])
         )
 
-        doc_prod = ref_prod.get()
-        if doc_prod.exists and "variantes" in (doc_prod.to_dict() or {}):
+        if linea.get("usa_variantes_fs", True):
             batch.update(ref_prod, {
                 f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
             })
