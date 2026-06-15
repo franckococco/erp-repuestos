@@ -852,7 +852,7 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
 
     if col_fc.button("🧾 Emitir factura ARCA", use_container_width=True, disabled=not puede_facturar):
         if not puede_facturar:
-            st.error("Configurá FACTURADOR_CUIT y FACTURADOR_CLAVE_SECRETA en Streamlit Secrets.")
+            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
         else:
             with st.spinner("Solicitando CAE a ARCA/AFIP…"):
                 ok, msj = ejecutar_emitir_factura_arca(
