@@ -13,6 +13,9 @@ load_dotenv(override=True)
 
 FORMAS_PAGO = ("Contado", "Transferencia", "Tarjeta", "Cheque", "MercadoPago")
 
+_MODELO_RAPIDO = "llama-3.1-8b-instant"
+_MODELO_FLUJO = "llama-3.3-70b-versatile"
+
 
 def normalizar_forma_pago(texto):
     if not texto:
@@ -48,6 +51,86 @@ def es_cancelacion_usuario(texto):
     return bool(re.search(r"\b(no|cancelá|cancelar|anulá|anular|detener|pará)\b", t))
 
 
+def _orden_es_flujo_complejo(texto):
+    t = str(texto or "").lower()
+    señales = (
+        "factura", "cliente", "agreg", "sumá", "poneme", "código", "codigo",
+        "unidades", "contado", "imprimir", "ticket", "consumidor",
+    )
+    return sum(1 for s in señales if s in t) >= 2
+
+
+def parse_flujo_rapido_voz(texto_usuario):
+    """Detecta órdenes compuestas sin Groq (más rápido)."""
+    t = preprocesar_texto_usuario(texto_usuario).strip().lower()
+    imprimir = bool(re.search(r"\bimprimir\b|\bticket\b|\bfactur", t))
+    if not imprimir:
+        return None
+    if sum(1 for s in ("factura", "cliente", "agreg", "codigo", "código", "unidad", "contado", "para ")
+           if s in t) < 2:
+        return None
+
+    flujo = {
+        "accion": "flujo_factura",
+        "vaciar_antes": bool(re.search(r"\bcarg", t)),
+        "imprimir_ticket": True,
+    }
+    if re.search(r"factura\s+b\b", t):
+        flujo["tipo_comprobante"] = "6"
+    elif re.search(r"factura\s+a\b", t):
+        flujo["tipo_comprobante"] = "1"
+
+    if re.search(r"consumidor\s+final|particular", t):
+        flujo["consumidor_final"] = True
+    else:
+        m_cli = re.search(
+            r"(?:para|cliente)\s+(.+?)(?:,|\s+(?:agreg|codigo|código|forma|pago|imprimir|factura)\b)",
+            t,
+        )
+        if m_cli:
+            flujo["nombre_cliente"] = m_cli.group(1).strip().upper()
+
+    items = []
+    for m in re.finditer(
+        r"(?:codigo|código)\s+(\S+)\s+(\d+)\s*(?:unidad)?", t
+    ):
+        items.append({"termino": m.group(1).upper(), "cantidad": int(m.group(2))})
+    if not items:
+        for m in re.finditer(
+            r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?(\S+)\s+(\d+)\s*(?:unidad)?", t
+        ):
+            items.append({"termino": m.group(1).upper(), "cantidad": int(m.group(2))})
+    if items:
+        flujo["items"] = items
+
+    if re.search(r"contado|efectivo", t):
+        flujo["forma_pago"] = "Contado"
+    elif re.search(r"transfer", t):
+        flujo["forma_pago"] = "Transferencia"
+    elif re.search(r"tarjeta", t):
+        flujo["forma_pago"] = "Tarjeta"
+    elif re.search(r"cheque", t):
+        flujo["forma_pago"] = "Cheque"
+    elif re.search(r"mercado", t):
+        flujo["forma_pago"] = "MercadoPago"
+
+    if flujo.get("items") or flujo.get("nombre_cliente") or flujo.get("consumidor_final"):
+        return flujo
+    return None
+
+
+def parse_rapido_voz(texto_usuario):
+    """Atajos sin llamar a Groq (más rápido)."""
+    t = preprocesar_texto_usuario(texto_usuario).strip().lower()
+    if re.match(r"^(imprimir|imprimí|imprime|ticket|facturá|factura)\.?$", t):
+        return {"accion": "imprimir_ticket"}
+    if re.search(r"\bfactura\s+b\b", t) and re.search(r"\bimprimir\b", t):
+        return None
+    if t in ("consumidor final", "particular"):
+        return {"accion": "consumidor_final"}
+    return None
+
+
 def procesar_orden_mostrador(texto_usuario):
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -64,46 +147,67 @@ def procesar_orden_mostrador(texto_usuario):
     if es_cancelacion_usuario(texto_usuario):
         return {"accion": "cancelar_pendiente"}
 
+    rapido = parse_rapido_voz(texto_usuario)
+    if rapido:
+        return rapido
+
+    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
+    if flujo_rapido:
+        return flujo_rapido
+
     client = Groq(api_key=api_key)
     texto_procesado = preprocesar_texto_usuario(texto_usuario)
+    es_flujo = _orden_es_flujo_complejo(texto_procesado)
+    modelo = _MODELO_FLUJO if es_flujo else _MODELO_RAPIDO
 
     prompt = f"""
     Eres el asistente de MOSTRADOR / CAJA de "Hafid Repuestos".
-    Solo ayudás a armar presupuestos, elegir cliente, forma de pago, guardar presupuesto,
-    confirmar venta o emitir factura fiscal. NO gestionás depósito ni ubicaciones.
+    Interpretás órdenes de venta y facturación fiscal ARCA/AFIP.
 
-    ORDEN DEL USUARIO: "{texto_procesado}"
+    ORDEN: "{texto_procesado}"
 
     REGLAS:
-    1. Agregar al carrito: "poneme", "agregá", "sumá al presupuesto" -> agregar_carrito con termino limpio y cantidad.
-    2. Buscar/consultar precio/stock sin agregar -> buscar.
-    3. Cliente registrado por nombre -> set_cliente (solo nombre, sin CUIT).
-    4. Consumidor final / particular sin nombre -> consumidor_final.
-    5. Forma de pago -> set_forma_pago (Contado, Transferencia, Tarjeta, Cheque, MercadoPago).
-    6. Guardar presupuesto -> guardar_presupuesto (nota opcional).
-    7. Cobrar / confirmar venta SIN factura fiscal -> confirmar_venta.
-    8. Facturar / emitir factura ARCA/AFIP -> facturar.
-    9. Vaciar carrito / limpiar presupuesto -> vaciar_carrito.
-    10. Limpia términos basura al buscar o agregar productos.
+    - Si la orden tiene VARIAS partes (cliente + productos + pago + imprimir), usá "flujo_factura".
+    - "Factura B" -> tipo_comprobante "6". "Factura A" -> "1".
+    - "Imprimir" / "ticket" al final -> imprimir_ticket true (factura + ticket térmico, sin pedir confirmación).
+    - Códigos de producto: números o CODIGO_MARCA (ej. 3524150, F00099C125_GENERICO).
+    - "Agregá código X 5 unidades" -> items con termino X y cantidad 5.
+    - "Cargame factura B para [cliente]" -> nombre_cliente + tipo 6 + vaciar_antes true si dice cargar/cargame.
+    - Una sola acción simple -> acciones individuales abajo.
 
-    Devolvé SOLO JSON con UNA acción:
+    FLUJO COMPLETO (preferido si hay varias instrucciones en una frase):
+    {{
+      "accion": "flujo_factura",
+      "vaciar_antes": true/false,
+      "tipo_comprobante": "6" o "1",
+      "nombre_cliente": "NOMBRE o null",
+      "consumidor_final": true/false,
+      "items": [{{"termino": "CODIGO_O_DESC", "cantidad": N}}],
+      "forma_pago": "Contado|Transferencia|Tarjeta|Cheque|MercadoPago",
+      "imprimir_ticket": true/false
+    }}
 
-    {{"accion": "agregar_carrito", "termino": "RAIZ", "cantidad": NUMERO}}
+    ACCIONES SIMPLES (una sola):
+    {{"accion": "agregar_carrito", "termino": "RAIZ", "cantidad": N}}
     {{"accion": "buscar", "termino": "RAIZ"}}
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE"}}
-    {{"accion": "consumidor_final"}}
-    {{"accion": "set_forma_pago", "forma_pago": "Contado|Transferencia|Tarjeta|Cheque|MercadoPago"}}
-    {{"accion": "guardar_presupuesto", "nota": "TEXTO_O_VACIO"}}
+    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE", "tipo_comprobante": "6" o "1" o null}}
+    {{"accion": "set_tipo_factura", "tipo_comprobante": "6" o "1"}}
+    {{"accion": "consumidor_final", "tipo_comprobante": "6"}}
+    {{"accion": "set_forma_pago", "forma_pago": "Contado"}}
+    {{"accion": "imprimir_ticket"}}
+    {{"accion": "guardar_presupuesto", "nota": ""}}
     {{"accion": "confirmar_venta"}}
     {{"accion": "facturar"}}
     {{"accion": "vaciar_carrito"}}
-    {{"accion": "consulta", "respuesta": "Texto si no entendiste"}}
+    {{"accion": "consulta", "respuesta": "..."}}
+
+    Devolvé SOLO JSON válido.
     """
 
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile",
+            model=modelo,
             temperature=0.0,
             response_format={"type": "json_object"},
         )

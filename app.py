@@ -32,6 +32,7 @@ _ARCHIVOS_MODULOS = (
     "factura_arca_pdf.py",
     "ui_mostrador.py",
     "ia_mostrador.py",
+    "mostrador_voz_flujo.py",
     "util_pdf.py",
 )
 

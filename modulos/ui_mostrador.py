@@ -31,6 +31,11 @@ from modulos.ia_mostrador import (
     procesar_orden_mostrador,
     normalizar_forma_pago,
 )
+from modulos.mostrador_voz_flujo import (
+    inventario_cache_mostrador,
+    agregar_termino_voz,
+    ejecutar_flujo_factura_voz,
+)
 
 
 CONFIG_TICKET_DEFAULT = {
@@ -533,6 +538,7 @@ def render_factura_arca_exitosa(key_suffix=""):
     vto = datos.get("vencimiento_cae", "")
     total = rec.get("total")
     ks = key_suffix or "top"
+    solo_ticket = bool(st.session_state.get("mostrador_voz_solo_ticket"))
 
     with st.container(border=True):
         if cae:
@@ -547,11 +553,27 @@ def render_factura_arca_exitosa(key_suffix=""):
         if total is not None:
             c4.metric("Total", f"${float(total):,.2f}")
 
-        _render_botones_factura_pdf(
-            nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), f"fact_{ks}"
-        )
+        if solo_ticket:
+            st.markdown("**Ticket 58 mm (voz / caja)**")
+            _render_botones_factura_pdf(
+                nro, rec.get("pdf_ticket"), None, f"fact_{ks}_tk"
+            )
+            with st.expander("Factura A4 (manual)", expanded=False):
+                if rec.get("pdf_a4"):
+                    st.download_button(
+                        "Descargar A4",
+                        rec.get("pdf_a4"),
+                        file_name=f"Factura_{nro}.pdf",
+                        mime="application/pdf",
+                        key=f"fact_{ks}_a4_dl",
+                    )
+        else:
+            _render_botones_factura_pdf(
+                nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), f"fact_{ks}"
+            )
         if st.button("Cerrar aviso", key=f"cerrar_factura_arca_{ks}"):
             st.session_state.factura_arca_reciente = None
+            st.session_state.mostrador_voz_solo_ticket = False
             st.rerun()
     return True
 
@@ -623,7 +645,9 @@ def _set_forma_pago(vendedor, forma):
     return fp
 
 
-def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, forma_pago):
+def ejecutar_emitir_factura_arca(
+    vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
+):
     cuit_fact, clave_fact, config_ticket = _leer_secrets_facturador()
     if not cuit_fact or not clave_fact:
         return False, "Completá CUIT emisor y clave secreta en «Facturación ARCA» (arriba en Mostrador)."
@@ -664,6 +688,7 @@ def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, form
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
     _cerrar_presupuesto_cargado("facturado")
+    st.session_state.mostrador_voz_solo_ticket = bool(solo_ticket)
     st.session_state.factura_arca_reciente = {
         "respuesta": datos_resp,
         "pdf_ticket": pdf_ticket,
@@ -672,6 +697,14 @@ def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, form
         "comprobante_id": comp_id,
     }
     return True, "Factura ARCA emitida y stock descontado."
+
+
+def _emitir_ticket_directo(vendedor, carrito, total_final, desc_porc):
+    fp = _forma_pago_actual(vendedor)
+    with st.spinner("Solicitando CAE e imprimiendo ticket…"):
+        return ejecutar_emitir_factura_arca(
+            vendedor, carrito, total_final, desc_porc, fp, solo_ticket=True
+        )
 
 
 def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_porc):
@@ -738,8 +771,9 @@ def render_ia_mostrador(
     agregar_al_carrito,
 ):
     st.caption(
-        "Ejemplos: *agregá 2 bujes gol*, *cliente García*, *consumidor final*, "
-        "*forma de pago transferencia*, *guardá el presupuesto*, *facturá* (pide confirmación)."
+        "Ejemplos: *cargame factura B para García, código 3524150 5 unidades, contado, imprimir* · "
+        "*agregá 2 bujes gol* · *cliente García* · *forma de pago transferencia* · "
+        "*facturá* (pide confirmación; con *imprimir* va directo al ticket)."
     )
 
     with st.form("form_ia_mostrador", clear_on_submit=True):
@@ -751,13 +785,56 @@ def render_ia_mostrador(
             with st.spinner("Hafid IA procesando..."):
                 resp = procesar_orden_mostrador(orden) or {}
                 accion = resp.get("accion")
-                inventario = obtener_inventario_completo() or []
+                inventario = inventario_cache_mostrador(obtener_inventario_completo)
                 carrito = obtener_carrito(str(vendedor)) or []
                 total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
                 desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
                 total_final = total_bruto * (1 - desc_porc / 100)
 
-                if accion == "confirmar_pendiente":
+                if accion == "flujo_factura":
+                    with st.spinner("Facturación por voz…"):
+                        ok, msj, ambiguos = ejecutar_flujo_factura_voz(
+                            vendedor,
+                            resp,
+                            inventario,
+                            buscar_en_inventario,
+                            agregar_al_carrito,
+                            ejecutar_emitir_factura_arca,
+                        )
+                    if ok:
+                        st.success(msj)
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+                    elif ambiguos:
+                        st.warning(msj)
+                        st.session_state.resultados_ia_mostrador = ambiguos
+                        st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
+                    else:
+                        st.error(msj)
+
+                elif accion == "imprimir_ticket":
+                    if not carrito:
+                        st.error("El carrito está vacío.")
+                    else:
+                        cuit_fact, clave_fact, _ = _leer_secrets_facturador()
+                        if not cuit_fact or not clave_fact:
+                            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
+                        else:
+                            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                            if not ok_val:
+                                st.error(msg_val)
+                            else:
+                                ok, msj = _emitir_ticket_directo(
+                                    vendedor, carrito, total_final, desc_porc
+                                )
+                                if ok:
+                                    st.success(f"{msj} Ticket listo para imprimir.")
+                                    st.session_state.resultados_ia_mostrador = None
+                                    st.rerun()
+                                else:
+                                    st.error(msj)
+
+                elif accion == "confirmar_pendiente":
                     pend = st.session_state.get("mostrador_accion_pendiente")
                     if pend:
                         ok, msj = _ejecutar_accion_pendiente(
@@ -783,24 +860,23 @@ def render_ia_mostrador(
                     termino = str(resp.get("termino", ""))
                     cant_raw = resp.get("cantidad")
                     cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-                    encontrados = buscar_en_inventario(inventario, termino)
+                    ok, msj, ambiguos = agregar_termino_voz(
+                        vendedor, termino, cant, inventario,
+                        buscar_en_inventario, agregar_al_carrito,
+                    )
 
-                    if len(encontrados) == 1:
-                        exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]["id"], cant)
-                        if exito:
-                            st.success(f"🛒 {msj_db}")
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {msj_db}")
-                    elif len(encontrados) > 1:
-                        st.warning(f"Encontré {len(encontrados)} alternativas para '{termino}'.")
-                        st.session_state.resultados_ia_mostrador = encontrados
+                    if ok:
+                        st.success(f"🛒 {msj}")
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+                    elif ambiguos:
+                        st.warning(f"Encontré {len(ambiguos)} alternativas para '{termino}'.")
+                        st.session_state.resultados_ia_mostrador = ambiguos
                         st.session_state.msg_ia_mostrador = (
                             f"Elegí qué variante de '{termino}' querés agregar:"
                         )
                     else:
-                        st.error(f"❌ No encontré ningún producto asociado a '{termino}'.")
+                        st.error(f"❌ {msj}")
 
                 elif accion == "set_cliente":
                     nombre_det = str(resp.get("nombre_cliente", "")).upper()
@@ -812,14 +888,35 @@ def render_ia_mostrador(
                     )
                     if cliente_encontrado:
                         st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
+                        tipo = resp.get("tipo_comprobante")
+                        if tipo in ("1", "6", "A", "B", "a", "b"):
+                            t = str(tipo).upper()
+                            st.session_state.cliente_activo["tipo_comprobante"] = (
+                                "1" if t in ("1", "A") else "6"
+                            )
                         st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
                         st.session_state.resultados_ia_mostrador = None
                         st.rerun()
                     else:
                         st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
 
+                elif accion == "set_tipo_factura":
+                    tipo = resp.get("tipo_comprobante", "6")
+                    cli = dict(st.session_state.cliente_activo or cliente_consumidor_final())
+                    t = str(tipo).upper()
+                    cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
+                    st.session_state.cliente_activo = cli
+                    st.success(f"✅ Factura {_tipo_comprobante_label(cli['tipo_comprobante'])}.")
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
+
                 elif accion == "consumidor_final":
-                    st.session_state.cliente_activo = cliente_consumidor_final()
+                    tipo = resp.get("tipo_comprobante")
+                    cli = cliente_consumidor_final()
+                    if tipo in ("1", "6", "A", "B", "a", "b"):
+                        t = str(tipo).upper()
+                        cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
+                    st.session_state.cliente_activo = cli
                     st.success("✅ Consumidor final activado.")
                     st.session_state.resultados_ia_mostrador = None
                     st.rerun()
