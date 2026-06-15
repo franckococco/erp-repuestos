@@ -31,6 +31,7 @@ _ARCHIVOS_MODULOS = (
     "factura_arca_client.py",
     "factura_arca_pdf.py",
     "ui_mostrador.py",
+    "ia_mostrador.py",
 )
 
 _modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
@@ -334,6 +335,8 @@ if "factura_arca_reciente" not in st.session_state:
     st.session_state.factura_arca_reciente = None
 if "presupuesto_cargado_id" not in st.session_state:
     st.session_state.presupuesto_cargado_id = None
+if "mostrador_accion_pendiente" not in st.session_state:
+    st.session_state.mostrador_accion_pendiente = None
 if "resultados_ia_mostrador" not in st.session_state:
     st.session_state.resultados_ia_mostrador = None
 if "msg_ia_mostrador" not in st.session_state:
@@ -653,6 +656,8 @@ elif pagina == "mostrador":
         render_buscador_productos,
         render_acciones_carrito,
         render_presupuestos_guardados,
+        render_ia_mostrador,
+        render_confirmacion_pendiente_mostrador,
     )
 
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
@@ -688,101 +693,13 @@ elif pagina == "mostrador":
                     st.error(msj)
 
     with t_ia:
-        with st.form("form_ia_mostrador", clear_on_submit=True):
-            col_ia1, col_ia2 = st.columns([4, 1])
-            orden_usuario_mostrador = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
-            submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
-
-            if submit_ia and orden_usuario_mostrador:
-                with st.spinner("Hafid IA procesando..."):
-                    inventario = obtener_inventario_completo() or []
-                    respuesta_json = procesar_orden_voz(orden_usuario_mostrador, inventario) or {}
-                    accion = respuesta_json.get("accion")
-
-                    if accion == "agregar_carrito":
-                        termino = str(respuesta_json.get("termino", ""))
-                        cant_raw = respuesta_json.get("cantidad")
-                        cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
-
-                        encontrados = buscar_en_inventario(inventario, termino)
-
-                        if len(encontrados) == 1:
-                            exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]['id'], cant)
-                            if exito:
-                                st.success(f"🛒 {msj_db}")
-                                st.session_state.resultados_ia_mostrador = None
-                                st.rerun()
-                            else:
-                                st.error(f"❌ Error: {msj_db}")
-                        elif len(encontrados) > 1:
-                            st.warning(f"Encontré {len(encontrados)} alternativas para '{termino}'.")
-                            st.session_state.resultados_ia_mostrador = encontrados
-                            st.session_state.msg_ia_mostrador = f"Elegí qué variante de '{termino}' querés agregar:"
-                        else:
-                            st.error(f"❌ No encontré ningún producto asociado a '{termino}'.")
-
-                    elif accion == "set_cliente":
-                        nombre_det = respuesta_json.get("nombre_cliente", "").upper()
-                        clientes_db = obtener_clientes() or {}
-                        cliente_encontrado = next(
-                            (c for c in clientes_db.values() if nombre_det in str(c.get('nombre', '')).upper()),
-                            None
-                        )
-
-                        if cliente_encontrado:
-                            st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
-                            st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
-                        else:
-                            st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
-
-                    elif accion == "buscar" or accion == "consulta":
-                        termino = respuesta_json.get("termino", "")
-                        if not termino:
-                            termino = orden_usuario_mostrador
-
-                        if termino:
-                            encontrados = buscar_en_inventario(inventario, termino)
-
-                            if encontrados:
-                                st.session_state.resultados_ia_mostrador = encontrados[:10]
-                                st.session_state.msg_ia_mostrador = f"🔍 Encontré estas opciones para '{termino}':"
-                            else:
-                                st.warning(f"No encontré coincidencias exactas para '{termino}'.")
-                                st.session_state.resultados_ia_mostrador = None
-                        else:
-                            st.warning("No detecté qué producto querés buscar.")
-                            st.session_state.resultados_ia_mostrador = None
-                    else:
-                        st.info("Orden procesada, pero no aplica a la vista Mostrador.")
-                        st.session_state.resultados_ia_mostrador = None
-
-        if st.session_state.resultados_ia_mostrador:
-            st.markdown(f"### {st.session_state.msg_ia_mostrador}")
-            grupos_most = agrupar_por_maestro(st.session_state.resultados_ia_mostrador)
-            for key in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]['descripcion']):
-                g = grupos_most[key]
-                st.markdown(f"**{g['descripcion']}** ({g['vehiculo']}) — Cód. {g['codigo']}")
-                for res in g['variantes']:
-                    precio_f = float(res.get('precio_venta', 0))
-                    marca_res = res.get('marca', res.get('condicion', ''))
-                    btn_label = (
-                        f"➕ {marca_res}: {res.get('stock', 0)} u. — "
-                        f"${precio_f:,.2f}"
-                    )
-                    if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
-                        exito, msj_db = agregar_al_carrito(str(vendedor), res.get('id'), 1)
-                        if exito:
-                            st.success("🛒 Agregado al carrito!")
-                            st.session_state.resultados_ia_mostrador = None
-                            st.rerun()
-                        else:
-                            st.error(f"❌ Error: {msj_db}")
-
-            if st.button("❌ Cancelar Búsqueda", key="btn_cancel_search_most"):
-                st.session_state.resultados_ia_mostrador = None
-                st.rerun()
+        render_ia_mostrador(
+            vendedor,
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agrupar_por_maestro,
+            agregar_al_carrito,
+        )
 
     with t_qr:
         foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
@@ -796,6 +713,13 @@ elif pagina == "mostrador":
                     st.rerun()
                 else:
                     st.error(msj)
+
+    if st.session_state.get("mostrador_accion_pendiente"):
+        carrito_pend = obtener_carrito(str(vendedor)) or []
+        tb = sum(item.get("subtotal", 0) for item in carrito_pend if isinstance(item, dict))
+        dp = float(st.session_state.cliente_activo.get("descuento", 0))
+        tf = tb * (1 - dp / 100)
+        render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
 
     st.divider()
     carrito = obtener_carrito(str(vendedor)) or []

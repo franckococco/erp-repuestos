@@ -24,6 +24,11 @@ from modulos.db_firebase import (
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
 from modulos.util_fechas import formatear_fecha_ar
+from modulos.ia_mostrador import (
+    FORMAS_PAGO,
+    procesar_orden_mostrador,
+    normalizar_forma_pago,
+)
 
 
 CONFIG_TICKET_DEFAULT = {
@@ -383,6 +388,342 @@ def render_factura_arca_exitosa():
     return True
 
 
+def _forma_pago_actual(vendedor):
+    key = f"mostrador_forma_pago_{vendedor}"
+    if key not in st.session_state:
+        st.session_state[key] = "Contado"
+    return st.session_state[key]
+
+
+def _set_forma_pago(vendedor, forma):
+    fp = normalizar_forma_pago(forma)
+    st.session_state[f"mostrador_forma_pago_{vendedor}"] = fp
+    return fp
+
+
+def ejecutar_emitir_factura_arca(vendedor, carrito, total_final, desc_porc, forma_pago):
+    cuit_fact, clave_fact, config_ticket = _leer_secrets_facturador()
+    if not cuit_fact or not clave_fact:
+        return False, "Configurá FACTURADOR_CUIT y FACTURADOR_CLAVE_SECRETA en Streamlit Secrets."
+
+    ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+    if not ok_val:
+        return False, msg_val
+
+    cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+    datos_cliente = {
+        "cuit": cli["cuit"],
+        "nombre": cli["nombre"],
+        "cbte_tipo": cli["tipo_comprobante"],
+    }
+    items_fc = carrito_a_items_factura(carrito, desc_porc)
+    if not items_fc or sum(i["precio"] for i in items_fc) <= 0:
+        return False, "El total a facturar debe ser mayor a cero."
+
+    resultado = generar_factura(cuit_fact, clave_fact, datos_cliente, items_fc, forma_pago)
+    if not resultado.get("success"):
+        return False, f"Error ARCA: {resultado.get('error', 'Desconocido')}"
+
+    datos_resp = resultado["data"]
+    cfg = dict(config_ticket)
+    if cuit_fact:
+        cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
+    pdf_ticket = crear_ticket(datos_resp, datos_cliente, items_fc, cfg)
+    pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
+
+    exito_stock, msj_stock = confirmar_venta(str(vendedor))
+    if not exito_stock:
+        return False, (
+            f"CAE obtenido pero falló el descuento de stock: {msj_stock}. "
+            "Revisá inventario manualmente."
+        )
+
+    guardar_comprobante_arca(
+        vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
+    )
+    _cerrar_presupuesto_cargado("facturado")
+    st.session_state.factura_arca_reciente = {
+        "respuesta": datos_resp,
+        "pdf_ticket": pdf_ticket,
+        "pdf_a4": pdf_a4,
+    }
+    return True, "Factura ARCA emitida y stock descontado."
+
+
+def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_porc):
+    tipo = pendiente.get("tipo")
+    forma_pago = pendiente.get("forma_pago") or _forma_pago_actual(vendedor)
+
+    if tipo == "confirmar_venta":
+        exito, msj = confirmar_venta(str(vendedor))
+        if exito:
+            _cerrar_presupuesto_cargado("vendido")
+        return exito, msj
+
+    if tipo == "facturar":
+        with st.spinner("Solicitando CAE a ARCA/AFIP…"):
+            return ejecutar_emitir_factura_arca(
+                vendedor, carrito, total_final, desc_porc, forma_pago
+            )
+
+    if tipo == "guardar_presupuesto":
+        ok, msj, nuevo_id = guardar_presupuesto(
+            str(vendedor), st.session_state.cliente_activo, pendiente.get("nota", "")
+        )
+        if ok:
+            st.session_state.presupuesto_cargado_id = nuevo_id
+        return ok, msj
+
+    if tipo == "vaciar_carrito":
+        vaciar_carrito(str(vendedor))
+        return True, "Carrito vaciado."
+
+    return False, "Acción pendiente desconocida."
+
+
+def _limpiar_accion_pendiente():
+    st.session_state.mostrador_accion_pendiente = None
+
+
+def render_confirmacion_pendiente_mostrador(vendedor, carrito, total_final, desc_porc):
+    pend = st.session_state.get("mostrador_accion_pendiente")
+    if not pend:
+        return
+
+    st.warning(pend.get("mensaje", "¿Confirmás esta acción?"))
+    col_ok, col_no = st.columns(2)
+    if col_ok.button("✅ Confirmar", type="primary", use_container_width=True, key="most_pend_ok"):
+        ok, msj = _ejecutar_accion_pendiente(vendedor, pend, carrito, total_final, desc_porc)
+        _limpiar_accion_pendiente()
+        if ok:
+            st.success(msj)
+            st.rerun()
+        else:
+            st.error(msj)
+    if col_no.button("❌ Cancelar", use_container_width=True, key="most_pend_no"):
+        _limpiar_accion_pendiente()
+        st.info("Acción cancelada.")
+        st.rerun()
+
+
+def render_ia_mostrador(
+    vendedor,
+    obtener_inventario_completo,
+    buscar_en_inventario,
+    agrupar_por_maestro,
+    agregar_al_carrito,
+):
+    st.caption(
+        "Ejemplos: *agregá 2 bujes gol*, *cliente García*, *consumidor final*, "
+        "*forma de pago transferencia*, *guardá el presupuesto*, *facturá* (pide confirmación)."
+    )
+
+    total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+    total_final = total_bruto * (1 - desc_porc / 100)
+
+    with st.form("form_ia_mostrador", clear_on_submit=True):
+        col_ia1, col_ia2 = st.columns([4, 1])
+        orden = col_ia1.text_input("Dicte o escriba su orden:", key=f"ia_most_{vendedor}")
+        submit_ia = col_ia2.form_submit_button("🤖 Ejecutar", use_container_width=True)
+
+        if submit_ia and orden:
+            with st.spinner("Hafid IA procesando..."):
+                resp = procesar_orden_mostrador(orden) or {}
+                accion = resp.get("accion")
+                inventario = obtener_inventario_completo() or []
+                carrito = obtener_carrito(str(vendedor)) or []
+                total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+                desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+                total_final = total_bruto * (1 - desc_porc / 100)
+
+                if accion == "confirmar_pendiente":
+                    pend = st.session_state.get("mostrador_accion_pendiente")
+                    if pend:
+                        ok, msj = _ejecutar_accion_pendiente(
+                            vendedor, pend, carrito, total_final, desc_porc
+                        )
+                        _limpiar_accion_pendiente()
+                        if ok:
+                            st.success(msj)
+                            st.session_state.resultados_ia_mostrador = None
+                            st.rerun()
+                        else:
+                            st.error(msj)
+                    else:
+                        st.info("No hay ninguna acción pendiente de confirmación.")
+
+                elif accion == "cancelar_pendiente":
+                    _limpiar_accion_pendiente()
+                    st.info("Acción cancelada.")
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
+
+                elif accion == "agregar_carrito":
+                    termino = str(resp.get("termino", ""))
+                    cant_raw = resp.get("cantidad")
+                    cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
+                    encontrados = buscar_en_inventario(inventario, termino)
+
+                    if len(encontrados) == 1:
+                        exito, msj_db = agregar_al_carrito(str(vendedor), encontrados[0]["id"], cant)
+                        if exito:
+                            st.success(f"🛒 {msj_db}")
+                            st.session_state.resultados_ia_mostrador = None
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {msj_db}")
+                    elif len(encontrados) > 1:
+                        st.warning(f"Encontré {len(encontrados)} alternativas para '{termino}'.")
+                        st.session_state.resultados_ia_mostrador = encontrados
+                        st.session_state.msg_ia_mostrador = (
+                            f"Elegí qué variante de '{termino}' querés agregar:"
+                        )
+                    else:
+                        st.error(f"❌ No encontré ningún producto asociado a '{termino}'.")
+
+                elif accion == "set_cliente":
+                    nombre_det = str(resp.get("nombre_cliente", "")).upper()
+                    clientes_db = obtener_clientes() or {}
+                    cliente_encontrado = next(
+                        (c for c in clientes_db.values()
+                         if nombre_det in str(c.get("nombre", "")).upper()),
+                        None,
+                    )
+                    if cliente_encontrado:
+                        st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
+                        st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+                    else:
+                        st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
+
+                elif accion == "consumidor_final":
+                    st.session_state.cliente_activo = cliente_consumidor_final()
+                    st.success("✅ Consumidor final activado.")
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
+
+                elif accion == "set_forma_pago":
+                    fp = _set_forma_pago(vendedor, resp.get("forma_pago", "Contado"))
+                    st.success(f"✅ Forma de pago: {fp}")
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
+
+                elif accion == "guardar_presupuesto":
+                    if not carrito:
+                        st.error("El carrito está vacío.")
+                    else:
+                        nota = str(resp.get("nota", "") or "")
+                        st.session_state.mostrador_accion_pendiente = {
+                            "tipo": "guardar_presupuesto",
+                            "nota": nota,
+                            "mensaje": f"¿Guardar presupuesto de ${total_final:,.2f} para "
+                            f"{st.session_state.cliente_activo.get('nombre', 'CONSUMIDOR FINAL')}?",
+                        }
+                        st.rerun()
+
+                elif accion == "confirmar_venta":
+                    if not carrito:
+                        st.error("El carrito está vacío.")
+                    else:
+                        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                        if not ok_val:
+                            st.error(msg_val)
+                        else:
+                            st.session_state.mostrador_accion_pendiente = {
+                                "tipo": "confirmar_venta",
+                                "mensaje": (
+                                    f"¿Confirmar venta por ${total_final:,.2f} "
+                                    f"(sin factura fiscal) y descontar stock?"
+                                ),
+                            }
+                            st.rerun()
+
+                elif accion == "facturar":
+                    if not carrito:
+                        st.error("El carrito está vacío.")
+                    else:
+                        cuit_fact, clave_fact, _ = _leer_secrets_facturador()
+                        if not cuit_fact or not clave_fact:
+                            st.error("Falta configurar credenciales ARCA en Streamlit Secrets.")
+                        else:
+                            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                            if not ok_val:
+                                st.error(msg_val)
+                            else:
+                                fp = _forma_pago_actual(vendedor)
+                                st.session_state.mostrador_accion_pendiente = {
+                                    "tipo": "facturar",
+                                    "forma_pago": fp,
+                                    "mensaje": (
+                                        f"¿Emitir factura ARCA ({_tipo_comprobante_label(st.session_state.cliente_activo.get('tipo_comprobante', '6'))}) "
+                                        f"por ${total_final:,.2f} — pago {fp}?"
+                                    ),
+                                }
+                                st.rerun()
+
+                elif accion == "vaciar_carrito":
+                    if not carrito:
+                        st.info("El carrito ya está vacío.")
+                    else:
+                        st.session_state.mostrador_accion_pendiente = {
+                            "tipo": "vaciar_carrito",
+                            "mensaje": "¿Vaciar el carrito actual?",
+                        }
+                        st.rerun()
+
+                elif accion == "buscar" or accion == "consulta":
+                    termino = str(resp.get("termino", "") or orden)
+                    if termino:
+                        encontrados = buscar_en_inventario(inventario, termino)
+                        if encontrados:
+                            st.session_state.resultados_ia_mostrador = encontrados[:10]
+                            st.session_state.msg_ia_mostrador = (
+                                f"🔍 Encontré estas opciones para '{termino}':"
+                            )
+                        else:
+                            st.warning(f"No encontré coincidencias para '{termino}'.")
+                            st.session_state.resultados_ia_mostrador = None
+                    else:
+                        st.warning("No detecté qué producto querés buscar.")
+                        st.session_state.resultados_ia_mostrador = None
+
+                elif accion == "error":
+                    st.error(resp.get("respuesta", "Error de IA."))
+                    st.session_state.resultados_ia_mostrador = None
+
+                else:
+                    msg = resp.get("respuesta") or "Orden no reconocida para el mostrador."
+                    st.info(msg)
+                    st.session_state.resultados_ia_mostrador = None
+
+    if st.session_state.get("resultados_ia_mostrador"):
+        st.markdown(f"### {st.session_state.msg_ia_mostrador}")
+        grupos_most = agrupar_por_maestro(st.session_state.resultados_ia_mostrador)
+        for key in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]["descripcion"]):
+            g = grupos_most[key]
+            st.markdown(f"**{g['descripcion']}** ({g['vehiculo']}) — Cód. {g['codigo']}")
+            for res in g["variantes"]:
+                precio_f = float(res.get("precio_venta", 0))
+                marca_res = res.get("marca", res.get("condicion", ""))
+                btn_label = (
+                    f"➕ {marca_res}: {res.get('stock', 0)} u. — ${precio_f:,.2f}"
+                )
+                if st.button(btn_label, key=f"btn_add_most_{res.get('id', 'N')}"):
+                    exito, msj_db = agregar_al_carrito(str(vendedor), res.get("id"), 1)
+                    if exito:
+                        st.success("🛒 Agregado al carrito!")
+                        st.session_state.resultados_ia_mostrador = None
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Error: {msj_db}")
+
+        if st.button("❌ Cancelar Búsqueda", key="btn_cancel_search_most"):
+            st.session_state.resultados_ia_mostrador = None
+            st.rerun()
+
+
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
     if render_factura_arca_exitosa():
         st.divider()
@@ -410,9 +751,11 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
 
     forma_pago = st.selectbox(
         "Forma de pago (factura ARCA)",
-        ["Contado", "Transferencia", "Tarjeta", "Cheque", "MercadoPago"],
+        list(FORMAS_PAGO),
+        index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
         key=f"pago_arca_{vendedor}",
     )
+    _set_forma_pago(vendedor, forma_pago)
 
     col_cob, col_fc, col_pdf, col_vac = st.columns(4)
 
@@ -425,58 +768,21 @@ def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_po
         else:
             st.error(msj)
 
-    cuit_fact, clave_fact, config_ticket = _leer_secrets_facturador()
+    cuit_fact, clave_fact, _ = _leer_secrets_facturador()
     puede_facturar = bool(cuit_fact and clave_fact)
 
     if col_fc.button("🧾 Emitir factura ARCA", use_container_width=True, disabled=not puede_facturar):
         if not puede_facturar:
             st.error("Configurá FACTURADOR_CUIT y FACTURADOR_CLAVE_SECRETA en Streamlit Secrets.")
         else:
-            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-            if not ok_val:
-                st.error(msg_val)
+            with st.spinner("Solicitando CAE a ARCA/AFIP…"):
+                ok, msj = ejecutar_emitir_factura_arca(
+                    vendedor, carrito, total_final, desc_porc, forma_pago
+                )
+            if ok:
+                st.rerun()
             else:
-                cli = normalizar_cliente_activo(st.session_state.cliente_activo)
-                datos_cliente = {
-                    "cuit": cli["cuit"],
-                    "nombre": cli["nombre"],
-                    "cbte_tipo": cli["tipo_comprobante"],
-                }
-                items_fc = carrito_a_items_factura(carrito, desc_porc)
-                if not items_fc or sum(i["precio"] for i in items_fc) <= 0:
-                    st.error("El total a facturar debe ser mayor a cero.")
-                else:
-                    with st.spinner("Solicitando CAE a ARCA/AFIP…"):
-                        resultado = generar_factura(
-                            cuit_fact, clave_fact, datos_cliente, items_fc, forma_pago
-                        )
-                    if resultado.get("success"):
-                        datos_resp = resultado["data"]
-                        cfg = dict(config_ticket)
-                        if cuit_fact:
-                            cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
-                        pdf_ticket = crear_ticket(datos_resp, datos_cliente, items_fc, cfg)
-                        pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
-
-                        exito_stock, msj_stock = confirmar_venta(str(vendedor))
-                        if not exito_stock:
-                            st.error(
-                                f"CAE obtenido pero falló el descuento de stock: {msj_stock}. "
-                                "Revisá inventario manualmente."
-                            )
-                        else:
-                            guardar_comprobante_arca(
-                                vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
-                            )
-                            _cerrar_presupuesto_cargado("facturado")
-                            st.session_state.factura_arca_reciente = {
-                                "respuesta": datos_resp,
-                                "pdf_ticket": pdf_ticket,
-                                "pdf_a4": pdf_a4,
-                            }
-                            st.rerun()
-                    else:
-                        st.error(f"Error ARCA: {resultado.get('error', 'Desconocido')}")
+                st.error(msj)
 
     if not puede_facturar:
         col_fc.caption("Secrets: FACTURADOR_CUIT + FACTURADOR_CLAVE_SECRETA")
