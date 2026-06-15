@@ -708,81 +708,100 @@ elif pagina == "mostrador":
     )
 
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
-    render_seccion_cliente_mostrador()
-    render_credenciales_arca()
-    render_factura_arca_exitosa("_top")
-    render_historial_facturas_arca()
 
-    vendedor = st.radio("Punto de venta", ["Caja Principal", "Celular Depósito"], horizontal=True, label_visibility="collapsed")
-    render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
+    bar_cli, bar_cred = st.columns([3, 2])
+    with bar_cli:
+        render_seccion_cliente_mostrador()
+    with bar_cred:
+        render_credenciales_arca()
 
-    t_buscar, t_manual, t_ia, t_qr = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"])
+    vendedor = st.radio(
+        "Punto de venta",
+        ["Caja Principal", "Celular Depósito"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    with t_buscar:
-        inv_completo = obtener_inventario_completo() or []
-        if inv_completo:
-            render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario)
-            render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
-        else:
-            st.info("El inventario está vacío. Agregue productos primero.")
+    col_izq, col_der = st.columns([3, 2])
 
-    with t_manual:
-        with st.form("form_carga_rapida", clear_on_submit=True):
-            col_scan1, col_scan2 = st.columns([4, 1])
-            codigo_manual_scan = col_scan1.text_input(
-                "Ingreso Manual o Pistola (ID variante CODIGO_MARCA):",
-                key=f"scan_{vendedor}"
+    with col_izq:
+        render_presupuestos_guardados(vendedor, generar_pdf_presupuesto)
+
+        t_buscar, t_manual, t_ia, t_qr = st.tabs(
+            ["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"]
+        )
+
+        with t_buscar:
+            inv_completo = obtener_inventario_completo() or []
+            if inv_completo:
+                render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario)
+                render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
+            else:
+                st.info("El inventario está vacío. Agregue productos primero.")
+
+        with t_manual:
+            with st.form("form_carga_rapida", clear_on_submit=True):
+                col_scan1, col_scan2 = st.columns([4, 1])
+                codigo_manual_scan = col_scan1.text_input(
+                    "Ingreso Manual o Pistola (ID variante CODIGO_MARCA):",
+                    key=f"scan_{vendedor}",
+                )
+                submit_btn = col_scan2.form_submit_button("➕ Agregar", use_container_width=True)
+
+                if submit_btn and codigo_manual_scan:
+                    exito, msj = agregar_al_carrito(str(vendedor), codigo_manual_scan)
+                    if exito:
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
+
+        with t_ia:
+            render_ia_mostrador(
+                vendedor,
+                obtener_inventario_completo,
+                buscar_en_inventario,
+                agrupar_por_maestro,
+                agregar_al_carrito,
             )
-            submit_btn = col_scan2.form_submit_button("➕ Agregar Artículo", use_container_width=True)
 
-            if submit_btn and codigo_manual_scan:
-                exito, msj = agregar_al_carrito(str(vendedor), codigo_manual_scan)
-                if exito:
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
+        with t_qr:
+            foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
+            if foto_qr:
+                cod_detectado = decodificar_qr_desde_imagen(Image.open(foto_qr))
+                if cod_detectado:
+                    id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
+                    exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
+                    if exito:
+                        st.success(f"Añadido: {id_limpio}")
+                        st.rerun()
+                    else:
+                        st.error(msj)
 
-    with t_ia:
-        render_ia_mostrador(
-            vendedor,
-            obtener_inventario_completo,
-            buscar_en_inventario,
-            agrupar_por_maestro,
-            agregar_al_carrito,
-        )
+        if st.session_state.get("mostrador_accion_pendiente"):
+            carrito_pend = obtener_carrito(str(vendedor)) or []
+            tb = sum(item.get("subtotal", 0) for item in carrito_pend if isinstance(item, dict))
+            dp = float(st.session_state.cliente_activo.get("descuento", 0))
+            tf = tb * (1 - dp / 100)
+            render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
 
-    with t_qr:
-        foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")
-        if foto_qr:
-            cod_detectado = decodificar_qr_desde_imagen(Image.open(foto_qr))
-            if cod_detectado:
-                id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
-                exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
-                if exito:
-                    st.success(f"Añadido: {id_limpio}")
-                    st.rerun()
-                else:
-                    st.error(msj)
+    with col_der:
+        st.markdown("#### Venta actual")
+        if st.session_state.get("factura_arca_reciente"):
+            render_factura_arca_exitosa("panel")
 
-    if st.session_state.get("mostrador_accion_pendiente"):
-        carrito_pend = obtener_carrito(str(vendedor)) or []
-        tb = sum(item.get("subtotal", 0) for item in carrito_pend if isinstance(item, dict))
-        dp = float(st.session_state.cliente_activo.get("descuento", 0))
-        tf = tb * (1 - dp / 100)
-        render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
+        carrito = obtener_carrito(str(vendedor)) or []
+        if carrito:
+            total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+            desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+            total_final = total_bruto * (1 - desc_porc / 100)
+            render_acciones_carrito(
+                vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+            )
+        elif not st.session_state.get("factura_arca_reciente"):
+            st.info("Carrito vacío — buscá productos o usá la IA de voz.")
 
-    st.divider()
-    carrito = obtener_carrito(str(vendedor)) or []
-    if carrito:
-        total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
-        desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-        total_final = total_bruto * (1 - desc_porc / 100)
-        render_acciones_carrito(
-            vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
-        )
-    elif st.session_state.get("factura_arca_reciente"):
-        render_factura_arca_exitosa("_abajo")
+        render_historial_facturas_arca()
 
 # --- ASISTENTE ---
 elif pagina == "asistente":

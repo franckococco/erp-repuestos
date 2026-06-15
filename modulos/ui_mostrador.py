@@ -520,32 +520,43 @@ def regenerar_pdfs_comprobante(comp):
     return ticket, a4, datos_resp
 
 
-def _render_botones_factura_pdf(nro, pdf_ticket, pdf_a4, key_prefix):
-    col_t, col_a = st.columns(2)
-    with col_t:
-        st.markdown("**Ticket 58 mm**")
-        if pdf_ticket:
+def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_ticket=False):
+    """Imprimir / descargar en una sola fila horizontal."""
+    n_cols = 3 if (pdf_a4 and not solo_ticket) else 2
+    cols = st.columns(n_cols)
+    idx = 0
+    if pdf_ticket:
+        with cols[idx]:
             _mostrar_boton_imprimir_pdf(pdf_ticket)
+        idx += 1
+        with cols[idx]:
             st.download_button(
-                "Descargar ticket",
+                "↓ Ticket",
                 pdf_ticket,
                 file_name=f"Ticket_{nro}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"{key_prefix}_ticket",
             )
-    with col_a:
-        st.markdown("**Factura A4**")
-        if pdf_a4:
-            _mostrar_boton_imprimir_pdf(pdf_a4)
+        idx += 1
+    if pdf_a4 and not solo_ticket and idx < len(cols):
+        with cols[idx]:
             st.download_button(
-                "Descargar A4",
+                "↓ A4",
                 pdf_a4,
                 file_name=f"Factura_{nro}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"{key_prefix}_a4",
             )
+    elif solo_ticket and pdf_a4:
+        st.download_button(
+            "↓ A4 (opcional)",
+            pdf_a4,
+            file_name=f"Factura_{nro}.pdf",
+            mime="application/pdf",
+            key=f"{key_prefix}_a4_opt",
+        )
 
 
 def render_factura_arca_exitosa(key_suffix=""):
@@ -558,50 +569,42 @@ def render_factura_arca_exitosa(key_suffix=""):
     cae = datos.get("cae", "")
     vto = datos.get("vencimiento_cae", "")
     total = rec.get("total")
-    ks = key_suffix or "top"
+    ks = key_suffix or "panel"
     solo_ticket = bool(st.session_state.get("mostrador_voz_solo_ticket"))
 
     with st.container(border=True):
-        if cae:
-            st.success("AFIP autorizó la factura — CAE otorgado")
-        else:
-            st.error("Factura procesada pero sin CAE en la respuesta")
+        hdr, btn_cerrar = st.columns([5, 1])
+        with hdr:
+            if cae:
+                st.markdown(f"**✅ CAE otorgado** · `{nro}` · vto {vto or '—'}")
+            else:
+                st.error("Factura sin CAE en la respuesta")
+        with btn_cerrar:
+            if st.button("✕", key=f"cerrar_factura_arca_{ks}", help="Cerrar"):
+                st.session_state.factura_arca_reciente = None
+                st.session_state.mostrador_voz_solo_ticket = False
+                st.rerun()
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Nro. comprobante", nro)
-        c2.metric("CAE", str(cae) if cae else "Sin CAE")
-        c3.metric("Vto. CAE", str(vto) if vto else "—")
+        c1, c2, c3 = st.columns(3)
+        c1.caption("CAE")
+        c1.code(str(cae) if cae else "—", language=None)
         if total is not None:
-            c4.metric("Total", f"${float(total):,.2f}")
+            c2.metric("Total", f"${float(total):,.2f}")
+        c3.caption("Comprobante")
+        c3.write(nro)
 
-        if solo_ticket:
-            st.markdown("**Ticket 58 mm (voz / caja)**")
-            _render_botones_factura_pdf(
-                nro, rec.get("pdf_ticket"), None, f"fact_{ks}_tk"
-            )
-            with st.expander("Factura A4 (manual)", expanded=False):
-                if rec.get("pdf_a4"):
-                    st.download_button(
-                        "Descargar A4",
-                        rec.get("pdf_a4"),
-                        file_name=f"Factura_{nro}.pdf",
-                        mime="application/pdf",
-                        key=f"fact_{ks}_a4_dl",
-                    )
-        else:
-            _render_botones_factura_pdf(
-                nro, rec.get("pdf_ticket"), rec.get("pdf_a4"), f"fact_{ks}"
-            )
-        if st.button("Cerrar aviso", key=f"cerrar_factura_arca_{ks}"):
-            st.session_state.factura_arca_reciente = None
-            st.session_state.mostrador_voz_solo_ticket = False
-            st.rerun()
+        _render_acciones_pdf_compactas(
+            nro,
+            rec.get("pdf_ticket"),
+            rec.get("pdf_a4"),
+            f"fact_{ks}",
+            solo_ticket=solo_ticket,
+        )
     return True
 
 
 def render_historial_facturas_arca():
-    expandido = bool(st.session_state.get("factura_arca_reciente"))
-    with st.expander("Facturas ARCA emitidas — reimprimir", expanded=expandido):
+    with st.expander("Facturas ARCA — reimprimir", expanded=False):
         try:
             lista = listar_comprobantes_arca(40)
         except Exception as ex:
@@ -640,7 +643,7 @@ def render_historial_facturas_arca():
             f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
         )
 
-        if st.button("Mostrar PDFs para imprimir", key="hist_arca_reimprimir", type="primary"):
+        if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
             pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
             nro = _formato_nro_comprobante(datos)
             st.session_state.factura_arca_reciente = {
@@ -718,6 +721,16 @@ def ejecutar_emitir_factura_arca(
         "comprobante_id": comp_id,
     }
     return True, "Factura ARCA emitida y stock descontado."
+
+
+def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False):
+    with st.spinner("Solicitando CAE a AFIP…"):
+        ok, msj = ejecutar_emitir_factura_arca(
+            vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
+        )
+    if ok:
+        st.session_state.mostrador_listo_para_ticket = False
+    return ok, msj
 
 
 def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_porc):
@@ -807,7 +820,7 @@ def render_ia_mostrador(
     st.caption(
         "Ejemplos: *cargame factura B para García, código 3524150 5 unidades, contado, imprimir* · "
         "*agregá 2 bujes gol* · *cliente García*. "
-        "Con *imprimir* arma el carrito; revisás la grilla y confirmás el ticket manualmente."
+        "Con *imprimir* arma el carrito a la derecha; revisás y pulsás **Facturar e imprimir ticket** (un solo paso)."
     )
 
     with st.form("form_ia_mostrador", clear_on_submit=True):
@@ -990,24 +1003,13 @@ def render_ia_mostrador(
                     if not carrito:
                         st.error("El carrito está vacío.")
                     else:
-                        cuit_fact, clave_fact, _ = _leer_secrets_facturador()
-                        if not cuit_fact or not clave_fact:
-                            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
+                        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+                        if not ok_val:
+                            st.error(msg_val)
                         else:
-                            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-                            if not ok_val:
-                                st.error(msg_val)
-                            else:
-                                fp = _forma_pago_actual(vendedor)
-                                st.session_state.mostrador_accion_pendiente = {
-                                    "tipo": "facturar",
-                                    "forma_pago": fp,
-                                    "mensaje": (
-                                        f"¿Emitir factura ARCA ({_tipo_comprobante_label(st.session_state.cliente_activo.get('tipo_comprobante', '6'))}) "
-                                        f"por ${total_final:,.2f} — pago {fp}?"
-                                    ),
-                                }
-                                st.rerun()
+                            st.success(_marcar_listo_para_ticket(vendedor, total_final))
+                            st.session_state.resultados_ia_mostrador = None
+                            st.rerun()
 
                 elif accion == "vaciar_carrito":
                     if not carrito:
@@ -1093,119 +1095,108 @@ def render_carrito_editable(vendedor, carrito):
 
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto):
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
-    if listo_ticket:
-        st.warning(
-            "Voz / IA preparó esta venta. Revisá cada ítem en la grilla "
-            "(cantidad con ✓) y recién ahí confirmá el ticket."
+
+    with st.container(border=True):
+        if listo_ticket:
+            st.info("Revisá ítems y cantidades; luego **Facturar e imprimir ticket** (un solo paso).")
+
+        render_carrito_editable(vendedor, carrito)
+
+        tot_col, pago_col = st.columns([2, 2])
+        with tot_col:
+            st.metric("Subtotal", f"${total_bruto:,.2f}")
+            if desc_porc > 0:
+                st.caption(f"Descuento {desc_porc}%: -${(total_bruto * desc_porc / 100):,.2f}")
+            st.metric("Total", f"${total_final:,.2f}")
+        with pago_col:
+            forma_pago = st.selectbox(
+                "Forma de pago",
+                list(FORMAS_PAGO),
+                index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
+                key=f"pago_arca_{vendedor}",
+            )
+            _set_forma_pago(vendedor, forma_pago)
+            pres_id = st.session_state.get("presupuesto_cargado_id")
+            if pres_id:
+                st.caption(f"Presupuesto `{pres_id[:8]}…`")
+
+        cuit_fact, clave_fact, _ = _leer_secrets_facturador()
+        puede_facturar = bool(cuit_fact and clave_fact)
+
+        btn_tk, btn_a4, btn_pres = st.columns(3)
+        if btn_tk.button(
+            "🖨️ Facturar e imprimir ticket",
+            type="primary",
+            use_container_width=True,
+            disabled=not puede_facturar,
+        ):
+            if not puede_facturar:
+                st.error("Completá CUIT y clave en «Facturación ARCA».")
+            else:
+                ok, msj = _facturar_desde_carrito(
+                    vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
+                )
+                if ok:
+                    st.rerun()
+                else:
+                    st.error(msj)
+
+        if btn_a4.button(
+            "🧾 Factura A4 + ticket",
+            use_container_width=True,
+            disabled=not puede_facturar,
+        ):
+            if not puede_facturar:
+                st.error("Completá CUIT y clave en «Facturación ARCA».")
+            else:
+                ok, msj = _facturar_desde_carrito(
+                    vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
+                )
+                if ok:
+                    st.rerun()
+                else:
+                    st.error(msj)
+
+        pdf_bytes = generar_pdf_presupuesto(
+            str(vendedor), carrito, total_bruto,
+            st.session_state.cliente_activo["nombre"], desc_porc,
+        )
+        btn_pres.download_button(
+            "📄 Presupuesto",
+            pdf_bytes,
+            f"Presupuesto_{vendedor}.pdf",
+            "application/pdf",
+            use_container_width=True,
         )
 
-    render_carrito_editable(vendedor, carrito)
-    st.write(f"### Subtotal: ${total_bruto:,.2f}")
-    if desc_porc > 0:
-        st.write(f"### Descuento ({desc_porc}%): -${(total_bruto * desc_porc / 100):,.2f}")
-    st.write(f"## TOTAL: ${total_final:,.2f}")
-
-    pres_id = st.session_state.get("presupuesto_cargado_id")
-    if pres_id:
-        st.caption(f"Presupuesto cargado: `{pres_id[:8]}…`")
-
-    nota_pres = st.text_input("Nota interna (opcional, al guardar)", key=f"nota_pres_{vendedor}")
-    if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}"):
-        ok, msj, nuevo_id = guardar_presupuesto(
-            str(vendedor), st.session_state.cliente_activo, nota_pres
-        )
-        if ok:
-            st.session_state.presupuesto_cargado_id = nuevo_id
-            st.success(msj)
-        else:
-            st.error(msj)
-
-    forma_pago = st.selectbox(
-        "Forma de pago (factura ARCA)",
-        list(FORMAS_PAGO),
-        index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
-        key=f"pago_arca_{vendedor}",
-    )
-    _set_forma_pago(vendedor, forma_pago)
-
-    cuit_fact, clave_fact, _ = _leer_secrets_facturador()
-    puede_facturar = bool(cuit_fact and clave_fact)
-
-    col_cob, col_tk, col_fc, col_pdf, col_vac = st.columns(5)
-
-    if col_cob.button("✅ Confirmar venta", use_container_width=True):
-        exito, msj = confirmar_venta(str(vendedor))
-        if exito:
-            _cerrar_presupuesto_cargado("vendido")
-            st.session_state.mostrador_listo_para_ticket = False
-            st.success(msj)
-            st.rerun()
-        else:
-            st.error(msj)
-
-    btn_ticket = col_tk.button(
-        "🖨️ Confirmar e imprimir ticket",
-        type="primary" if listo_ticket else "secondary",
-        use_container_width=True,
-        disabled=not puede_facturar,
-    )
-    if btn_ticket:
         if not puede_facturar:
-            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
-        else:
-            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-            if not ok_val:
-                st.error(msg_val)
-            else:
-                st.session_state.mostrador_accion_pendiente = {
-                    "tipo": "imprimir_ticket",
-                    "forma_pago": forma_pago,
-                    "mensaje": (
-                        f"¿Emitir factura ARCA e imprimir ticket por ${total_final:,.2f} "
-                        f"({ _tipo_comprobante_label(st.session_state.cliente_activo.get('tipo_comprobante', '6')) }) "
-                        f"— pago {forma_pago}?"
-                    ),
-                }
+            st.caption("Completá CUIT y clave en «Facturación ARCA» arriba.")
+
+        with st.expander("Más acciones", expanded=False):
+            nota_pres = st.text_input("Nota al guardar presupuesto", key=f"nota_pres_{vendedor}")
+            ex1, ex2, ex3 = st.columns(3)
+            if ex1.button("✅ Venta sin factura", use_container_width=True):
+                exito, msj = confirmar_venta(str(vendedor))
+                if exito:
+                    _cerrar_presupuesto_cargado("vendido")
+                    st.session_state.mostrador_listo_para_ticket = False
+                    st.success(msj)
+                    st.rerun()
+                else:
+                    st.error(msj)
+            if ex2.button("💾 Guardar presupuesto", use_container_width=True):
+                ok, msj, nuevo_id = guardar_presupuesto(
+                    str(vendedor), st.session_state.cliente_activo, nota_pres
+                )
+                if ok:
+                    st.session_state.presupuesto_cargado_id = nuevo_id
+                    st.success(msj)
+                else:
+                    st.error(msj)
+            if ex3.button("🗑️ Vaciar carrito", use_container_width=True):
+                vaciar_carrito(str(vendedor))
+                st.session_state.mostrador_listo_para_ticket = False
                 st.rerun()
-
-    if col_fc.button("🧾 Factura ARCA (A4 + ticket)", use_container_width=True, disabled=not puede_facturar):
-        if not puede_facturar:
-            st.error("Completá CUIT emisor y clave en «Facturación ARCA» arriba.")
-        else:
-            ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
-            if not ok_val:
-                st.error(msg_val)
-            else:
-                st.session_state.mostrador_accion_pendiente = {
-                    "tipo": "facturar",
-                    "forma_pago": forma_pago,
-                    "mensaje": (
-                        f"¿Emitir factura ARCA con A4 por ${total_final:,.2f} "
-                        f"({ _tipo_comprobante_label(st.session_state.cliente_activo.get('tipo_comprobante', '6')) }) "
-                        f"— pago {forma_pago}?"
-                    ),
-                }
-                st.rerun()
-
-    if not puede_facturar:
-        col_fc.caption("Completá CUIT y clave en «Facturación ARCA» arriba.")
-
-    pdf_bytes = generar_pdf_presupuesto(
-        str(vendedor), carrito, total_bruto,
-        st.session_state.cliente_activo["nombre"], desc_porc,
-    )
-    col_pdf.download_button(
-        "📄 Presupuesto PDF",
-        pdf_bytes,
-        f"Presupuesto_{vendedor}.pdf",
-        "application/pdf",
-        use_container_width=True,
-    )
-
-    if col_vac.button("🗑️ Vaciar", use_container_width=True):
-        vaciar_carrito(str(vendedor))
-        st.session_state.mostrador_listo_para_ticket = False
-        st.rerun()
 
 
 def sincronizar_config_ticket_desde_nube():
