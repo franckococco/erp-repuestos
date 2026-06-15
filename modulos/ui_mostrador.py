@@ -1,5 +1,6 @@
 """UI del mostrador: cliente, búsqueda de productos y facturación ARCA."""
 import base64
+import math
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
@@ -427,6 +428,7 @@ def limpiar_venta_mostrador(vendedor, reset_cliente=True):
     vaciar_carrito(str(vendedor))
     st.session_state.mostrador_listo_para_ticket = False
     st.session_state.mostrador_accion_pendiente = None
+    st.session_state.factura_arca_reciente = None
     st.session_state[f"mostrador_cart_rev_{vendedor}"] = (
         int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)) + 1
     )
@@ -705,6 +707,88 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
             st.warning("Seleccioná un producto de la lista.")
 
 
+def _cart_editor_session_key(vendedor):
+    rev = st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)
+    return f"cart_editor_{vendedor}_{rev}"
+
+
+def _float_celda(val, default=0.0):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_celda(val, default=1):
+    try:
+        n = int(_float_celda(val, default))
+        return n if n > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _dataframe_desde_editor(vendedor):
+    raw = st.session_state.get(_cart_editor_session_key(vendedor))
+    if raw is None:
+        return None
+    if isinstance(raw, pd.DataFrame):
+        return raw if not raw.empty else None
+    if isinstance(raw, dict):
+        try:
+            df = pd.DataFrame(raw)
+            return df if not df.empty else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def carrito_efectivo_mostrador(vendedor, carrito_base):
+    """Carrito con cantidad/precio de la grilla aún no guardados en Firebase."""
+    carrito = [dict(i) for i in (carrito_base or []) if isinstance(i, dict)]
+    if not carrito:
+        return carrito
+    df_live = _dataframe_desde_editor(vendedor)
+    if df_live is None:
+        return carrito
+
+    id_map = {str(i.get("id", "")): i for i in carrito}
+    for _, row in df_live.iterrows():
+        iid = str(row.get("_id", ""))
+        if not iid or iid not in id_map:
+            continue
+        item = id_map[iid]
+        cant = _int_celda(row.get("Cant."), int(item.get("cantidad", 1)))
+        precio = _float_celda(row.get("Precio unit."), float(item.get("precio_unitario", 0)))
+        item["cantidad"] = cant
+        item["precio_unitario"] = precio
+        item["subtotal"] = cant * precio
+    return list(id_map.values())
+
+
+def calcular_totales_carrito(carrito, desc_porc=0.0):
+    bruto = sum(float(i.get("subtotal", 0)) for i in carrito if isinstance(i, dict))
+    desc = float(desc_porc)
+    return bruto, bruto * (1 - desc / 100.0)
+
+
+def sincronizar_grilla_carrito_firebase(vendedor, carrito_base=None):
+    """Persiste en Firebase los cambios pendientes del editor de la grilla."""
+    carrito = carrito_base if carrito_base is not None else (obtener_carrito(str(vendedor)) or [])
+    df_live = _dataframe_desde_editor(vendedor)
+    if df_live is None:
+        return 0, []
+    return _aplicar_cambios_carrito(vendedor, carrito, df_live)
+
+
+def obtener_carrito_listo_facturacion(vendedor, desc_porc=0.0):
+    sincronizar_grilla_carrito_firebase(vendedor)
+    carrito = obtener_carrito(str(vendedor)) or []
+    bruto, final = calcular_totales_carrito(carrito, desc_porc)
+    return carrito, bruto, final
+
+
 def carrito_a_items_factura(carrito, descuento_pct):
     factor = 1.0 - float(descuento_pct) / 100.0
     items = []
@@ -719,6 +803,32 @@ def carrito_a_items_factura(carrito, descuento_pct):
             "precio": round(sub, 2),
         })
     return items
+
+
+def _auto_imprimir_pdf(pdf_bytes):
+    """Abre el diálogo de impresión del navegador (ticket tras facturar)."""
+    if not pdf_bytes:
+        return
+    base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const b64 = "{base64_pdf}";
+            const byteCharacters = atob(b64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {{
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }}
+            const blob = new Blob([new Uint8Array(byteNumbers)], {{type: 'application/pdf'}});
+            const url = URL.createObjectURL(blob);
+            const win = window.open(url, '_blank');
+            if (win) {{ win.focus(); setTimeout(() => win.print(), 600); }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
 
 
 def _mostrar_boton_imprimir_pdf(pdf_bytes):
@@ -967,14 +1077,25 @@ def render_historial_facturas_arca():
         if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
             pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
             nro = _formato_nro_comprobante(datos)
-            st.session_state.factura_arca_reciente = {
+            st.session_state.hist_arca_preview = {
                 "respuesta": datos,
                 "pdf_ticket": pdf_t,
                 "pdf_a4": pdf_a,
                 "total": comp.get("total"),
                 "comprobante_id": sel_id,
+                "nro": nro,
             }
             st.rerun()
+
+        preview = st.session_state.get("hist_arca_preview")
+        if preview and preview.get("comprobante_id") == sel_id:
+            st.caption(f"Comprobante {preview.get('nro', '—')}")
+            _render_acciones_pdf_compactas(
+                preview.get("nro", "—"),
+                preview.get("pdf_ticket"),
+                preview.get("pdf_a4"),
+                f"hist_{sel_id[:8]}",
+            )
 
 
 def _forma_pago_actual(vendedor):
@@ -995,11 +1116,18 @@ def ejecutar_emitir_factura_arca(
 ):
     cuit_fact, clave_fact, config_ticket = _leer_secrets_facturador()
     if not cuit_fact or not clave_fact:
-        return False, "Completá CUIT emisor y clave secreta en «Facturación ARCA» (arriba en Mostrador)."
+        return False, "Completá CUIT emisor y clave secreta en «Facturación ARCA» (arriba en Mostrador).", None
+
+    _, errores_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
+    if errores_sync:
+        return False, "\n".join(errores_sync), None
+
+    carrito = obtener_carrito(str(vendedor)) or []
+    _, total_final = calcular_totales_carrito(carrito, desc_porc)
 
     ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
     if not ok_val:
-        return False, msg_val
+        return False, msg_val, None
 
     cli = normalizar_cliente_activo(st.session_state.cliente_activo)
     datos_cliente = {
@@ -1009,11 +1137,14 @@ def ejecutar_emitir_factura_arca(
     }
     items_fc = carrito_a_items_factura(carrito, desc_porc)
     if not items_fc or sum(i["precio"] for i in items_fc) <= 0:
-        return False, "El total a facturar debe ser mayor a cero."
+        return False, (
+            "El total a facturar debe ser mayor a cero. "
+            "Revisá el precio unitario en la grilla."
+        ), None
 
     resultado = generar_factura(cuit_fact, clave_fact, datos_cliente, items_fc, forma_pago)
     if not resultado.get("success"):
-        return False, f"Error ARCA: {resultado.get('error', 'Desconocido')}"
+        return False, f"Error ARCA: {resultado.get('error', 'Desconocido')}", None
 
     datos_resp = resultado["data"]
     cfg = dict(config_ticket)
@@ -1027,7 +1158,7 @@ def ejecutar_emitir_factura_arca(
         return False, (
             f"CAE obtenido pero falló el descuento de stock: {msj_stock}. "
             "Revisá inventario manualmente."
-        )
+        ), None
 
     comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
@@ -1035,21 +1166,24 @@ def ejecutar_emitir_factura_arca(
     _cerrar_presupuesto_cargado("facturado")
     limpiar_venta_mostrador(vendedor, reset_cliente=True)
     st.session_state.mostrador_voz_solo_ticket = bool(solo_ticket)
-    st.session_state.factura_arca_reciente = {
+    nro = _formato_nro_comprobante(datos_resp)
+    return True, f"Factura {nro} emitida · CAE otorgado · Total ${total_final:,.2f}", {
         "respuesta": datos_resp,
         "pdf_ticket": pdf_ticket,
         "pdf_a4": pdf_a4,
         "total": total_final,
         "comprobante_id": comp_id,
+        "nro": nro,
     }
-    return True, "Factura ARCA emitida. Carrito listo para la próxima venta."
 
 
 def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False):
     with st.spinner("Solicitando CAE a AFIP…"):
-        ok, msj = ejecutar_emitir_factura_arca(
+        ok, msj, datos = ejecutar_emitir_factura_arca(
             vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
         )
+    if ok and datos:
+        _auto_imprimir_pdf(datos.get("pdf_ticket"))
     return ok, msj
 
 
@@ -1066,15 +1200,21 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
 
     if tipo == "facturar":
         with st.spinner("Solicitando CAE a ARCA/AFIP…"):
-            return ejecutar_emitir_factura_arca(
+            ok, msj, datos = ejecutar_emitir_factura_arca(
                 vendedor, carrito, total_final, desc_porc, forma_pago
             )
+        if ok and datos:
+            _auto_imprimir_pdf(datos.get("pdf_ticket"))
+        return ok, msj
 
     if tipo == "imprimir_ticket":
         with st.spinner("Solicitando CAE e imprimiendo ticket…"):
-            return ejecutar_emitir_factura_arca(
+            ok, msj, datos = ejecutar_emitir_factura_arca(
                 vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
             )
+        if ok and datos:
+            _auto_imprimir_pdf(datos.get("pdf_ticket"))
+        return ok, msj
 
     if tipo == "guardar_presupuesto":
         ok, msj, nuevo_id = guardar_presupuesto(
@@ -1391,9 +1531,9 @@ def _aplicar_cambios_carrito(vendedor, carrito, df_editado):
         if not iid or iid not in orig_map:
             continue
         orig = orig_map[iid]
-        cant_n = int(row.get("Cant.", orig.get("cantidad", 1)))
+        cant_n = _int_celda(row.get("Cant."), int(orig.get("cantidad", 1)))
         cant_o = int(orig.get("cantidad", 1))
-        precio_n = float(row.get("Precio unit.", orig.get("precio_unitario", 0)))
+        precio_n = _float_celda(row.get("Precio unit."), float(orig.get("precio_unitario", 0)))
         precio_o = float(orig.get("precio_unitario", 0))
 
         if cant_n != cant_o:
@@ -1436,7 +1576,7 @@ def render_carrito_grilla(vendedor, carrito):
         },
         use_container_width=True,
         hide_index=True,
-        key=f"cart_editor_{vendedor}_{st.session_state.get(f'mostrador_cart_rev_{vendedor}', 0)}",
+        key=_cart_editor_session_key(vendedor),
     )
 
     act1, act2, act3 = st.columns([2, 2, 3])
@@ -1488,6 +1628,9 @@ def render_panel_cobro_mostrador(
             st.metric("Subtotal", f"${total_bruto:,.2f}")
             st.caption(f"Descuento {desc_porc}%")
         st.metric("Total", f"${total_final:,.2f}")
+        st.caption(
+            "El total incluye cambios de la grilla. Al facturar se guardan automáticamente."
+        )
 
         forma_pago = st.selectbox(
             "Forma de pago",
@@ -1512,6 +1655,7 @@ def render_panel_cobro_mostrador(
                     vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
                 )
                 if ok:
+                    st.success(msj)
                     st.rerun()
                 else:
                     st.error(msj)
@@ -1523,6 +1667,7 @@ def render_panel_cobro_mostrador(
                     vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
                 )
                 if ok:
+                    st.success(msj)
                     st.rerun()
                 else:
                     st.error(msj)
@@ -1554,14 +1699,18 @@ def render_panel_cobro_mostrador(
                 else:
                     st.error(msj)
             if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
-                exito, msj = confirmar_venta(str(vendedor))
-                if exito:
-                    _cerrar_presupuesto_cargado("vendido")
-                    limpiar_venta_mostrador(vendedor, reset_cliente=True)
-                    st.success(msj)
-                    st.rerun()
+                _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
+                if err_sync:
+                    st.error("\n".join(err_sync))
                 else:
-                    st.error(msj)
+                    exito, msj = confirmar_venta(str(vendedor))
+                    if exito:
+                        _cerrar_presupuesto_cargado("vendido")
+                        limpiar_venta_mostrador(vendedor, reset_cliente=True)
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
             if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
                 limpiar_venta_mostrador(vendedor, reset_cliente=False)
                 st.rerun()

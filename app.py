@@ -705,11 +705,12 @@ elif pagina == "mostrador":
         render_ia_mostrador,
         render_confirmacion_pendiente_mostrador,
         render_panel_coincidencias_mostrador,
-        render_factura_arca_exitosa,
         render_historial_facturas_arca,
+        carrito_efectivo_mostrador,
+        calcular_totales_carrito,
     )
-    from modulos.ui_estilos import aplicar_estilos_mostrador
 
+    from modulos.ui_estilos import aplicar_estilos_mostrador
     from modulos.mostrador_voz_flujo import inventario_cache_mostrador
 
     aplicar_estilos_mostrador()
@@ -729,6 +730,11 @@ elif pagina == "mostrador":
         horizontal=True,
         label_visibility="collapsed",
     )
+
+    carrito_full = obtener_carrito(str(vendedor)) or []
+    if carrito_full:
+        render_carrito_grilla(vendedor, carrito_full)
+        st.divider()
 
     col_izq, col_der = st.columns([3, 2], gap="large")
     inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
@@ -787,35 +793,25 @@ elif pagina == "mostrador":
                         st.error(msj)
 
         if st.session_state.get("mostrador_accion_pendiente"):
-            carrito_pend = obtener_carrito(str(vendedor)) or []
-            tb = sum(item.get("subtotal", 0) for item in carrito_pend if isinstance(item, dict))
+            carrito_pend = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
             dp = float(st.session_state.cliente_activo.get("descuento", 0))
-            tf = tb * (1 - dp / 100)
+            _, tf = calcular_totales_carrito(carrito_pend, dp)
             render_confirmacion_pendiente_mostrador(vendedor, carrito_pend, tf, dp)
 
     with col_der:
         st.markdown("#### Venta actual")
-        if st.session_state.get("factura_arca_reciente"):
-            render_factura_arca_exitosa("panel")
-
         carrito = obtener_carrito(str(vendedor)) or []
-        factura_emitida = bool(st.session_state.get("factura_arca_reciente"))
-        if carrito and not factura_emitida:
-            total_bruto = sum(item.get("subtotal", 0) for item in carrito if isinstance(item, dict))
+        if carrito:
+            carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
             desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-            total_final = total_bruto * (1 - desc_porc / 100)
+            total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
             render_acciones_carrito(
-                vendedor, carrito, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
+                vendedor, carrito_ui, total_bruto, total_final, desc_porc, generar_pdf_presupuesto
             )
-        elif not factura_emitida:
+        else:
             st.info("Carrito vacío — buscá productos o usá la IA de voz.")
 
         render_historial_facturas_arca()
-
-    carrito_full = obtener_carrito(str(vendedor)) or []
-    if carrito_full and not st.session_state.get("factura_arca_reciente"):
-        st.divider()
-        render_carrito_grilla(vendedor, carrito_full)
 
 # --- ASISTENTE ---
 elif pagina == "asistente":
