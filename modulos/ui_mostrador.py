@@ -35,6 +35,7 @@ from modulos.mostrador_voz_flujo import (
     inventario_cache_mostrador,
     agregar_termino_voz,
     ejecutar_flujo_factura_voz,
+    extraer_items_orden_voz,
 )
 
 
@@ -792,6 +793,10 @@ def render_ia_mostrador(
                 total_final = total_bruto * (1 - desc_porc / 100)
 
                 if accion == "flujo_factura":
+                    if not resp.get("items"):
+                        items_extra = extraer_items_orden_voz(orden)
+                        if items_extra:
+                            resp["items"] = items_extra
                     with st.spinner("Facturación por voz…"):
                         ok, msj, ambiguos = ejecutar_flujo_factura_voz(
                             vendedor,
@@ -800,6 +805,7 @@ def render_ia_mostrador(
                             buscar_en_inventario,
                             agregar_al_carrito,
                             ejecutar_emitir_factura_arca,
+                            texto_orden=orden,
                         )
                     if ok:
                         st.success(msj)

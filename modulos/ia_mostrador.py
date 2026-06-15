@@ -7,7 +7,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq  # type: ignore
 
-from modulos.ia_asistente import preprocesar_texto_usuario
+from modulos.ia_asistente import normalizar_texto_basico
 
 load_dotenv(override=True)
 
@@ -62,12 +62,16 @@ def _orden_es_flujo_complejo(texto):
 
 def parse_flujo_rapido_voz(texto_usuario):
     """Detecta órdenes compuestas sin Groq (más rápido)."""
-    t = preprocesar_texto_usuario(texto_usuario).strip().lower()
+    from modulos.mostrador_voz_flujo import extraer_items_orden_voz
+
+    t = normalizar_texto_basico(texto_usuario).lower()
     imprimir = bool(re.search(r"\bimprimir\b|\bticket\b|\bfactur", t))
     if not imprimir:
         return None
-    if sum(1 for s in ("factura", "cliente", "agreg", "codigo", "código", "unidad", "contado", "para ")
-           if s in t) < 2:
+    if sum(
+        1 for s in ("factura", "cliente", "agreg", "codigo", "unidad", "contado", "para ")
+        if s in t
+    ) < 2:
         return None
 
     flujo = {
@@ -84,22 +88,13 @@ def parse_flujo_rapido_voz(texto_usuario):
         flujo["consumidor_final"] = True
     else:
         m_cli = re.search(
-            r"(?:para|cliente)\s+(.+?)(?:,|\s+(?:agreg|codigo|código|forma|pago|imprimir|factura)\b)",
+            r"(?:para|cliente)\s+(.+?)(?:,|\s+(?:agreg|codigo|forma|pago|imprimir|factura)\b)",
             t,
         )
         if m_cli:
             flujo["nombre_cliente"] = m_cli.group(1).strip().upper()
 
-    items = []
-    for m in re.finditer(
-        r"(?:codigo|código)\s+(\S+)\s+(\d+)\s*(?:unidad)?", t
-    ):
-        items.append({"termino": m.group(1).upper(), "cantidad": int(m.group(2))})
-    if not items:
-        for m in re.finditer(
-            r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?(\S+)\s+(\d+)\s*(?:unidad)?", t
-        ):
-            items.append({"termino": m.group(1).upper(), "cantidad": int(m.group(2))})
+    items = extraer_items_orden_voz(texto_usuario)
     if items:
         flujo["items"] = items
 
@@ -121,7 +116,9 @@ def parse_flujo_rapido_voz(texto_usuario):
 
 def parse_rapido_voz(texto_usuario):
     """Atajos sin llamar a Groq (más rápido)."""
-    t = preprocesar_texto_usuario(texto_usuario).strip().lower()
+    from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador
+
+    t = preprocesar_texto_mostrador(texto_usuario).strip().lower()
     if re.match(r"^(imprimir|imprimí|imprime|ticket|facturá|factura)\.?$", t):
         return {"accion": "imprimir_ticket"}
     if re.search(r"\bfactura\s+b\b", t) and re.search(r"\bimprimir\b", t):
@@ -156,7 +153,9 @@ def procesar_orden_mostrador(texto_usuario):
         return flujo_rapido
 
     client = Groq(api_key=api_key)
-    texto_procesado = preprocesar_texto_usuario(texto_usuario)
+    from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador
+
+    texto_procesado = preprocesar_texto_mostrador(texto_usuario)
     es_flujo = _orden_es_flujo_complejo(texto_procesado)
     modelo = _MODELO_FLUJO if es_flujo else _MODELO_RAPIDO
 

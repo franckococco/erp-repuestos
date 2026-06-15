@@ -12,7 +12,66 @@ from modulos.db_firebase import (
     cliente_db_a_activo,
     obtener_clientes,
 )
-from modulos.ia_mostrador import normalizar_forma_pago
+from modulos.ia_asistente import normalizar_texto_basico
+
+
+def preprocesar_texto_mostrador(texto):
+    """Preprocesa sin fusionar código de producto con cantidad (ej. 3524150 5)."""
+    texto_limpio = re.sub(
+        r"\b(guion|guión)\b", "-", str(texto or ""), flags=re.IGNORECASE
+    )
+
+    def unir_si_dictado(match):
+        fragmento = match.group(0)
+        partes = fragmento.split()
+        if len(partes) == 2 and partes[1].isdigit() and int(partes[1]) <= 999:
+            return fragmento
+        if len(partes) == 2 and len(partes[0]) <= 3 and partes[0].isdigit():
+            return fragmento
+        return fragmento.replace(" ", "")
+
+    return re.sub(r"(?:\d+\s+)+\d+", unir_si_dictado, texto_limpio)
+
+
+def _limpiar_termino_item(termino):
+    return str(termino or "").strip().upper().replace("/", "-").strip(",.;:")
+
+
+def extraer_items_orden_voz(texto):
+    """Extrae código + cantidad desde la orden hablada/escrita."""
+    if not texto:
+        return []
+    t = normalizar_texto_basico(texto).lower()
+    items = []
+    vistos = set()
+
+    def agregar(termino, cantidad):
+        term = _limpiar_termino_item(termino)
+        try:
+            cant = max(1, int(cantidad))
+        except (TypeError, ValueError):
+            return
+        if not term or not re.search(r"[A-Z0-9]", term):
+            return
+        clave = (term, cant)
+        if clave in vistos:
+            return
+        vistos.add(clave)
+        items.append({"termino": term, "cantidad": cant})
+
+    patrones = [
+        (r"(?:codigo)\s+(\S+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?)?\b", False),
+        (r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?(\S+?)\s+(\d{1,4})\s*(?:unidades?|u\.?)?\b", False),
+        (r"(?:codigo)\s+(\S+?)\s*(?:por|x|\*|con)\s*(\d{1,4})\b", False),
+        (r"(\d{1,4})\s*(?:unidades?|u\.?)\s+(?:del?\s+)?(?:codigo\s+)?(\S+)", True),
+    ]
+    for patron, invertido in patrones:
+        for m in re.finditer(patron, t):
+            if invertido:
+                agregar(m.group(2), m.group(1))
+            else:
+                agregar(m.group(1), m.group(2))
+    return items
 
 
 def inventario_cache_mostrador(obtener_inventario_fn, ttl_seg=120):
@@ -42,6 +101,24 @@ def _parece_codigo(termino: str) -> bool:
     return bool(re.match(r"^[A-Z0-9\-]{4,}$", t))
 
 
+def _buscar_variantes_por_codigo(inventario, termino):
+    t = _limpiar_termino_item(termino)
+    if not t:
+        return []
+    exactos = []
+    for p in inventario:
+        if not isinstance(p, dict):
+            continue
+        cod = _limpiar_termino_item(p.get("codigo", ""))
+        pid = _limpiar_termino_item(p.get("id", ""))
+        id_m = _limpiar_termino_item(p.get("id_maestro", ""))
+        if t in (cod, pid, id_m):
+            exactos.append(p)
+        elif pid.startswith(f"{t}_") or id_m.startswith(f"{t}_"):
+            exactos.append(p)
+    return exactos
+
+
 def agregar_termino_voz(
     vendedor,
     termino,
@@ -55,19 +132,33 @@ def agregar_termino_voz(
     if not termino:
         return False, "Sin término de búsqueda.", None
 
+    id_limpio = _limpiar_termino_item(termino)
+
     if _parece_codigo(termino):
-        ok, msj = agregar_al_carrito(str(vendedor), termino.upper().replace("/", "-"), cant)
+        ok, msj = agregar_al_carrito(str(vendedor), id_limpio, cant)
         if ok:
             return True, msj, None
-        for p in inventario:
-            if not isinstance(p, dict):
-                continue
-            cod = str(p.get("codigo", "")).upper()
-            pid = str(p.get("id", "")).upper()
-            t_up = termino.upper()
-            if t_up in (cod, pid) or pid.startswith(t_up + "_"):
-                ok2, msj2 = agregar_al_carrito(str(vendedor), p.get("id"), cant)
-                return ok2, msj2, None
+        coincidencias = _buscar_variantes_por_codigo(inventario, termino)
+        if len(coincidencias) == 1:
+            ok2, msj2 = agregar_al_carrito(str(vendedor), coincidencias[0].get("id"), cant)
+            return ok2, msj2, None
+        if len(coincidencias) > 1:
+            return (
+                False,
+                f"Hay {len(coincidencias)} variantes para '{id_limpio}'. Decí el código con marca.",
+                coincidencias[:10],
+            )
+
+    coincidencias_cod = _buscar_variantes_por_codigo(inventario, termino)
+    if len(coincidencias_cod) == 1:
+        ok, msj = agregar_al_carrito(str(vendedor), coincidencias_cod[0].get("id"), cant)
+        return ok, msj, None
+    if len(coincidencias_cod) > 1:
+        return (
+            False,
+            f"Hay {len(coincidencias_cod)} variantes para '{id_limpio}'. Decí el código exacto.",
+            coincidencias_cod[:10],
+        )
 
     encontrados = buscar_en_inventario(inventario, termino)
     if len(encontrados) == 1:
@@ -114,6 +205,7 @@ def ejecutar_flujo_factura_voz(
     buscar_en_inventario,
     agregar_al_carrito,
     emitir_factura_fn: Callable,
+    texto_orden=None,
 ):
     """
     Ejecuta en un solo paso: cliente, ítems, pago e impresión ticket.
@@ -150,6 +242,13 @@ def ejecutar_flujo_factura_voz(
     items = flujo.get("items") or []
     if isinstance(items, dict):
         items = [items]
+    if not items and texto_orden:
+        items = extraer_items_orden_voz(texto_orden)
+    if not items and texto_orden and flujo.get("termino"):
+        items = [{"termino": flujo.get("termino"), "cantidad": flujo.get("cantidad", 1)}]
+
+    errores_items = []
+    items_agregados = 0
     for raw in items:
         if not isinstance(raw, dict):
             continue
@@ -160,12 +259,21 @@ def ejecutar_flujo_factura_voz(
         )
         if ok:
             pasos_ok.append(msj)
+            items_agregados += 1
         elif ambiguos:
             return False, msj, ambiguos
         else:
             errores.append(msj)
+            errores_items.append(msj)
+
+    if items and items_agregados == 0 and errores_items:
+        if len(errores_items) == 1:
+            return False, errores_items[0], None
+        return False, "No se pudo agregar ningún producto:\n" + "\n".join(errores_items), None
 
     if flujo.get("forma_pago"):
+        from modulos.ia_mostrador import normalizar_forma_pago
+
         fp = normalizar_forma_pago(flujo.get("forma_pago"))
         st.session_state[f"mostrador_forma_pago_{vendedor}"] = fp
         pasos_ok.append(f"Pago {fp}")
@@ -182,7 +290,13 @@ def ejecutar_flujo_factura_voz(
 
     carrito = obtener_carrito(str(vendedor)) or []
     if not carrito:
-        return False, "No hay ítems para facturar.", None
+        if not items:
+            return (
+                False,
+                "No detecté código ni cantidad. Ejemplo: «código 3524150 5 unidades».",
+                None,
+            )
+        return False, "No hay ítems en el carrito para facturar.", None
     if errores:
         return False, "Corregí estos errores antes de imprimir:\n" + "\n".join(errores), None
 
