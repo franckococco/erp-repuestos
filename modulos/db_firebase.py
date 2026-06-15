@@ -343,17 +343,66 @@ def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pag
     return ref.id
 
 
-def listar_comprobantes_arca(limite=40):
+def listar_comprobantes_arca(limite=40, fecha_desde=None, fecha_hasta=None, busqueda=""):
     try:
-        docs = list(get_db().collection("comprobantes_arca").limit(200).stream())
+        docs = list(get_db().collection("comprobantes_arca").limit(500).stream())
     except Exception:
         return []
     items = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
-    items.sort(
-        key=lambda x: x.get("fecha") or datetime.min.replace(tzinfo=timezone.utc),
+
+    t_norm = _norm_busqueda(busqueda) if busqueda else ""
+    t_digitos = "".join(filter(str.isdigit, str(busqueda or "")))
+
+    def _fecha_item(item):
+        raw = item.get("fecha")
+        if isinstance(raw, datetime):
+            if raw.tzinfo is None:
+                return raw.replace(tzinfo=timezone.utc)
+            return raw.astimezone(timezone.utc)
+        if hasattr(raw, "timestamp"):
+            return datetime.fromtimestamp(raw.timestamp(), tz=timezone.utc)
+        return None
+
+    filtrados = []
+    for item in items:
+        f = _fecha_item(item)
+        if fecha_desde and f and f < fecha_desde:
+            continue
+        if fecha_hasta and f and f > fecha_hasta:
+            continue
+        if t_norm or t_digitos:
+            cli = item.get("cliente") or {}
+            blob = " ".join([
+                str(item.get("cae", "")),
+                str(cli.get("nombre", "")),
+                _formato_nro_comprobante_item(item),
+                str(item.get("numero_factura", "")),
+                str(item.get("punto_venta", "")),
+            ])
+            blob_norm = _norm_busqueda(blob)
+            blob_digitos = "".join(filter(str.isdigit, blob))
+            if t_norm and t_norm not in blob_norm:
+                if not (t_digitos and t_digitos in blob_digitos):
+                    continue
+            elif t_digitos and t_digitos not in blob_digitos:
+                continue
+        filtrados.append(item)
+
+    filtrados.sort(
+        key=lambda x: _fecha_item(x) or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
-    return items[:limite]
+    return filtrados[:limite]
+
+
+def _formato_nro_comprobante_item(item):
+    try:
+        return (
+            f"{int(float(item.get('punto_venta', 0))):04d}-"
+            f"{int(float(item.get('numero_factura', 0))):08d}"
+        )
+    except (TypeError, ValueError):
+        return "—"
 
 
 def eliminar_item_carrito(vendedor, item_id):

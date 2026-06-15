@@ -1,10 +1,13 @@
 """UI del mostrador: cliente, búsqueda de productos y facturación ARCA."""
 import base64
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+
+from modulos.util_busqueda import normalizar_para_busqueda
 
 from modulos.db_firebase import (
     obtener_clientes,
@@ -32,7 +35,7 @@ from modulos.db_firebase import (
 )
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
-from modulos.util_fechas import formatear_fecha_ar
+from modulos.util_fechas import formatear_fecha_ar, TZ_ARGENTINA
 from modulos.ia_mostrador import (
     FORMAS_PAGO,
     procesar_orden_mostrador,
@@ -371,6 +374,47 @@ def _tipo_comprobante_label(cbte: str) -> str:
     return "Factura A" if str(cbte) == "1" else "Factura B"
 
 
+def _tipo_comprobante_label_largo(cbte: str) -> str:
+    if str(cbte) == "1":
+        return "Factura A — Responsable inscripto"
+    return "Factura B — Consumidor final"
+
+
+def _label_cliente_listado(id_cli: str, datos: dict) -> str:
+    datos = datos or {}
+    nombre = str(datos.get("nombre", "—")).strip()
+    tipo = _tipo_comprobante_label_largo(datos.get("tipo_comprobante", "6"))
+    desc = float(datos.get("descuento", 0) or 0)
+    extra = f" · {desc:g}% desc." if desc > 0 else ""
+    return f"{nombre} · CUIT/DNI {id_cli} · {tipo}{extra}"
+
+
+def _filtrar_clientes(clientes_db: dict, termino: str, max_resultados: int = 30) -> list:
+    """Retorna [(id_cli, datos), ...] ordenados por nombre."""
+    if not clientes_db:
+        return []
+    t_norm = normalizar_para_busqueda(termino)
+    t_digitos = "".join(filter(str.isdigit, str(termino or "")))
+    out = []
+    for id_cli, datos in clientes_db.items():
+        if not isinstance(datos, dict):
+            continue
+        nombre = str(datos.get("nombre", ""))
+        if not t_norm and not t_digitos:
+            continue
+        hit = False
+        if t_norm and t_norm in normalizar_para_busqueda(nombre):
+            hit = True
+        if t_digitos and t_digitos in str(id_cli):
+            hit = True
+        if t_norm and t_norm in normalizar_para_busqueda(_tipo_comprobante_label(datos.get("tipo_comprobante", "6"))):
+            hit = True
+        if hit:
+            out.append((id_cli, datos))
+    out.sort(key=lambda x: str((x[1] or {}).get("nombre", "")).upper())
+    return out[:max_resultados]
+
+
 def _cerrar_presupuesto_cargado(estado: str):
     pres_id = st.session_state.get("presupuesto_cargado_id")
     if pres_id:
@@ -506,32 +550,49 @@ def render_seccion_cliente_mostrador():
 
     with st.expander("Buscar o cargar cliente", expanded=False):
         if clientes_db:
-            opciones = [""] + list(clientes_db.keys())
-            sel_id = st.selectbox(
-                "Cliente registrado",
-                options=opciones,
-                format_func=lambda x: (
-                    f"{(clientes_db.get(x) or {}).get('nombre', '')} ({x})"
-                    if x else "— Elegir —"
-                ),
-                key="mostrador_sel_cliente",
+            st.caption(f"{len(clientes_db)} clientes registrados — buscá por nombre o CUIT/DNI.")
+            buscar_cli = st.text_input(
+                "Buscar cliente",
+                key="mostrador_buscar_cliente",
+                placeholder="Ej: García, 30716, consumidor…",
             )
-            if st.button("Usar cliente seleccionado", key="mostrador_usar_cliente"):
-                if sel_id:
-                    st.session_state.cliente_activo = cliente_db_a_activo(clientes_db.get(sel_id, {}))
-                    st.rerun()
+            termino = (buscar_cli or "").strip()
+            if len(termino) < 2:
+                st.info("Escribí al menos 2 caracteres para buscar.")
+            else:
+                encontrados = _filtrar_clientes(clientes_db, termino)
+                if not encontrados:
+                    st.warning("No hay clientes que coincidan.")
                 else:
-                    st.warning("Seleccioná un cliente de la lista.")
+                    st.caption(f"{len(encontrados)} resultado(s)")
+                    ids = [x[0] for x in encontrados]
+                    sel_id = st.selectbox(
+                        "Resultados",
+                        options=ids,
+                        format_func=lambda x: _label_cliente_listado(x, clientes_db.get(x, {})),
+                        key="mostrador_sel_cliente",
+                        label_visibility="collapsed",
+                    )
+                    if st.button("Usar cliente seleccionado", key="mostrador_usar_cliente", type="primary"):
+                        if sel_id:
+                            st.session_state.cliente_activo = cliente_db_a_activo(
+                                clientes_db.get(sel_id, {})
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("Seleccioná un cliente de la lista.")
 
         with st.form("mostrador_alta_cliente_rapida"):
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1, c2, c3 = st.columns([3, 2, 1])
             nombre_nuevo = c1.text_input("Nombre / Razón Social")
             cuit_nuevo = c2.text_input("DNI o CUIT")
             desc_nuevo = c3.number_input("% Desc.", min_value=0.0, step=1.0, value=0.0)
-            tipo_nuevo = c4.selectbox(
-                "Comprobante",
+            tipo_nuevo = st.radio(
+                "Tipo de factura",
                 options=["6", "1"],
-                format_func=lambda x: _tipo_comprobante_label(x),
+                format_func=_tipo_comprobante_label_largo,
+                horizontal=True,
+                key="mostrador_tipo_fc_nuevo",
             )
             if st.form_submit_button("Guardar y usar"):
                 if nombre_nuevo and cuit_nuevo:
@@ -810,21 +871,68 @@ def render_factura_arca_exitosa(key_suffix=""):
     return True
 
 
+def _rango_fechas_utc(fecha_desde: date, fecha_hasta: date):
+    inicio = datetime.combine(fecha_desde, time.min)
+    fin = datetime.combine(fecha_hasta, time.max)
+    try:
+        inicio = inicio.replace(tzinfo=TZ_ARGENTINA).astimezone(timezone.utc)
+        fin = fin.replace(tzinfo=TZ_ARGENTINA).astimezone(timezone.utc)
+    except Exception:
+        inicio = inicio.replace(tzinfo=timezone.utc)
+        fin = fin.replace(tzinfo=timezone.utc)
+    return inicio, fin
+
+
 def render_historial_facturas_arca():
     with st.expander("Facturas ARCA — reimprimir", expanded=False):
+        hoy = date.today()
+        col_d1, col_d2, col_f = st.columns([1, 1, 2])
+        with col_d1:
+            fecha_desde = st.date_input(
+                "Desde",
+                value=hoy - timedelta(days=30),
+                key="hist_arca_desde",
+                format="DD/MM/YYYY",
+            )
+        with col_d2:
+            fecha_hasta = st.date_input(
+                "Hasta",
+                value=hoy,
+                key="hist_arca_hasta",
+                format="DD/MM/YYYY",
+            )
+        with col_f:
+            filtro_txt = st.text_input(
+                "Filtrar por nro., cliente o CAE",
+                key="hist_arca_filtro",
+                placeholder="0001-00000123, García, 7abc…",
+            )
+
+        if fecha_desde > fecha_hasta:
+            st.error("«Desde» no puede ser posterior a «Hasta».")
+            return
+
         try:
-            lista = listar_comprobantes_arca(40)
+            ini, fin = _rango_fechas_utc(fecha_desde, fecha_hasta)
+            lista = listar_comprobantes_arca(
+                limite=80,
+                fecha_desde=ini,
+                fecha_hasta=fin,
+                busqueda=filtro_txt,
+            )
         except Exception as ex:
             st.error(f"No se pudo leer el historial: {ex}")
             return
         if not lista:
-            st.info("Todavía no hay facturas ARCA guardadas.")
+            st.info("No hay facturas en ese rango o filtro.")
             return
 
         filas = []
         for c in lista:
             cli = c.get("cliente") or {}
+            cbte = str(cli.get("cbte_tipo") or cli.get("tipo_comprobante") or "6")
             filas.append({
+                "Tipo": _tipo_comprobante_label(cbte),
                 "Nro": _formato_nro_comprobante(c),
                 "Fecha": formatear_fecha_ar(c.get("fecha")),
                 "Cliente": cli.get("nombre", "—"),
@@ -838,14 +946,18 @@ def render_historial_facturas_arca():
             "Elegir factura para reimprimir",
             options=list(opciones.keys()),
             format_func=lambda x: (
+                f"{_tipo_comprobante_label(str((opciones[x].get('cliente') or {}).get('tipo_comprobante', '6')))} · "
                 f"{_formato_nro_comprobante(opciones[x])} · "
+                f"{formatear_fecha_ar(opciones[x].get('fecha'), con_hora=False)} · "
                 f"{(opciones[x].get('cliente') or {}).get('nombre', '')} · "
-                f"CAE {opciones[x].get('cae', '')}"
+                f"${float(opciones[x].get('total', 0)):,.2f}"
             ),
             key="hist_arca_sel",
         )
         comp = opciones.get(sel_id) or {}
+        cli_sel = comp.get("cliente") or {}
         st.caption(
+            f"{_tipo_comprobante_label(str(cli_sel.get('tipo_comprobante', '6')))} · "
             f"Vto. CAE: {comp.get('vencimiento_cae', '—')} · "
             f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
         )
