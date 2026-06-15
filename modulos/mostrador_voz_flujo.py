@@ -62,8 +62,11 @@ def extraer_items_orden_voz(texto):
     if not texto:
         return []
     t = normalizar_texto_basico(texto).lower()
+    t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
     items = []
     vistos = set()
+    cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
 
     def agregar(termino, cantidad):
         term = _limpiar_termino_item(termino)
@@ -73,6 +76,11 @@ def extraer_items_orden_voz(texto):
             return
         if not term or not re.search(r"[A-Z0-9]", term):
             return
+        if term in (
+            "LISTO", "FIN", "FACTURA", "PRESUPUESTO", "CODIGO", "UNIDAD",
+            "UNIDADES", "CLIENTE", "CARGAME", "HACEME",
+        ):
+            return
         clave = (term, cant)
         if clave in vistos:
             return
@@ -80,18 +88,45 @@ def extraer_items_orden_voz(texto):
         items.append({"termino": term, "cantidad": cant})
 
     patrones = [
-        (r"(?:codigo)\s+([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?)?\b", False),
-        (r"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidades?|u\.?)?\b", False),
-        (r"(?:codigo)\s+([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s*(?:por|x|\*|con)\s*(\d{1,4})\b", False),
-        (r"(\d{1,4})\s*(?:unidades?|u\.?)\s+(?:del?\s+)?(?:codigo\s+)?([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)", True),
+        (rf"(?:codigo)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
+        (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
+        (rf"(?:codigo)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
     ]
     for patron, invertido in patrones:
         for m in re.finditer(patron, t):
-            if invertido:
-                agregar(m.group(2), m.group(1))
-            else:
-                agregar(m.group(1), m.group(2))
+            agregar(m.group(1), m.group(2))
     return items
+
+
+def extraer_cliente_orden_voz(texto):
+    """Extrae nombre de cliente o consumidor final desde la orden."""
+    if not texto:
+        return {}
+    t = normalizar_texto_basico(texto).lower()
+    if re.search(r"consumidor\s+final|particular", t):
+        return {"consumidor_final": True}
+
+    fin = r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+\d+\s+unidad|\s+\d+\s+unidades|$)"
+    patrones = (
+        rf"para\s+el\s+cliente\s+(.+?){fin}",
+        rf"cliente\s+(.+?){fin}",
+        rf"para\s+(.+?){fin}",
+    )
+    for patron in patrones:
+        m = re.search(patron, t)
+        if not m:
+            continue
+        nombre = re.sub(r"\s+(el|la|del|de|una|un)$", "", m.group(1).strip(" ,."), flags=re.I)
+        nombre = re.sub(r"^(el|la)\s+", "", nombre, flags=re.I)
+        if len(nombre) >= 3 and nombre not in ("factura", "presupuesto", "consumidor final"):
+            return {"nombre_cliente": nombre.upper()}
+    return {}
+
+
+def marcar_verificacion_mostrador(intent_sugerido=None):
+    st.session_state.mostrador_listo_para_ticket = True
+    if intent_sugerido:
+        st.session_state.mostrador_intent_sugerido = intent_sugerido
 
 
 def inventario_cache_mostrador(obtener_inventario_fn, ttl_seg=120):
@@ -302,10 +337,15 @@ def ejecutar_flujo_factura_voz(
         or flujo.get("imprimir")
         or flujo.get("accion") == "imprimir_ticket"
     )
+    ir_verificacion = bool(flujo.get("ir_verificacion") or imprimir)
+    intent = flujo.get("intent_sugerido")
+    if intent:
+        st.session_state.mostrador_intent_sugerido = intent
+
     if errores:
         return False, "Flujo parcial:\n" + "\n".join(errores), None
 
-    if imprimir:
+    if ir_verificacion:
         carrito = obtener_carrito(str(vendedor)) or []
         if not carrito:
             if not items:
@@ -315,10 +355,10 @@ def ejecutar_flujo_factura_voz(
                     None,
                 )
             return False, "No hay ítems en el carrito. Revisá el código.", None
-        st.session_state.mostrador_listo_para_ticket = True
-        pasos_ok.append("Revisá la grilla y confirmá el ticket abajo")
+        marcar_verificacion_mostrador(intent)
+        pasos_ok.append("Revisá la grilla y elegí Facturar ARCA o Presupuesto")
 
     resumen = " · ".join(pasos_ok) if pasos_ok else "Listo."
-    if imprimir:
-        return True, f"{resumen} (sin imprimir hasta que confirmes)", None
+    if ir_verificacion:
+        return True, resumen, None
     return True, resumen, None

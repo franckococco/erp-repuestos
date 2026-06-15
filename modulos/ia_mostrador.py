@@ -76,50 +76,54 @@ def _orden_es_flujo_complejo(texto):
     return sum(1 for s in señales if s in t) >= 2
 
 
+def _es_comando_corto(texto):
+    t = re.sub(r"\s+", " ", str(texto or "").strip().lower())
+    return len(t.split()) <= 3
+
+
 def parse_flujo_rapido_voz(texto_usuario):
-    """Detecta órdenes compuestas sin Groq (más rápido)."""
-    from modulos.mostrador_voz_flujo import extraer_items_orden_voz
+    """Detecta órdenes compuestas sin Groq (cliente + varios ítems + listo)."""
+    from modulos.mostrador_voz_flujo import extraer_items_orden_voz, extraer_cliente_orden_voz
 
-    t = normalizar_texto_basico(texto_usuario).lower()
-    es_carga = bool(re.search(r"\bcarg", t))
-    imprimir = bool(re.search(r"\bimprimir\b|\bticket\b", t))
+    raw = str(texto_usuario or "").strip()
+    t = normalizar_texto_basico(raw).lower()
+    items = extraer_items_orden_voz(raw)
+    cliente_info = extraer_cliente_orden_voz(raw)
+
+    es_armado = bool(re.search(r"\b(carg\w*|hac\w*|arm\w*)\b", t))
+    es_presupuesto = bool(re.search(r"\bpresupuesto\b", t))
     tiene_factura = bool(re.search(r"\bfactura\b", t))
-    items_prev = extraer_items_orden_voz(texto_usuario)
-    tiene_cliente = bool(re.search(r"\b(para|cliente)\b", t))
+    ir_verificacion = bool(re.search(r"\b(listo|termine|terminé|fin)\b", t))
 
-    if not (
-        imprimir
-        or (es_carga and tiene_factura)
-        or (tiene_factura and (tiene_cliente or items_prev))
-    ):
+    nombre_cliente = cliente_info.get("nombre_cliente")
+    consumidor_final = cliente_info.get("consumidor_final")
+
+    if not items and not nombre_cliente and not consumidor_final:
         return None
-    if sum(
-        1 for s in ("factura", "cliente", "agreg", "codigo", "unidad", "contado", "para ")
-        if s in t
-    ) < 2:
+    if not (es_armado or es_presupuesto or tiene_factura or (items and (nombre_cliente or consumidor_final))):
         return None
 
     flujo = {
         "accion": "flujo_factura",
-        "vaciar_antes": es_carga,
-        "imprimir_ticket": imprimir,
+        "vaciar_antes": es_armado,
+        "ir_verificacion": ir_verificacion,
+        "imprimir_ticket": False,
     }
-    if re.search(r"factura\s+b\b", t):
-        flujo["tipo_comprobante"] = "6"
+
+    if es_presupuesto:
+        flujo["intent_sugerido"] = "presupuesto"
     elif re.search(r"factura\s+a\b", t):
         flujo["tipo_comprobante"] = "1"
+        flujo["intent_sugerido"] = "factura_a"
+    elif tiene_factura:
+        flujo["tipo_comprobante"] = "6"
+        flujo["intent_sugerido"] = "factura_b"
 
-    if re.search(r"consumidor\s+final|particular", t):
+    if consumidor_final:
         flujo["consumidor_final"] = True
-    else:
-        m_cli = re.search(
-            r"(?:para|cliente)\s+(.+?)(?:,|\s+(?:agreg|codigo|forma|pago|imprimir|factura)\b)",
-            t,
-        )
-        if m_cli:
-            flujo["nombre_cliente"] = m_cli.group(1).strip().upper()
+    elif nombre_cliente:
+        flujo["nombre_cliente"] = nombre_cliente
 
-    items = extraer_items_orden_voz(texto_usuario)
     if items:
         flujo["items"] = items
 
@@ -134,9 +138,7 @@ def parse_flujo_rapido_voz(texto_usuario):
     elif re.search(r"mercado", t):
         flujo["forma_pago"] = "MercadoPago"
 
-    if flujo.get("items") or flujo.get("nombre_cliente") or flujo.get("consumidor_final"):
-        return flujo
-    return None
+    return flujo
 
 
 def parse_armado_rapido_voz(texto_usuario):
@@ -152,7 +154,7 @@ def parse_armado_rapido_voz(texto_usuario):
         return None
 
     if re.match(r"^(presupuesto|imprimir presupuesto|pdf presupuesto)\.?$", t):
-        return {"accion": "presupuesto_pdf"}
+        return {"accion": "listo_armado", "intent_sugerido": "presupuesto"}
     if t in ("listo", "termine", "terminé", "fin"):
         return {"accion": "listo_armado"}
 
@@ -193,26 +195,17 @@ def parse_rapido_voz(texto_usuario):
 
 
 def procesar_orden_mostrador(texto_usuario):
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["GROQ_API_KEY"]
-        except Exception:
-            api_key = None
-
-    if not api_key:
-        return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
-
-    if es_confirmacion_usuario(texto_usuario):
-        if st.session_state.get("mostrador_accion_pendiente"):
-            return {"accion": "confirmar_pendiente"}
-        return {"accion": "listo_armado"}
-    if es_cancelacion_usuario(texto_usuario):
+    if es_cancelacion_usuario(texto_usuario) and _es_comando_corto(texto_usuario):
         return {"accion": "cancelar_pendiente"}
 
     flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
     if flujo_rapido:
         return flujo_rapido
+
+    if es_confirmacion_usuario(texto_usuario) and _es_comando_corto(texto_usuario):
+        if st.session_state.get("mostrador_accion_pendiente"):
+            return {"accion": "confirmar_pendiente"}
+        return {"accion": "listo_armado"}
 
     armado = parse_armado_rapido_voz(texto_usuario)
     if armado:
@@ -221,6 +214,19 @@ def procesar_orden_mostrador(texto_usuario):
     rapido = parse_rapido_voz(texto_usuario)
     if rapido:
         return rapido
+
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets["GROQ_API_KEY"]
+        except Exception:
+            api_key = None
+
+    if not api_key:
+        return {
+            "accion": "error",
+            "respuesta": "Orden no reconocida. Ejemplo: «cargame factura B para cliente Juan, código 111 3 unidades, listo».",
+        }
 
     client = Groq(api_key=api_key)
     from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador

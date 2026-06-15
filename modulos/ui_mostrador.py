@@ -49,6 +49,7 @@ from modulos.mostrador_voz_flujo import (
     agregar_termino_voz,
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
+    marcar_verificacion_mostrador,
 )
 
 
@@ -433,6 +434,7 @@ def limpiar_venta_mostrador(vendedor, reset_cliente=True):
     vaciar_carrito(str(vendedor))
     st.session_state.mostrador_listo_para_ticket = False
     st.session_state.mostrador_accion_pendiente = None
+    st.session_state.pop("mostrador_intent_sugerido", None)
     st.session_state.factura_arca_reciente = None
     st.session_state.pop("presupuesto_pdf_descarga", None)
     st.session_state.pop("presupuesto_pdf_nombre", None)
@@ -510,18 +512,34 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
     return 0, "No se detectaron productos.", None
 
 
+def _label_intent_sugerido(intent):
+    if intent == "presupuesto":
+        return "Presupuesto"
+    if intent == "factura_a":
+        return "Factura A"
+    return "Factura B"
+
+
 def _render_banner_armado_voz(vendedor):
     carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
     cli = normalizar_cliente_activo(st.session_state.cliente_activo)
     desc = float(cli.get("descuento", 0))
     _, total = calcular_totales_carrito(carrito, desc)
     n_items = len(carrito)
-    st.info(
-        f"**Modo armado** · Cliente: {cli['nombre']}"
-        + (f" ({desc:g}% dto.)" if desc else "")
-        + f" · {n_items} ítem(s) · Total **${total:,.2f}** · "
-        f"Seguí dictando (ej. `111 3`) o decí **presupuesto** / **facturar**."
-    )
+    if st.session_state.get("mostrador_listo_para_ticket"):
+        intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
+        st.success(
+            f"**Verificación** · Cliente: {cli['nombre']} · {n_items} ítem(s) · "
+            f"Total **${total:,.2f}** · Sugerido: **{_label_intent_sugerido(intent)}**. "
+            f"Elegí abajo **Facturar ARCA** o **Presupuesto**."
+        )
+    else:
+        st.info(
+            f"**Modo armado** · Cliente: {cli['nombre']}"
+            + (f" ({desc:g}% dto.)" if desc else "")
+            + f" · {n_items} ítem(s) · Total **${total:,.2f}** · "
+            f"Seguí dictando o decí **listo** para verificar."
+        )
 
 
 def render_presupuestos_guardados(vendedor):
@@ -1370,11 +1388,11 @@ def render_confirmacion_pendiente_mostrador(vendedor, carrito, total_final, desc
         st.rerun()
 
 
-def _marcar_listo_para_ticket(vendedor, total_final):
-    st.session_state.mostrador_listo_para_ticket = True
+def _marcar_listo_para_ticket(vendedor, total_final, intent_sugerido=None):
+    marcar_verificacion_mostrador(intent_sugerido)
     return (
-        f"Revisá la grilla abajo (cantidades y total ${total_final:,.2f}). "
-        "Cuando esté correcto, pulsá «Confirmar e imprimir ticket»."
+        f"Revisá la grilla (total ${total_final:,.2f}) y elegí "
+        "**Facturar ARCA** o **Presupuesto** en el panel derecho."
     )
 
 
@@ -1386,9 +1404,9 @@ def render_ia_mostrador(
     agregar_al_carrito,
 ):
     st.caption(
-        f"**Modo armado:** dictá código y cantidad (`111 3`, `codigo 3524150 5 unidades`) y seguí agregando. "
-        f"Decí **presupuesto** (PDF borrador, validez {VALIDEZ_PRESUPUESTO_DIAS} días), **listo**, **cliente García** o "
-        "**facturar** / **imprimir ticket** para cerrar."
+        "Dictá todo junto: «cargame factura B para cliente Juan, código 111 3 unidades, "
+        f"código 22323 1 unidad, listo» — o «presupuesto» en vez de factura. "
+        f"Al decir **listo** revisás y elegís Facturar o Presupuesto."
     )
 
     if obtener_carrito(str(vendedor)):
@@ -1535,9 +1553,12 @@ def render_ia_mostrador(
                 else:
                     _, tf = calcular_totales_carrito(carrito_n, desc_porc)
                     st.success(
-                        f"Listo: {len(carrito_n)} ítem(s) · Total ${tf:,.2f}. "
-                        "Podés facturar, guardar presupuesto o seguir agregando."
+                        _marcar_listo_para_ticket(
+                            vendedor, tf, resp.get("intent_sugerido")
+                        )
                     )
+                    st.session_state.resultados_ia_mostrador = None
+                    st.rerun()
 
             elif accion == "agregar_carrito":
                 termino = str(resp.get("termino", ""))
@@ -1652,7 +1673,11 @@ def render_ia_mostrador(
                     if not ok_val:
                         st.error(msg_val)
                     else:
-                        st.success(_marcar_listo_para_ticket(vendedor, total_final))
+                        st.success(
+                            _marcar_listo_para_ticket(
+                                vendedor, total_final, "factura_b"
+                            )
+                        )
                         st.session_state.resultados_ia_mostrador = None
                         st.rerun()
 
@@ -1809,76 +1834,148 @@ def render_panel_cobro_mostrador(
 ):
     """Totales, pago y botones de facturación (columna lateral)."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
+    intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
 
     with st.container(border=True):
         st.markdown('<div class="mostrador-cobro-panel">', unsafe_allow_html=True)
-        if listo_ticket:
-            st.info("Revisá la grilla abajo y facturá cuando esté listo.")
 
         if desc_porc > 0:
             st.metric("Subtotal", f"${total_bruto:,.2f}")
             st.caption(f"Descuento {desc_porc}%")
         st.metric("Total", f"${total_final:,.2f}")
-        st.caption(
-            "El total incluye cambios de la grilla. Al facturar se guardan automáticamente."
-        )
 
-        forma_pago = st.selectbox(
-            "Forma de pago",
-            list(FORMAS_PAGO),
-            index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
-            key=f"pago_arca_{vendedor}",
-        )
-        _set_forma_pago(vendedor, forma_pago)
+        if listo_ticket:
+            st.success(
+                f"**Verificación** — Sugerido: {_label_intent_sugerido(intent)}. "
+                "Revisá la grilla y elegí:"
+            )
+            forma_pago = st.selectbox(
+                "Forma de pago",
+                list(FORMAS_PAGO),
+                index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
+                key=f"pago_arca_{vendedor}",
+            )
+            _set_forma_pago(vendedor, forma_pago)
 
-        cuit_fact, clave_fact, _ = _leer_secrets_facturador()
-        puede_facturar = bool(cuit_fact and clave_fact)
+            cuit_fact, clave_fact, _ = _leer_secrets_facturador()
+            puede_facturar = bool(cuit_fact and clave_fact)
 
-        if st.button(
-            "🖨️ Facturar e imprimir ticket",
-            type="primary",
-            use_container_width=True,
-            disabled=not puede_facturar,
-            key=f"btn_ticket_{vendedor}",
-        ):
-            if puede_facturar:
-                ok, msj = _facturar_desde_carrito(
-                    vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
+            col_fc, col_pres = st.columns(2)
+            with col_fc:
+                if st.button(
+                    "🧾 Facturar ARCA",
+                    type="primary" if intent != "presupuesto" else "secondary",
+                    use_container_width=True,
+                    disabled=not puede_facturar,
+                    key=f"btn_verif_arca_{vendedor}",
+                ):
+                    if puede_facturar:
+                        ok, msj = _facturar_desde_carrito(
+                            vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
+                        )
+                        if ok:
+                            st.success(msj)
+                            st.rerun()
+                        else:
+                            st.error(msj)
+            with col_pres:
+                if st.button(
+                    "📄 Presupuesto",
+                    type="primary" if intent == "presupuesto" else "secondary",
+                    use_container_width=True,
+                    key=f"btn_verif_pres_{vendedor}",
+                ):
+                    _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
+                    if err_sync:
+                        st.error("\n".join(err_sync))
+                    else:
+                        ok, msj, nuevo_id = guardar_presupuesto(
+                            str(vendedor), st.session_state.cliente_activo, ""
+                        )
+                        if ok:
+                            st.session_state.presupuesto_cargado_id = nuevo_id
+                            pres = obtener_presupuesto_guardado(nuevo_id) or {}
+                            nro = pres.get("numero_presupuesto")
+                            carrito_n = obtener_carrito(str(vendedor)) or []
+                            pdf = generar_pdf_presupuesto_mostrador(
+                                vendedor, carrito_n, total_bruto, desc_porc, numero=nro,
+                            )
+                            cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
+                            st.session_state.presupuesto_pdf_descarga = pdf
+                            st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
+                                nro, cli_nom,
+                            )
+                            limpiar_venta_mostrador(vendedor, reset_cliente=False)
+                            st.success(f"{msj} Descargalo abajo o desde el historial.")
+                            st.rerun()
+                        else:
+                            st.error(msj)
+
+            if not puede_facturar:
+                st.caption("Completá CUIT y clave en «Facturación ARCA» para facturar.")
+
+            if st.button("↩️ Seguir armando", use_container_width=True, key=f"btn_seguir_arm_{vendedor}"):
+                st.session_state.mostrador_listo_para_ticket = False
+                st.rerun()
+        else:
+            st.caption(
+                "El total incluye cambios de la grilla. Decí **listo** en la IA o usá los botones."
+            )
+            forma_pago = st.selectbox(
+                "Forma de pago",
+                list(FORMAS_PAGO),
+                index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
+                key=f"pago_arca_{vendedor}",
+            )
+            _set_forma_pago(vendedor, forma_pago)
+
+            cuit_fact, clave_fact, _ = _leer_secrets_facturador()
+            puede_facturar = bool(cuit_fact and clave_fact)
+
+            if st.button(
+                "✅ Listo — revisar",
+                type="primary",
+                use_container_width=True,
+                key=f"btn_listo_rev_{vendedor}",
+            ):
+                marcar_verificacion_mostrador(
+                    st.session_state.get("mostrador_intent_sugerido", "factura_b")
                 )
-                if ok:
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
+                st.rerun()
 
-        b_a4, b_pres = st.columns(2)
-        if b_a4.button("🧾 A4 + ticket", use_container_width=True, disabled=not puede_facturar):
-            if puede_facturar:
-                ok, msj = _facturar_desde_carrito(
-                    vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
-                )
-                if ok:
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
+            if st.button(
+                "🖨️ Facturar e imprimir ticket",
+                use_container_width=True,
+                disabled=not puede_facturar,
+                key=f"btn_ticket_{vendedor}",
+            ):
+                if puede_facturar:
+                    ok, msj = _facturar_desde_carrito(
+                        vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
+                    )
+                    if ok:
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
 
-        pdf_bytes = generar_pdf_presupuesto_mostrador(
-            str(vendedor), carrito, total_bruto, desc_porc,
-        )
-        b_pres.download_button(
-            "📄 Presupuesto",
-            pdf_bytes,
-            _nombre_archivo_presupuesto(
-                _numero_presupuesto_en_sesion(),
-                st.session_state.cliente_activo.get("nombre", "CLIENTE"),
-            ),
-            "application/pdf",
-            use_container_width=True,
-        )
+            pdf_bytes = generar_pdf_presupuesto_mostrador(
+                str(vendedor), carrito, total_bruto, desc_porc,
+            )
+            st.download_button(
+                "📄 Presupuesto borrador",
+                pdf_bytes,
+                _nombre_archivo_presupuesto(
+                    _numero_presupuesto_en_sesion(),
+                    st.session_state.cliente_activo.get("nombre", "CLIENTE"),
+                ),
+                "application/pdf",
+                use_container_width=True,
+                key=f"dl_pres_borrador_{vendedor}",
+            )
 
-        if not puede_facturar:
-            st.caption("Completá CUIT y clave en «Facturación ARCA».")
+            if not puede_facturar:
+                st.caption("Completá CUIT y clave en «Facturación ARCA».")
 
         with st.expander("Más acciones", expanded=False):
             nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
