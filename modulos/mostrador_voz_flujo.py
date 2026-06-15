@@ -17,21 +17,9 @@ from modulos.ia_asistente import normalizar_texto_basico
 
 
 def preprocesar_texto_mostrador(texto):
-    """Preprocesa sin fusionar código de producto con cantidad (ej. 3524150 5)."""
-    texto_limpio = re.sub(
-        r"\b(guion|guión)\b", "-", str(texto or ""), flags=re.IGNORECASE
-    )
-
-    def unir_si_dictado(match):
-        fragmento = match.group(0)
-        partes = fragmento.split()
-        if len(partes) == 2 and partes[1].isdigit() and int(partes[1]) <= 999:
-            return fragmento
-        if len(partes) == 2 and len(partes[0]) <= 3 and partes[0].isdigit():
-            return fragmento
-        return fragmento.replace(" ", "")
-
-    return re.sub(r"(?:\d+\s+)+\d+", unir_si_dictado, texto_limpio)
+    """Alias del preprocesador compartido (código + cantidad separados)."""
+    from modulos.ia_asistente import preprocesar_texto_usuario
+    return preprocesar_texto_usuario(texto)
 
 
 def _limpiar_termino_item(termino):

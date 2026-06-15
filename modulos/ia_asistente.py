@@ -24,14 +24,61 @@ def es_consulta_mayor_o_igual(texto):
 
 def preprocesar_texto_usuario(texto):
     """
-    Limpia el texto inicial para ayudar a la IA con los números dictados.
+    Limpia texto dictado sin fusionar código de producto con cantidad (ej. 2105320 10).
     """
-    def unir_numeros(match):
-        return match.group(0).replace(" ", "")
-    
-    texto_limpio = re.sub(r'(?:\d+\s+)+\d+', unir_numeros, texto)
-    texto_limpio = re.sub(r'\b(guion|guión)\b', '-', texto_limpio, flags=re.IGNORECASE)
-    return texto_limpio
+    texto_limpio = re.sub(
+        r"\b(guion|guión)\b", "-", str(texto or ""), flags=re.IGNORECASE
+    )
+
+    def unir_si_dictado(match):
+        fragmento = match.group(0)
+        partes = fragmento.split()
+        if len(partes) == 2 and partes[1].isdigit() and int(partes[1]) <= 9999:
+            return fragmento
+        if len(partes) == 2 and len(partes[0]) <= 3 and partes[0].isdigit():
+            return fragmento
+        return fragmento.replace(" ", "")
+
+    return re.sub(r"(?:\d+\s+)+\d+", unir_si_dictado, texto_limpio)
+
+
+def _limpiar_codigo_orden(termino):
+    t = str(termino or "").strip().upper().replace("/", "-")
+    return re.sub(r"\s+", "-", t).strip(",.;:")
+
+
+def parse_alta_baja_rapido(texto_usuario):
+    """Extrae alta/baja + código + cantidad sin llamar a Groq."""
+    if not texto_usuario:
+        return None
+    t = normalizar_texto_basico(texto_usuario).lower()
+    es_baja = bool(re.search(r"\b(baj\w*|rest\w*|descont\w*|sac\w*)\b", t))
+    es_alta = bool(re.search(r"\b(agreg\w*|sum\w*|carg\w*|aument\w*|ingres\w*)\b", t))
+    if not es_alta and not es_baja:
+        return None
+
+    accion = "baja" if es_baja and not es_alta else "alta"
+    if es_baja and es_alta:
+        accion = "baja" if t.find("baj") < t.find("agreg") and "baj" in t else "alta"
+
+    patrones = [
+        r"(?:agreg\w*|sum\w*|carg\w*|aument\w*|baj\w*|rest\w*)\s+(?:al?\s+)?(?:codigo\s+)?"
+        r"([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidad)?",
+        r"(?:codigo\s+)([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)\s+(\d{1,4})\s*(?:unidad)?",
+        r"(\d{1,4})\s*(?:unidad)?\s+(?:al?\s+)?(?:codigo\s+)([\dA-Za-z]+(?:[\s-][\dA-Za-z]+)*)",
+    ]
+    for i, patron in enumerate(patrones):
+        m = re.search(patron, t)
+        if not m:
+            continue
+        if i == 2:
+            cant, cod = m.group(1), m.group(2)
+        else:
+            cod, cant = m.group(1), m.group(2)
+        cod = _limpiar_codigo_orden(cod)
+        if cod:
+            return {"accion": accion, "termino": cod, "cantidad": int(cant)}
+    return None
 
 def procesar_orden_voz(texto_usuario, inventario_actual=None):
     api_key = os.getenv("GROQ_API_KEY")
@@ -43,6 +90,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
 
     if not api_key:
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
+
+    rapido = parse_alta_baja_rapido(texto_usuario)
+    if rapido:
+        return rapido
 
     client = Groq(api_key=api_key)
     texto_procesado = preprocesar_texto_usuario(texto_usuario)
