@@ -622,7 +622,6 @@ elif pagina == "mostrador":
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
         render_credenciales_arca,
-        render_config_ticket_mostrador,
         render_buscador_productos,
         render_carrito_grilla,
         render_presupuestos_guardados,
@@ -645,8 +644,6 @@ elif pagina == "mostrador":
         render_seccion_cliente_mostrador()
     with bar_cred:
         render_credenciales_arca()
-
-    render_config_ticket_mostrador()
 
     vendedor = VENDEDOR_MOSTRADOR
 
@@ -1024,7 +1021,11 @@ elif pagina == "asistente":
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
+    from modulos.ui_mostrador import render_config_ticket_mostrador
+
     titulo_seccion("Configuración", "Ctrl+C")
+
+    render_config_ticket_mostrador(en_pagina_config=True)
 
     with st.expander("Backup y restauración de stock", expanded=False):
         col_down, col_up = st.columns(2)

@@ -4,6 +4,18 @@ from typing import Any, Dict, List, Optional
 
 from fpdf import FPDF
 
+from modulos.pdf_a4_comun import (
+    MARGIN_L,
+    ANCHO_UTIL,
+    X_COL_DER,
+    W_COL_DER,
+    _fila_total_pdf,
+    dibujar_cabecera_documento,
+    dibujar_caja_cliente,
+    dibujar_tabla_items,
+    dibujar_totales_con_dto,
+    nueva_pagina_a4,
+)
 from modulos.util_branding import NOMBRE_EMPRESA
 from modulos.util_pdf import texto_para_pdf
 
@@ -153,6 +165,36 @@ def crear_ticket(
     return bytes(pdf.output())
 
 
+def _codigo_item_factura(item: Dict[str, Any]) -> str:
+    cod = item.get("codigo") or item.get("id_maestro")
+    if cod:
+        return str(cod).strip()
+    desc = str(item.get("descripcion", "")).strip()
+    return desc[:12] if desc else "-"
+
+
+def _items_factura_a_filas(items: List[Dict[str, Any]], es_factura_a: bool) -> List[Dict[str, Any]]:
+    filas = []
+    for item in items:
+        cant = _get_float(item, "cantidad", 1.0)
+        desc = _get_str(item, "descripcion", "Item")
+        precio_linea = _get_float(item, "precio", 0.0)
+        if es_factura_a:
+            sub = precio_linea / 1.21
+            precio_u = sub / cant if cant else 0.0
+        else:
+            sub = precio_linea
+            precio_u = precio_linea / cant if cant else 0.0
+        filas.append({
+            "codigo": _codigo_item_factura(item),
+            "descripcion": desc,
+            "cantidad": cant,
+            "precio_unitario": precio_u,
+            "subtotal": sub,
+        })
+    return filas
+
+
 def crear_a4(
     datos_respuesta: Dict[str, Any],
     datos_cliente: Dict[str, Any],
@@ -162,38 +204,10 @@ def crear_a4(
     if config is None:
         config = {}
 
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.add_page()
-    pdf.set_margins(10, 10, 10)
-    pdf.set_auto_page_break(auto=True, margin=15)
-
     cbte_tipo = _get_str(datos_cliente, "cbte_tipo", "6")
     es_factura_a = cbte_tipo == "1"
     tipo_letra = "A" if es_factura_a else "B"
     cod_afip = "001" if es_factura_a else "006"
-
-    m = 10.0
-    ancho = 190.0
-    mid_x = m + ancho / 2
-    box_b_w = 16.0
-    box_b_x = mid_x - box_b_w / 2
-    col_izq_w = box_b_x - m - 3
-    col_der_x = box_b_x + box_b_w + 4
-    col_der_w = m + ancho - col_der_x
-    val_x = m + 68
-
-    nombre_emp = (
-        _get_str(config, "nombre_empresa", "")
-        or _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA)
-    )
-    dir_emp = (
-        _get_str(config, "direccion", "")
-        or _get_str(datos_respuesta, "direccion_empresa", "")
-    )
-    cond_iva_emisor = _get_str(config, "condicion_iva", "IVA Responsable Inscripto")
-    cuit_emisor = _get_str(config, "cuit_emisor", "")
-    iibb = _get_str(config, "iibb", "")
-    inicio_act = _get_str(config, "inicio_act", "")
 
     nro_pto = int(_get_float(datos_respuesta, "punto_venta", 0.0))
     nro_fc = int(_get_float(datos_respuesta, "numero_factura", 0.0))
@@ -201,142 +215,75 @@ def crear_a4(
     nombre_cli = _get_str(datos_cliente, "nombre", "CONSUMIDOR FINAL")
     cond_cli = "Responsable Inscripto" if es_factura_a else "Consumidor Final"
 
-    hdr_top = m
-    hdr_h = 50.0
-    pdf.rect(m, hdr_top, ancho, hdr_h)
-    pdf.line(mid_x, hdr_top, mid_x, hdr_top + hdr_h)
+    filas = _items_factura_a_filas(items, es_factura_a)
+    total_factura = sum(float(f["subtotal"]) for f in filas)
+    if es_factura_a:
+        total_factura = sum(_get_float(it, "precio", 0.0) for it in items)
 
-    pdf.rect(box_b_x, hdr_top + 6, box_b_w, 18)
-    pdf.set_font("Helvetica", "B", 22)
-    pdf.set_xy(box_b_x, hdr_top + 7)
+    cfg = dict(config)
+    if not cfg.get("nombre_empresa"):
+        cfg["nombre_empresa"] = _get_str(datos_respuesta, "nombre_empresa", NOMBRE_EMPRESA)
+    if not cfg.get("direccion"):
+        cfg["direccion"] = _get_str(datos_respuesta, "direccion_empresa", "")
+
+    pdf = nueva_pagina_a4()
+    y_box = dibujar_cabecera_documento(
+        pdf,
+        cfg,
+        f"FACTURA {tipo_letra}",
+        [
+            f"Pto. Vta: {nro_pto:04d}",
+            f"Comp. Nro: {nro_fc:08d}",
+            f"Cod. {cod_afip}",
+            f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        ],
+    )
+
+    box_b_w = 14.0
+    box_b_x = X_COL_DER + W_COL_DER - box_b_w
+    pdf.rect(box_b_x, 12, box_b_w, 14)
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_xy(box_b_x, 13)
     pdf.cell(box_b_w, 10, tipo_letra, align="C")
-    pdf.set_font("Helvetica", "B", 7)
-    pdf.set_xy(box_b_x, hdr_top + 16)
-    pdf.cell(box_b_w, 4, f"Cod. {cod_afip}", align="C")
 
-    y_izq = hdr_top + 4
-    pdf.set_xy(m + 2, y_izq)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.multi_cell(col_izq_w, 5, nombre_emp)
-    y_izq = pdf.get_y() + 1
-    if dir_emp:
-        pdf.set_xy(m + 2, y_izq)
-        pdf.set_font("Helvetica", "", 8)
-        pdf.multi_cell(col_izq_w, 4, dir_emp)
-        y_izq = pdf.get_y() + 1
-    pdf.set_xy(m + 2, y_izq)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.multi_cell(col_izq_w, 4, f"Condición frente al IVA: {cond_iva_emisor}")
-    y_izq = pdf.get_y() + 1
-    if cuit_emisor:
-        pdf.set_xy(m + 2, y_izq)
-        pdf.cell(col_izq_w, 4, f"CUIT: {cuit_emisor}", new_x="LMARGIN", new_y="NEXT")
-        y_izq += 4
-    if iibb:
-        pdf.set_xy(m + 2, y_izq)
-        pdf.cell(col_izq_w, 4, iibb, new_x="LMARGIN", new_y="NEXT")
-        y_izq += 4
-    if inicio_act:
-        pdf.set_xy(m + 2, y_izq)
-        pdf.cell(col_izq_w, 4, inicio_act, new_x="LMARGIN", new_y="NEXT")
+    y_tab = dibujar_caja_cliente(
+        pdf,
+        y_box,
+        nombre_cli,
+        cuit_cli,
+        filas_extra=[("Cond. IVA", cond_cli)],
+    )
+    y_tab = dibujar_tabla_items(pdf, y_tab, filas, _codigo_item_factura)
 
-    y_der = hdr_top + 4
-    pdf.set_xy(col_der_x, y_der)
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(col_der_w, 6, "FACTURA")
-    y_der += 8
-    pdf.set_xy(col_der_x, y_der)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.cell(col_der_w, 4, f"Punto de Venta: {nro_pto:04d}")
-    y_der += 5
-    pdf.set_xy(col_der_x, y_der)
-    pdf.cell(col_der_w, 4, f"Comp. Nro: {nro_fc:08d}")
-    y_der += 5
-    pdf.set_xy(col_der_x, y_der)
-    pdf.cell(col_der_w, 4, f"Fecha de Emisión: {datetime.now().strftime('%d/%m/%Y')}")
-
-    cli_top = hdr_top + hdr_h + 4
-    cli_h = 22.0
-    pdf.rect(m, cli_top, ancho, cli_h)
-    fila_h = 6.0
-
-    y_cli = cli_top + 3
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_xy(m + 2, y_cli)
-    pdf.cell(60, fila_h, "CUIT/DNI:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(val_x, y_cli)
-    pdf.cell(60, fila_h, cuit_cli)
-
-    y_cli += fila_h
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_xy(m + 2, y_cli)
-    pdf.cell(60, fila_h, "Apellido y Nombre / Razón Social:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(val_x, y_cli)
-    pdf.cell(ancho - val_x - 2, fila_h, nombre_cli)
-
-    y_cli += fila_h
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_xy(m + 2, y_cli)
-    pdf.cell(60, fila_h, "Condición IVA:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(val_x, y_cli)
-    pdf.cell(60, fila_h, cond_cli)
-
-    pdf.set_xy(m, cli_top + cli_h + 4)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_fill_color(220, 220, 220)
-    pdf.cell(20, 6, "Cantidad", border=1, align="C", fill=True)
-    pdf.cell(90, 6, "Descripción", border=1, align="C", fill=True)
-    pdf.cell(25, 6, "Precio Unit.", border=1, align="C", fill=True)
-    pdf.cell(25, 6, "Bonif.", border=1, align="C", fill=True)
-    pdf.cell(30, 6, "Subtotal", border=1, align="C", fill=True, new_x="LMARGIN", new_y="NEXT")
-
-    pdf.set_font("Helvetica", "", 9)
-    total_factura = 0.0
-    for item in items:
-        cant = _get_float(item, "cantidad", 1.0)
-        desc = _get_str(item, "descripcion", "Item")
-        precio = _get_float(item, "precio", 0.0)
-        total_factura += precio
-        if es_factura_a:
-            precio_unit_mostrar = (precio / cant) / 1.21 if cant else 0
-            subtot_linea_mostrar = precio / 1.21
-        else:
-            precio_unit_mostrar = precio / cant if cant else 0
-            subtot_linea_mostrar = precio
-        cant_str = f"{int(cant)}" if cant.is_integer() else f"{cant:.2f}"
-        pdf.cell(20, 6, cant_str, border="B", align="C")
-        pdf.cell(90, 6, desc[:50], border="B", align="L")
-        pdf.cell(25, 6, f"${precio_unit_mostrar:.2f}", border="B", align="R")
-        pdf.cell(25, 6, "$0.00", border="B", align="R")
-        pdf.cell(30, 6, f"${subtot_linea_mostrar:.2f}", border="B", align="R", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.set_y(240)
-    pdf.line(10, 238, 200, 238)
-
+    pdf.set_y(y_tab + 4)
     if es_factura_a:
         subtotal = total_factura / 1.21
         iva = total_factura - subtotal
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(160, 6, "Importe Neto Gravado: $", align="R")
-        pdf.cell(30, 6, f"{subtotal:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-        pdf.cell(160, 6, "IVA 21%: $", align="R")
-        pdf.cell(30, 6, f"{iva:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(160, 8, "IMPORTE TOTAL: $", align="R")
-        pdf.cell(30, 8, f"{total_factura:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        _fila_total_pdf(pdf, "Neto gravado:", f"${subtotal:,.2f}", tam=10)
+        _fila_total_pdf(pdf, "IVA 21%:", f"${iva:,.2f}", tam=10)
+        _fila_total_pdf(pdf, "TOTAL:", f"${total_factura:,.2f}", alto=9, tam=12, estilo="B")
     else:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(160, 8, "IMPORTE TOTAL: $", align="R")
-        pdf.cell(30, 8, f"{total_factura:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        desc_pct = float(datos_cliente.get("descuento", 0) or 0)
+        bruto_items = sum(_get_float(it, "precio", 0.0) for it in items)
+        if desc_pct > 0 and bruto_items > total_factura:
+            dibujar_totales_con_dto(pdf, bruto_items, desc_pct)
+        else:
+            _fila_total_pdf(pdf, "TOTAL:", f"${total_factura:,.2f}", alto=9, tam=12, estilo="B")
 
-    pdf.set_y(270)
+    pdf.ln(6)
+    pdf.set_x(MARGIN_L)
     pdf.set_font("Helvetica", "B", 10)
     cae = _get_str(datos_respuesta, "cae", "")
     vto = _get_str(datos_respuesta, "vencimiento_cae", "")
-    pdf.cell(100, 5, f"CAE N°: {cae}", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(100, 5, f"Fecha Vto. CAE: {vto}")
+    pdf.cell(ANCHO_UTIL, 5, f"CAE N: {cae}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_x(MARGIN_L)
+    pdf.cell(ANCHO_UTIL, 5, f"Vto. CAE: {vto}")
+
+    leyenda = _get_str(config, "leyenda_extra", "")
+    if leyenda:
+        pdf.ln(3)
+        pdf.set_x(MARGIN_L)
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.multi_cell(ANCHO_UTIL, 4, leyenda)
 
     return bytes(pdf.output())

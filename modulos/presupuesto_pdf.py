@@ -2,20 +2,18 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fpdf import FPDF
-
-from modulos.util_branding import NOMBRE_EMPRESA, ruta_logo_hafid
+from modulos.pdf_a4_comun import (
+    MARGIN_L,
+    ANCHO_UTIL,
+    dibujar_cabecera_documento,
+    dibujar_caja_cliente,
+    dibujar_tabla_items,
+    dibujar_totales_con_dto,
+    nueva_pagina_a4,
+)
 from modulos.util_pdf import texto_para_pdf
 
 VALIDEZ_PRESUPUESTO_DIAS = 3
-
-MARGIN_L = 12
-ANCHO_UTIL = 186
-W_C, W_D, W_Q, W_P, W_S = 34, 74, 12, 32, 34
-W_TOT_LABEL = 46
-W_TOT_VALUE = 34
-X_TOT_VALUE = MARGIN_L + ANCHO_UTIL - W_TOT_VALUE
-X_TOT_LABEL = X_TOT_VALUE - W_TOT_LABEL
 
 
 def _fmt_nro_presupuesto(numero: Optional[int]) -> str:
@@ -34,111 +32,6 @@ def _codigo_item_presupuesto(item: Dict[str, Any]) -> str:
     return raw_id
 
 
-def _truncar_ancho(pdf: FPDF, texto: str, ancho_mm: float) -> str:
-    t = texto_para_pdf(str(texto or ""))
-    if not t:
-        return "-"
-    while len(t) > 1 and pdf.get_string_width(t) > ancho_mm - 2:
-        t = t[:-3].rstrip() + "..." if len(t) > 4 else t[:-1]
-    return t
-
-
-def _lineas_texto(pdf: FPDF, texto: str, ancho_mm: float, max_lineas: int = 2) -> List[str]:
-    t = texto_para_pdf(str(texto or ""))
-    if not t:
-        return ["-"]
-    palabras = t.split()
-    lineas: List[str] = []
-    actual = ""
-    for palabra in palabras:
-        prueba = f"{actual} {palabra}".strip()
-        if pdf.get_string_width(prueba) <= ancho_mm - 2:
-            actual = prueba
-        else:
-            if actual:
-                lineas.append(actual)
-            actual = palabra
-        if len(lineas) >= max_lineas:
-            break
-    if actual and len(lineas) < max_lineas:
-        lineas.append(actual)
-    if len(lineas) >= max_lineas and len(palabras) > len(" ".join(lineas).split()):
-        ult = lineas[-1]
-        if not ult.endswith("..."):
-            lineas[-1] = _truncar_ancho(pdf, ult, ancho_mm)
-    return lineas or ["-"]
-
-
-def _fila_tabla_items(pdf: FPDF, y: float, item: Dict[str, Any]) -> float:
-    cod = _codigo_item_presupuesto(item)
-    desc = str(item.get("descripcion", ""))
-    cant = int(item.get("cantidad", 1))
-    precio_u = float(item.get("precio_unitario", 0))
-    sub = float(item.get("subtotal", precio_u * cant))
-
-    pdf.set_font("Helvetica", "", 7)
-    lineas_cod = _lineas_texto(pdf, cod, W_C - 2, max_lineas=2)
-    lineas_desc = _lineas_texto(pdf, desc, W_D - 2, max_lineas=2)
-    lh = 3.4
-    row_h = max(7.0, lh * max(len(lineas_cod), len(lineas_desc), 1) + 1.5)
-
-    x = MARGIN_L
-    pdf.rect(x, y, W_C, row_h)
-    pdf.rect(x + W_C, y, W_D, row_h)
-    pdf.rect(x + W_C + W_D, y, W_Q, row_h)
-    pdf.rect(x + W_C + W_D + W_Q, y, W_P, row_h)
-    pdf.rect(x + W_C + W_D + W_Q + W_P, y, W_S, row_h)
-
-    yy = y + 1.2
-    for linea in lineas_cod:
-        pdf.set_xy(x + 1, yy)
-        pdf.cell(W_C - 2, lh, linea, new_x="LMARGIN", new_y="NEXT")
-        yy += lh
-
-    yy = y + 1.2
-    for linea in lineas_desc:
-        pdf.set_xy(x + W_C + 1, yy)
-        pdf.cell(W_D - 2, lh, linea, new_x="LMARGIN", new_y="NEXT")
-        yy += lh
-
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_xy(x + W_C + W_D, y + (row_h - 4) / 2)
-    pdf.cell(W_Q, 4, str(cant), align="C")
-    pdf.set_xy(x + W_C + W_D + W_Q, y + (row_h - 4) / 2)
-    pdf.cell(W_P, 4, f"${precio_u:,.2f}", align="R")
-    pdf.set_xy(x + W_C + W_D + W_Q + W_P, y + (row_h - 4) / 2)
-    pdf.cell(W_S, 4, f"${sub:,.2f}", align="R")
-
-    return y + row_h
-
-
-def _fila_total_pdf(pdf, label, valor, alto=7, tam=10, estilo=""):
-    y = pdf.get_y()
-    pdf.set_xy(X_TOT_LABEL, y)
-    if estilo == "B":
-        pdf.set_font("Helvetica", "B", tam)
-    elif estilo == "I":
-        pdf.set_font("Helvetica", "I", tam)
-    else:
-        pdf.set_font("Helvetica", "", tam)
-    pdf.cell(W_TOT_LABEL, alto, label, align="R")
-    pdf.set_xy(X_TOT_VALUE, y)
-    pdf.cell(W_TOT_VALUE, alto, valor, align="R", new_x="LMARGIN", new_y="NEXT")
-
-
-def _cabecera_tabla_items(pdf: FPDF, y: float) -> float:
-    h = 7
-    pdf.set_xy(MARGIN_L, y)
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_fill_color(230, 230, 230)
-    pdf.cell(W_C, h, "Codigo", 1, align="C", fill=True)
-    pdf.cell(W_D, h, "Descripcion", 1, align="C", fill=True)
-    pdf.cell(W_Q, h, "Cant.", 1, align="C", fill=True)
-    pdf.cell(W_P, h, "P. unit.", 1, align="C", fill=True)
-    pdf.cell(W_S, h, "Subtotal", 1, align="R", fill=True, new_x="LMARGIN", new_y="NEXT")
-    return pdf.get_y()
-
-
 def crear_pdf_presupuesto(
     vendedor: str,
     items: List[Dict[str, Any]],
@@ -151,82 +44,30 @@ def crear_pdf_presupuesto(
 ) -> bytes:
     cfg = dict(config or {})
     cli = dict(cliente or {})
-    nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL")).upper()
+    nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL"))
     cuit_cli = str(cli.get("cuit", cli.get("cuit_dni", "")) or "")
     desc = float(descuento_pct)
-    total_final = float(total_bruto)
     nro_txt = _fmt_nro_presupuesto(numero)
 
     ahora = datetime.now()
     validez = ahora + timedelta(days=VALIDEZ_PRESUPUESTO_DIAS)
 
-    nombre_emp = str(cfg.get("nombre_empresa") or NOMBRE_EMPRESA)
-    direccion = str(cfg.get("direccion") or cfg.get("domicilio_comercial") or "")
-    cuit_emp = str(cfg.get("cuit_emisor") or "")
-    cond_iva = str(cfg.get("condicion_iva") or "")
-
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.add_page()
-    pdf.set_margins(MARGIN_L, 12, MARGIN_L)
-
-    y = 12
-    logo = ruta_logo_hafid()
-    if logo:
-        pdf.image(logo, x=MARGIN_L, y=10, h=16)
-        y = 30
-
-    pdf.set_xy(MARGIN_L, y)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(95, 5, texto_para_pdf(nombre_emp), new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8)
-    if direccion:
-        pdf.multi_cell(95, 4, texto_para_pdf(direccion))
-    if cuit_emp:
-        pdf.cell(95, 4, f"CUIT: {texto_para_pdf(cuit_emp)}", new_x="LMARGIN", new_y="NEXT")
-    if cond_iva:
-        pdf.cell(95, 4, texto_para_pdf(cond_iva), new_x="LMARGIN", new_y="NEXT")
-
-    pdf.set_xy(108, y)
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(90, 8, "PRESUPUESTO", align="R")
-    pdf.set_xy(108, y + 10)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(90, 6, f"Nro {nro_txt}", align="R")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(108, y + 18)
-    pdf.cell(90, 4, f"Fecha: {ahora.strftime('%d/%m/%Y %H:%M')}", align="R")
-    pdf.set_xy(108, y + 23)
-    pdf.cell(90, 4, f"Valido hasta: {validez.strftime('%d/%m/%Y')}", align="R")
-
-    box_y = max(pdf.get_y(), y + 28) + 4
-    pdf.rect(MARGIN_L, box_y, ANCHO_UTIL, 12)
-    pdf.set_xy(MARGIN_L + 2, box_y + 3)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(28, 5, "Cliente:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.cell(80, 5, _truncar_ancho(pdf, nombre_cli, 78))
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(22, 5, "CUIT/DNI:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.cell(52, 5, texto_para_pdf(cuit_cli) if cuit_cli else "-")
-    pdf.set_xy(MARGIN_L + 2, box_y + 9)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(28, 5, "Vendedor:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.cell(80, 5, texto_para_pdf(str(vendedor)))
-
-    y_tab = box_y + 14
-    y_tab = _cabecera_tabla_items(pdf, y_tab)
-    pdf.set_font("Helvetica", "", 8)
-    for item in items:
-        if y_tab > 248:
-            pdf.add_page()
-            y_tab = _cabecera_tabla_items(pdf, MARGIN_L)
-        y_tab = _fila_tabla_items(pdf, y_tab, item)
+    pdf = nueva_pagina_a4()
+    y_cli_box = dibujar_cabecera_documento(
+        pdf,
+        cfg,
+        "PRESUPUESTO",
+        [
+            f"Nro {nro_txt}",
+            f"Fecha: {ahora.strftime('%d/%m/%Y %H:%M')}",
+            f"Valido hasta: {validez.strftime('%d/%m/%Y')}",
+        ],
+    )
+    y_tab = dibujar_caja_cliente(pdf, y_cli_box, nombre_cli, cuit_cli, vendedor=str(vendedor))
+    y_tab = dibujar_tabla_items(pdf, y_tab, items, _codigo_item_presupuesto)
 
     pdf.set_y(y_tab + 4)
-    _fila_total_pdf(pdf, "TOTAL:", f"${total_final:,.2f}", alto=9, tam=12, estilo="B")
+    dibujar_totales_con_dto(pdf, float(total_bruto), desc)
 
     pdf.ln(4)
     pdf.set_xy(MARGIN_L, pdf.get_y())
