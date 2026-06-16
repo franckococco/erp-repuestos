@@ -1310,11 +1310,8 @@ def ejecutar_emitir_factura_arca(
     comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
-    _cerrar_presupuesto_cargado("facturado")
-    limpiar_venta_mostrador(vendedor, reset_cliente=True)
-    st.session_state.mostrador_voz_solo_ticket = bool(solo_ticket)
     nro = _formato_nro_comprobante(datos_resp)
-    return True, f"Factura {nro} emitida · CAE otorgado · Total ${total_final:,.2f}", {
+    datos_panel = {
         "respuesta": datos_resp,
         "pdf_ticket": pdf_ticket,
         "pdf_a4": pdf_a4,
@@ -1322,6 +1319,11 @@ def ejecutar_emitir_factura_arca(
         "comprobante_id": comp_id,
         "nro": nro,
     }
+    _cerrar_presupuesto_cargado("facturado")
+    limpiar_venta_mostrador(vendedor, reset_cliente=True)
+    st.session_state.factura_arca_reciente = datos_panel
+    st.session_state.mostrador_voz_solo_ticket = bool(solo_ticket)
+    return True, f"Factura {nro} emitida · CAE otorgado · Total ${total_final:,.2f}", datos_panel
 
 
 def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False):
@@ -1939,10 +1941,9 @@ def render_panel_cobro_mostrador(
                     key=f"btn_verif_arca_{vendedor}",
                 ):
                     ok, msj = _facturar_desde_carrito(
-                        vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
+                        vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
                     )
                     if ok:
-                        st.success(msj)
                         st.rerun()
                     else:
                         st.error(msj)

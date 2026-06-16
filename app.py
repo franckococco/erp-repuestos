@@ -630,6 +630,7 @@ elif pagina == "mostrador":
         render_mostrador_venta_actual,
         render_mostrador_accion_pendiente,
         render_descarga_presupuesto_prominente,
+        render_factura_arca_exitosa,
         VENDEDOR_MOSTRADOR,
     )
 
@@ -646,6 +647,9 @@ elif pagina == "mostrador":
         render_credenciales_arca()
 
     vendedor = VENDEDOR_MOSTRADOR
+
+    if render_factura_arca_exitosa("top"):
+        st.divider()
 
     carrito_full = obtener_carrito(str(vendedor)) or []
     if carrito_full:
