@@ -29,8 +29,6 @@ from modulos.db_firebase import (
     reabrir_presupuesto_en_carrito,
     actualizar_estado_presupuesto,
     eliminar_presupuesto_guardado,
-    obtener_credenciales_arca,
-    guardar_credenciales_arca,
     obtener_config_ticket_mostrador,
     guardar_config_ticket_mostrador,
     obtener_presupuesto_guardado,
@@ -55,6 +53,10 @@ from modulos.mostrador_voz_flujo import (
 
 VENDEDOR_MOSTRADOR = "Caja Principal"
 
+# Credenciales fijas del facturador ARCA (mostrador)
+CUIT_EMISOR_ARCA = "20265010505"
+CLAVE_EMISOR_ARCA = "111"
+
 
 CONFIG_TICKET_DEFAULT = {
     "margen_x": 2.0,
@@ -63,7 +65,7 @@ CONFIG_TICKET_DEFAULT = {
     "nombre_empresa": "HAFID AUTOPARTES",
     "direccion": "",
     "condicion_iva": "IVA Responsable Inscripto",
-    "cuit_emisor": "",
+    "cuit_emisor": CUIT_EMISOR_ARCA,
     "iibb": "Ingresos Brutos: A-76154",
     "inicio_act": "Inicio de Actividades: 02/05/2023",
     "leyenda_extra": "¡Gracias por su compra!",
@@ -90,34 +92,19 @@ def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     }
 
 
+def _credenciales_arca_emisor():
+    """CUIT y clave del facturador (fijos en mostrador)."""
+    return CUIT_EMISOR_ARCA, CLAVE_EMISOR_ARCA
+
+
 def _defaults_desde_streamlit_secrets():
-    cuit = ""
-    clave = ""
-    try:
-        cuit = str(st.secrets.get("FACTURADOR_CUIT", "") or "")
-        clave = str(st.secrets.get("FACTURADOR_CLAVE_SECRETA", "") or "")
-        bloque = st.secrets.get("facturador", {})
-        if isinstance(bloque, dict):
-            cuit = cuit or str(bloque.get("cuit", "") or "")
-            clave = clave or str(bloque.get("clave", "") or "")
-    except Exception:
-        pass
-    return cuit.strip(), clave.strip()
+    return _credenciales_arca_emisor()
 
 
 def init_credenciales_arca_session():
-    cuit_def, clave_def = _defaults_desde_streamlit_secrets()
-    try:
-        fb = obtener_credenciales_arca() or {}
-        cuit_def = str(fb.get("cuit", "") or cuit_def).strip()
-        clave_def = str(fb.get("clave", "") or clave_def).strip()
-    except Exception:
-        pass
-
-    if not st.session_state.get("facturador_cuit_ui"):
-        st.session_state.facturador_cuit_ui = cuit_def
-    if not st.session_state.get("facturador_clave_ui"):
-        st.session_state.facturador_clave_ui = clave_def
+    cuit, clave = _credenciales_arca_emisor()
+    st.session_state.facturador_cuit_ui = cuit
+    st.session_state.facturador_clave_ui = clave
     st.session_state._credenciales_arca_inited = True
 
 
@@ -185,47 +172,9 @@ def _leer_secrets_facturador():
 def render_credenciales_arca():
     init_credenciales_arca_session()
     cuit, clave, _ = _leer_secrets_facturador()
-    configurado = bool(cuit and clave)
 
-    with st.expander(
-        "🔑 Facturación ARCA — CUIT emisor y clave secreta",
-        expanded=not configurado,
-    ):
-        col_cuit, col_clave = st.columns(2)
-        with col_cuit:
-            st.text_input(
-                "CUIT emisor (facturador)",
-                key="facturador_cuit_ui",
-                placeholder="30716713179",
-            )
-        with col_clave:
-            st.text_input(
-                "Clave secreta",
-                key="facturador_clave_ui",
-                type="password",
-                placeholder="Clave del backend ARCA",
-            )
-        if configurado:
-            mask = f"{cuit[:2]}…{cuit[-2:]}" if len(cuit) >= 4 else cuit
-            st.caption(f"Listo para facturar · CUIT {mask}")
-        else:
-            st.warning("Completá ambos campos para habilitar «Emitir factura ARCA».")
-        col_guar, col_info = st.columns([1, 2])
-        with col_guar:
-            if st.button("💾 Guardar credenciales", key="guardar_cred_arca", use_container_width=True):
-                ok, msj = guardar_credenciales_arca(
-                    st.session_state.get("facturador_cuit_ui", ""),
-                    st.session_state.get("facturador_clave_ui", ""),
-                )
-                if ok:
-                    st.success(msj)
-                else:
-                    st.error(msj)
-        with col_info:
-            st.caption(
-                "Quedan guardadas en Firebase al pulsar Guardar. "
-                "Alternativa permanente: Secrets en Streamlit Cloud."
-            )
+    with st.expander("🔑 Facturación ARCA", expanded=False):
+        st.caption(f"CUIT emisor **{cuit}** · listo para facturar")
 
 
 def _listar_impresoras_instaladas():
@@ -1453,8 +1402,6 @@ def render_ia_mostrador(
         "o «cargame factura B… listo». Revisás la grilla y descargás abajo."
     )
 
-    render_descarga_presupuesto_prominente(vendedor)
-
     if obtener_carrito(str(vendedor)) or st.session_state.get("mostrador_listo_para_ticket"):
         _render_banner_armado_voz(vendedor)
 
@@ -1916,7 +1863,6 @@ def render_panel_cobro_mostrador(
         if listo_ticket:
             intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
             if intent == "presupuesto":
-                render_descarga_presupuesto_prominente(vendedor)
                 if st.button(
                     "💾 Guardar presupuesto numerado",
                     use_container_width=True,
