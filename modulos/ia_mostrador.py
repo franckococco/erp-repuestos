@@ -89,6 +89,8 @@ def parse_flujo_rapido_voz(texto_usuario):
     t = normalizar_texto_basico(raw).lower()
     items = extraer_items_orden_voz(raw)
     cliente_info = extraer_cliente_orden_voz(raw)
+    nombre_cliente = cliente_info.get("nombre_cliente")
+    consumidor_final = cliente_info.get("consumidor_final")
 
     es_armado = bool(
         re.search(r"\b(carg\w*|hac\w*|arm\w*)\b", t)
@@ -101,8 +103,6 @@ def parse_flujo_rapido_voz(texto_usuario):
         or (es_presupuesto and items and (nombre_cliente or consumidor_final))
     )
 
-    nombre_cliente = cliente_info.get("nombre_cliente")
-    consumidor_final = cliente_info.get("consumidor_final")
     orden_nueva = bool(
         (es_presupuesto or tiene_factura)
         and (nombre_cliente or consumidor_final)
