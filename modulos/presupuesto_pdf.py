@@ -12,6 +12,10 @@ VALIDEZ_PRESUPUESTO_DIAS = 3
 MARGIN_L = 12
 ANCHO_UTIL = 186
 W_C, W_D, W_Q, W_P, W_S = 34, 74, 12, 32, 34
+W_TOT_LABEL = 46
+W_TOT_VALUE = 34
+X_TOT_VALUE = MARGIN_L + ANCHO_UTIL - W_TOT_VALUE
+X_TOT_LABEL = X_TOT_VALUE - W_TOT_LABEL
 
 
 def _fmt_nro_presupuesto(numero: Optional[int]) -> str:
@@ -106,6 +110,20 @@ def _fila_tabla_items(pdf: FPDF, y: float, item: Dict[str, Any]) -> float:
     pdf.cell(W_S, 4, f"${sub:,.2f}", align="R")
 
     return y + row_h
+
+
+def _fila_total_pdf(pdf, label, valor, alto=7, tam=10, estilo=""):
+    y = pdf.get_y()
+    pdf.set_xy(X_TOT_LABEL, y)
+    if estilo == "B":
+        pdf.set_font("Helvetica", "B", tam)
+    elif estilo == "I":
+        pdf.set_font("Helvetica", "I", tam)
+    else:
+        pdf.set_font("Helvetica", "", tam)
+    pdf.cell(W_TOT_LABEL, alto, label, align="R")
+    pdf.set_xy(X_TOT_VALUE, y)
+    pdf.cell(W_TOT_VALUE, alto, valor, align="R", new_x="LMARGIN", new_y="NEXT")
 
 
 def _cabecera_tabla_items(pdf: FPDF, y: float) -> float:
@@ -213,24 +231,19 @@ def crear_pdf_presupuesto(
         y_tab = _fila_tabla_items(pdf, y_tab, item)
 
     pdf.set_y(y_tab + 4)
-    x_tot = MARGIN_L + W_C + W_D + W_Q
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_x(x_tot)
-    pdf.cell(W_P, 7, "Subtotal:", align="R")
-    pdf.cell(W_S, 7, f"${total_bruto:,.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+    _fila_total_pdf(pdf, "Subtotal:", f"${total_bruto:,.2f}")
     if desc > 0:
         desc_monto = total_bruto * desc / 100.0
-        pdf.set_x(x_tot)
-        pdf.set_font("Helvetica", "I", 10)
-        pdf.cell(W_P, 7, f"Descuento ({desc:g}%):", align="R")
-        pdf.cell(W_S, 7, f"-${desc_monto:,.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
-    pdf.set_x(x_tot)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(W_P, 9, "TOTAL:", align="R")
-    pdf.cell(W_S, 9, f"${total_final:,.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        _fila_total_pdf(
+            pdf,
+            f"Descuento ({desc:g}%):",
+            f"-${desc_monto:,.2f}",
+            estilo="I",
+        )
+    _fila_total_pdf(pdf, "TOTAL:", f"${total_final:,.2f}", alto=9, tam=12, estilo="B")
 
-    pdf.ln(6)
-    pdf.set_x(MARGIN_L)
+    pdf.ln(4)
+    pdf.set_xy(MARGIN_L, pdf.get_y())
     pdf.set_font("Helvetica", "", 8)
     leyendas = [
         f"Presupuesto valido por {VALIDEZ_PRESUPUESTO_DIAS} dias desde la fecha de emision.",
@@ -240,6 +253,7 @@ def crear_pdf_presupuesto(
     if nota:
         leyendas.insert(0, texto_para_pdf(nota))
     for linea in leyendas:
+        pdf.set_x(MARGIN_L)
         pdf.multi_cell(ANCHO_UTIL, 4, linea)
 
     return bytes(pdf.output())
