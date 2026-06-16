@@ -98,15 +98,14 @@ def parse_flujo_rapido_voz(texto_usuario):
     )
     es_presupuesto = bool(re.search(r"\bpresupuesto\b", t))
     tiene_factura = bool(re.search(r"\bfactura\b", t))
-    ir_verificacion = bool(
-        re.search(r"\b(listo|termine|terminé|fin)\b", t)
-        or (es_presupuesto and items and (nombre_cliente or consumidor_final))
-    )
-
     orden_nueva = bool(
         (es_presupuesto or tiene_factura)
         and (nombre_cliente or consumidor_final)
         and items
+    )
+    ir_verificacion = bool(
+        re.search(r"\b(listo|termine|terminé|fin)\b", t)
+        or orden_nueva
     )
 
     if not items and not nombre_cliente and not consumidor_final:

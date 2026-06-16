@@ -1420,7 +1420,10 @@ def render_ia_mostrador(
 ):
     _render_ia_feedback(vendedor)
 
-    st.caption("Dictá o escribí la orden y pulsá Ejecutar. Terminá con **listo**.")
+    st.caption(
+        "Orden completa: «cargame factura B para cliente Juan, código 111 3 unidades». "
+        "Opcional: **listo** al final."
+    )
 
     carrito_voz = obtener_carrito(str(vendedor)) or []
     if carrito_voz:
@@ -1473,6 +1476,10 @@ def render_ia_mostrador(
                                 f"{msj} PDF listo — usá el botón "
                                 "**DESCARGAR / IMPRIMIR PRESUPUESTO**."
                             )
+                    elif resp.get("intent_sugerido") in ("factura_b", "factura_a") and resp.get("ir_verificacion"):
+                        fb_msg = (
+                            f"{msj} Pulsá **FACTURAR E IMPRIMIR** en el panel derecho."
+                        )
                 elif ambiguos:
                     fb_tipo, fb_msg = "warning", msj
                     st.session_state.resultados_ia_mostrador = ambiguos
@@ -1873,6 +1880,9 @@ def render_panel_cobro_mostrador(
     """Totales, pago y botones de facturación (columna lateral)."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
     intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
+    listo_para_cerrar = listo_ticket or (
+        bool(carrito) and intent in ("factura_b", "factura_a", "presupuesto")
+    )
 
     with st.container(border=True):
         st.markdown('<div class="mostrador-cobro-panel">', unsafe_allow_html=True)
@@ -1882,7 +1892,7 @@ def render_panel_cobro_mostrador(
             st.caption(f"Dto ${total_bruto * desc_porc / 100:,.2f}")
         st.metric("Total", f"${total_final:,.2f}")
 
-        if listo_ticket:
+        if listo_para_cerrar:
             intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
             if intent == "presupuesto":
                 st.caption("Descargá el PDF arriba de la grilla.")
