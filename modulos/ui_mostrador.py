@@ -512,6 +512,29 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
     return 0, "No se detectaron productos.", None
 
 
+def _set_ia_feedback(vendedor, tipo, mensaje):
+    st.session_state[f"ia_feedback_{vendedor}"] = {
+        "tipo": str(tipo),
+        "mensaje": str(mensaje),
+    }
+
+
+def _render_ia_feedback(vendedor):
+    fb = st.session_state.pop(f"ia_feedback_{vendedor}", None)
+    if not fb:
+        return
+    tipo = fb.get("tipo", "info")
+    mensaje = fb.get("mensaje", "")
+    if tipo == "ok":
+        st.success(mensaje)
+    elif tipo == "error":
+        st.error(mensaje)
+    elif tipo == "warning":
+        st.warning(mensaje)
+    else:
+        st.info(mensaje)
+
+
 def _label_intent_sugerido(intent):
     if intent == "presupuesto":
         return "Presupuesto"
@@ -1403,13 +1426,15 @@ def render_ia_mostrador(
     agrupar_por_maestro,
     agregar_al_carrito,
 ):
+    _render_ia_feedback(vendedor)
+
     st.caption(
         "Dictá todo junto: «cargame factura B para cliente Juan, código 111 3 unidades, "
         f"código 22323 1 unidad, listo» — o «presupuesto» en vez de factura. "
         f"Al decir **listo** revisás y elegís Facturar o Presupuesto."
     )
 
-    if obtener_carrito(str(vendedor)):
+    if obtener_carrito(str(vendedor)) or st.session_state.get("mostrador_listo_para_ticket"):
         _render_banner_armado_voz(vendedor)
 
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
@@ -1430,7 +1455,10 @@ def render_ia_mostrador(
         submit_ia = True
 
     if submit_ia and orden:
-        with st.spinner("Hafid IA procesando..."):
+        fb_tipo = None
+        fb_msg = None
+        do_rerun = False
+        with st.spinner("Procesando orden…"):
             resp = procesar_orden_mostrador(orden) or {}
             accion = resp.get("accion")
             inventario = inventario_cache_mostrador(obtener_inventario_completo)
@@ -1444,26 +1472,24 @@ def render_ia_mostrador(
                     items_extra = extraer_items_orden_voz(orden)
                     if items_extra:
                         resp["items"] = items_extra
-                with st.spinner("Facturación por voz…"):
-                    ok, msj, ambiguos = ejecutar_flujo_factura_voz(
-                        vendedor,
-                        resp,
-                        inventario,
-                        buscar_en_inventario,
-                        agregar_al_carrito,
-                        ejecutar_emitir_factura_arca,
-                        texto_orden=orden,
-                    )
+                ok, msj, ambiguos = ejecutar_flujo_factura_voz(
+                    vendedor,
+                    resp,
+                    inventario,
+                    buscar_en_inventario,
+                    agregar_al_carrito,
+                    ejecutar_emitir_factura_arca,
+                    texto_orden=orden,
+                )
                 if ok:
-                    st.success(msj)
+                    fb_tipo, fb_msg, do_rerun = "ok", msj, True
                     st.session_state.resultados_ia_mostrador = None
-                    st.rerun()
                 elif ambiguos:
-                    st.warning(msj)
+                    fb_tipo, fb_msg = "warning", msj
                     st.session_state.resultados_ia_mostrador = ambiguos
                     st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
                 else:
-                    st.error(msj)
+                    fb_tipo, fb_msg = "error", msj or "No se pudo completar la orden."
 
             elif accion == "imprimir_ticket":
                 if not carrito:
@@ -1708,13 +1734,31 @@ def render_ia_mostrador(
                     st.session_state.resultados_ia_mostrador = None
 
             elif accion == "error":
-                st.error(resp.get("respuesta", "Error de IA."))
+                fb_tipo = "error"
+                fb_msg = resp.get("respuesta", "Error de IA.")
                 st.session_state.resultados_ia_mostrador = None
 
+            elif not accion:
+                fb_tipo = "error"
+                fb_msg = "No se pudo interpretar la orden."
+
             else:
-                msg = resp.get("respuesta") or "Orden no reconocida para el mostrador."
-                st.info(msg)
+                fb_tipo = "info"
+                fb_msg = resp.get("respuesta") or "Orden no reconocida para el mostrador."
                 st.session_state.resultados_ia_mostrador = None
+
+        if fb_tipo and fb_msg:
+            if do_rerun:
+                _set_ia_feedback(vendedor, fb_tipo, fb_msg)
+                st.rerun()
+            elif fb_tipo == "ok":
+                st.success(fb_msg)
+            elif fb_tipo == "error":
+                st.error(fb_msg)
+            elif fb_tipo == "warning":
+                st.warning(fb_msg)
+            else:
+                st.info(fb_msg)
 
     render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
@@ -2020,6 +2064,7 @@ def render_mostrador_accion_pendiente(vendedor):
 def render_mostrador_venta_actual(vendedor):
     st.markdown("#### Venta actual")
     carrito = obtener_carrito(str(vendedor)) or []
+    listo = bool(st.session_state.get("mostrador_listo_para_ticket"))
     if carrito:
         carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
         desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
@@ -2027,6 +2072,8 @@ def render_mostrador_venta_actual(vendedor):
         render_acciones_carrito(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )
+    elif listo:
+        st.warning("Orden procesada pero el carrito quedó vacío. Revisá el código del producto.")
     else:
         st.info("Carrito vacío — buscá productos o usá la IA de voz.")
     render_historial_facturas_arca()

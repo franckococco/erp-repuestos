@@ -356,7 +356,10 @@ def ejecutar_flujo_factura_voz(
                 )
             return False, "No hay ítems en el carrito. Revisá el código.", None
         marcar_verificacion_mostrador(intent)
-        pasos_ok.append("Revisá la grilla y elegí Facturar ARCA o Presupuesto")
+        pasos_ok.append(
+            "Listo para verificar. Revisá la grilla arriba y elegí "
+            "Facturar ARCA o Presupuesto en el panel derecho."
+        )
 
     resumen = " · ".join(pasos_ok) if pasos_ok else "Listo."
     if ir_verificacion:

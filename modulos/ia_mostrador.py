@@ -90,13 +90,21 @@ def parse_flujo_rapido_voz(texto_usuario):
     items = extraer_items_orden_voz(raw)
     cliente_info = extraer_cliente_orden_voz(raw)
 
-    es_armado = bool(re.search(r"\b(carg\w*|hac\w*|arm\w*)\b", t))
+    es_armado = bool(
+        re.search(r"\b(carg\w*|hac\w*|arm\w*)\b", t)
+        or re.search(r"(?:^|\s)(rgame|cargame|haceme|armeme|armame)\b", t)
+    )
     es_presupuesto = bool(re.search(r"\bpresupuesto\b", t))
     tiene_factura = bool(re.search(r"\bfactura\b", t))
     ir_verificacion = bool(re.search(r"\b(listo|termine|terminé|fin)\b", t))
 
     nombre_cliente = cliente_info.get("nombre_cliente")
     consumidor_final = cliente_info.get("consumidor_final")
+    orden_nueva = bool(
+        (es_presupuesto or tiene_factura)
+        and (nombre_cliente or consumidor_final)
+        and items
+    )
 
     if not items and not nombre_cliente and not consumidor_final:
         return None
@@ -105,7 +113,7 @@ def parse_flujo_rapido_voz(texto_usuario):
 
     flujo = {
         "accion": "flujo_factura",
-        "vaciar_antes": es_armado,
+        "vaciar_antes": es_armado or orden_nueva,
         "ir_verificacion": ir_verificacion,
         "imprimir_ticket": False,
     }
