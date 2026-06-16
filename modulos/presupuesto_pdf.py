@@ -154,7 +154,7 @@ def crear_pdf_presupuesto(
     nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL")).upper()
     cuit_cli = str(cli.get("cuit", cli.get("cuit_dni", "")) or "")
     desc = float(descuento_pct)
-    total_final = float(total_bruto) * (1 - desc / 100.0)
+    total_final = float(total_bruto)
     nro_txt = _fmt_nro_presupuesto(numero)
 
     ahora = datetime.now()
@@ -200,7 +200,7 @@ def crear_pdf_presupuesto(
     pdf.cell(90, 4, f"Valido hasta: {validez.strftime('%d/%m/%Y')}", align="R")
 
     box_y = max(pdf.get_y(), y + 28) + 4
-    pdf.rect(MARGIN_L, box_y, ANCHO_UTIL, 16)
+    pdf.rect(MARGIN_L, box_y, ANCHO_UTIL, 12)
     pdf.set_xy(MARGIN_L + 2, box_y + 3)
     pdf.set_font("Helvetica", "B", 9)
     pdf.cell(28, 5, "Cliente:")
@@ -214,14 +214,9 @@ def crear_pdf_presupuesto(
     pdf.set_font("Helvetica", "B", 9)
     pdf.cell(28, 5, "Vendedor:")
     pdf.set_font("Helvetica", "", 9)
-    pdf.cell(50, 5, texto_para_pdf(str(vendedor)))
-    if desc > 0:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(30, 5, "Descuento:")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.cell(20, 5, f"{desc:g}%")
+    pdf.cell(80, 5, texto_para_pdf(str(vendedor)))
 
-    y_tab = box_y + 20
+    y_tab = box_y + 14
     y_tab = _cabecera_tabla_items(pdf, y_tab)
     pdf.set_font("Helvetica", "", 8)
     for item in items:
@@ -231,15 +226,6 @@ def crear_pdf_presupuesto(
         y_tab = _fila_tabla_items(pdf, y_tab, item)
 
     pdf.set_y(y_tab + 4)
-    _fila_total_pdf(pdf, "Subtotal:", f"${total_bruto:,.2f}")
-    if desc > 0:
-        desc_monto = total_bruto * desc / 100.0
-        _fila_total_pdf(
-            pdf,
-            f"Descuento ({desc:g}%):",
-            f"-${desc_monto:,.2f}",
-            estilo="I",
-        )
     _fila_total_pdf(pdf, "TOTAL:", f"${total_final:,.2f}", alto=9, tam=12, estilo="B")
 
     pdf.ln(4)

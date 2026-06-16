@@ -630,6 +630,7 @@ elif pagina == "mostrador":
         render_panel_coincidencias_mostrador,
         render_mostrador_venta_actual,
         render_mostrador_accion_pendiente,
+        render_descarga_presupuesto_prominente,
         VENDEDOR_MOSTRADOR,
     )
 
@@ -652,16 +653,25 @@ elif pagina == "mostrador":
     carrito_full = obtener_carrito(str(vendedor)) or []
     if carrito_full:
         render_carrito_grilla(vendedor, carrito_full)
+        render_descarga_presupuesto_prominente(vendedor)
         st.divider()
 
     col_izq, col_der = st.columns([3, 2], gap="large")
     inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
 
     with col_izq:
+        render_ia_mostrador(
+            vendedor,
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agrupar_por_maestro,
+            agregar_al_carrito,
+        )
+        st.divider()
         render_presupuestos_guardados(vendedor)
 
-        t_buscar, t_manual, t_ia, t_qr = st.tabs(
-            ["🔍 Buscador", "⌨️ Pistola / Manual", "🤖 Asistente IA (Voz)", "📷 Escáner QR"]
+        t_buscar, t_manual, t_qr = st.tabs(
+            ["🔍 Buscador", "⌨️ Pistola / Manual", "📷 Escáner QR"]
         )
 
         with t_buscar:
@@ -687,15 +697,6 @@ elif pagina == "mostrador":
                         st.rerun()
                     else:
                         st.error(msj)
-
-        with t_ia:
-            render_ia_mostrador(
-                vendedor,
-                obtener_inventario_completo,
-                buscar_en_inventario,
-                agrupar_por_maestro,
-                agregar_al_carrito,
-            )
 
         with t_qr:
             foto_qr = st.camera_input("Escanear QR con Cámara", key=f"cam_{vendedor}")

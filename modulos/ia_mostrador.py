@@ -96,7 +96,10 @@ def parse_flujo_rapido_voz(texto_usuario):
     )
     es_presupuesto = bool(re.search(r"\bpresupuesto\b", t))
     tiene_factura = bool(re.search(r"\bfactura\b", t))
-    ir_verificacion = bool(re.search(r"\b(listo|termine|terminé|fin)\b", t))
+    ir_verificacion = bool(
+        re.search(r"\b(listo|termine|terminé|fin)\b", t)
+        or (es_presupuesto and items and (nombre_cliente or consumidor_final))
+    )
 
     nombre_cliente = cliente_info.get("nombre_cliente")
     consumidor_final = cliente_info.get("consumidor_final")
