@@ -117,7 +117,7 @@ try:
         texto_item_inventario,
     )
 
-    # Firebase se inicializa en el primer uso (get_db), no bloquea el primer frame.
+    get_db()
 
 except Exception as e:
     st.error("Error al iniciar la aplicación")
@@ -308,34 +308,17 @@ if "hist_arca_preview" not in st.session_state:
 if "pagina" not in st.session_state:
     st.session_state.pagina = "carga"
 
-def _asegurar_firebase():
-    """Conexión Firebase bajo demanda; muestra error claro si falla."""
-    try:
-        get_db()
-        return True
-    except Exception as exc:
-        st.error("No se pudo conectar a Firebase.")
-        st.exception(exc)
-        st.info(
-            "En **Streamlit Cloud** → Settings → Secrets debe existir `firebase_key`. "
-            "Revisá también los logs en Manage app."
-        )
-        st.stop()
-        return False
+from modulos.ui_mostrador import init_credenciales_arca_session
 
-def _init_mostrador_session():
-    from modulos.ui_mostrador import init_credenciales_arca_session
-    try:
-        init_credenciales_arca_session()
-    except Exception as exc:
-        st.error(f"No se pudo inicializar el mostrador: {exc}")
-        st.stop()
+try:
+    init_credenciales_arca_session()
+except Exception as exc:
+    st.warning(f"Aviso mostrador (no bloquea el resto): {exc}")
 
 pagina = render_sidebar(st.session_state.cliente_activo)
 
 # --- CARGA DE STOCK ---
 if pagina == "carga":
-    _asegurar_firebase()
     titulo_seccion("Carga y control", "Ctrl+S")
     vista_carga = st.radio(
         "Sección",
@@ -359,7 +342,6 @@ if pagina == "carga":
 
 # --- INVENTARIO Y ALTA MANUAL ---
 elif pagina == "inventario":
-    _asegurar_firebase()
     titulo_seccion("Inventario", "Ctrl+I")
 
     tab_lista, tab_alta, tab_vinc = st.tabs(["Listado", "Alta manual", "Vincular códigos"])
@@ -640,8 +622,6 @@ elif pagina == "inventario":
 
 # --- MOSTRADOR ---
 elif pagina == "mostrador":
-    _asegurar_firebase()
-    _init_mostrador_session()
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
         render_credenciales_arca,
@@ -750,7 +730,6 @@ elif pagina == "mostrador":
 
 # --- ASISTENTE ---
 elif pagina == "asistente":
-    _asegurar_firebase()
     titulo_seccion("Asistente de depósito", "Ctrl+A")
     ayuda(
         "Ayuda — Comandos",
@@ -1056,7 +1035,6 @@ elif pagina == "asistente":
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
-    _asegurar_firebase()
     from modulos.ui_mostrador import render_config_ticket_mostrador
 
     titulo_seccion("Configuración", "Ctrl+C")
