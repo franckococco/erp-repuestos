@@ -5,6 +5,9 @@ import traceback
 # Debe ser la primera llamada a Streamlit (evita pantalla genérica "Oh, no")
 st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
 
+if "_firebase_ok" not in st.session_state:
+    st.session_state._firebase_ok = False
+
 _ARCHIVOS_MODULOS = (
     "__init__.py",
     "ia_vision.py",
@@ -117,10 +120,9 @@ try:
         texto_item_inventario,
     )
 
-    if not st.session_state.get("_firebase_ok"):
-        with st.spinner("Conectando con Firebase…"):
-            get_db()
-        st.session_state["_firebase_ok"] = True
+    if not st.session_state._firebase_ok:
+        get_db()
+        st.session_state._firebase_ok = True
     else:
         get_db()
 

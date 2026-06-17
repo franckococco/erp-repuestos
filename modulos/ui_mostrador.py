@@ -1,12 +1,10 @@
 """UI del mostrador: cliente, búsqueda de productos y facturación ARCA."""
-import base64
 import math
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from modulos.util_busqueda import normalizar_para_busqueda
 
@@ -1056,63 +1054,9 @@ def carrito_a_items_factura(carrito, descuento_pct):
     return items
 
 
-def _embed_html(body: str, height: int = 0):
-    """HTML/JS embebido compatible con todas las versiones de Streamlit en Cloud."""
-    components.html(body, height=height, scrolling=False)
-
-
 def _auto_imprimir_pdf(pdf_bytes):
-    """Abre el diálogo de impresión del navegador (ticket tras facturar)."""
-    if not pdf_bytes:
-        return
-    base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    _embed_html(
-        f"""
-        <script>
-        (function() {{
-            const b64 = "{base64_pdf}";
-            const byteCharacters = atob(b64);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {{
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }}
-            const blob = new Blob([new Uint8Array(byteNumbers)], {{type: 'application/pdf'}});
-            const url = URL.createObjectURL(blob);
-            const win = window.open(url, '_blank');
-            if (win) {{ win.focus(); setTimeout(() => win.print(), 600); }}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
-
-
-def _mostrar_boton_imprimir_pdf(pdf_bytes):
-    base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    _embed_html(
-        f"""
-        <button onclick="imprimir()" style="
-            background-color: #ff4b4b; color: white; padding: 10px;
-            border-radius: 5px; width: 100%; border: none; cursor: pointer;
-            font-weight: bold; font-family: sans-serif;
-        ">🖨️ IMPRIMIR</button>
-        <script>
-        function imprimir() {{
-            const b64 = "{base64_pdf}";
-            const byteCharacters = atob(b64);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {{
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }}
-            const blob = new Blob([new Uint8Array(byteNumbers)], {{type: 'application/pdf'}});
-            const url = URL.createObjectURL(blob);
-            const win = window.open(url, '_blank');
-            if (win) {{ win.focus(); setTimeout(() => win.print(), 500); }}
-        }}
-        </script>
-        """,
-        height=60,
-    )
+    """Impresión automática desactivada en Cloud (evita components.html / error removeChild)."""
+    return
 
 
 def _formato_nro_comprobante(datos):
@@ -1160,17 +1104,14 @@ def regenerar_pdfs_comprobante(comp):
 
 
 def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_ticket=False):
-    """Imprimir / descargar en una sola fila horizontal."""
-    n_cols = 3 if (pdf_a4 and not solo_ticket) else 2
+    """Descargar ticket / A4 en una sola fila horizontal."""
+    n_cols = 2 if (pdf_a4 and not solo_ticket) else 1
     cols = st.columns(n_cols)
     idx = 0
     if pdf_ticket:
         with cols[idx]:
-            _mostrar_boton_imprimir_pdf(pdf_ticket)
-        idx += 1
-        with cols[idx]:
             st.download_button(
-                "↓ Ticket",
+                "🖨️ Ticket",
                 pdf_ticket,
                 file_name=f"Ticket_{nro}.pdf",
                 mime="application/pdf",
