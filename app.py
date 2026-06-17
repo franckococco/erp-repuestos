@@ -5,14 +5,6 @@ import traceback
 # Debe ser la primera llamada a Streamlit (evita pantalla genérica "Oh, no")
 st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
 
-_carga_ui = st.empty()
-with _carga_ui.container():
-    st.info(
-        "⏳ **Cargando Hafid Repuestos…**  "
-        "Si la app estuvo inactiva en Streamlit Cloud, la primera apertura puede tardar **1–3 minutos**. "
-        "Luego entra mucho más rápido."
-    )
-
 _ARCHIVOS_MODULOS = (
     "__init__.py",
     "ia_vision.py",
@@ -66,7 +58,6 @@ if _faltantes:
     st.stop()
 
 try:
-    import streamlit.components.v1 as components
     import pandas as pd
     from PIL import Image
     from fpdf import FPDF
@@ -133,10 +124,7 @@ try:
     else:
         get_db()
 
-    _carga_ui.empty()
-
 except Exception as e:
-    _carga_ui.empty()
     st.error("Error al iniciar la aplicación")
     st.exception(e)
     st.markdown(
@@ -149,38 +137,7 @@ except Exception as e:
 
 aplicar_estilos_globales()
 
-# --- MOTOR DE ATAJOS DE TECLADO (sidebar radio) ---
-components.html(
-    """
-    <script>
-    const doc = window.parent.document;
-    doc.addEventListener('keydown', function(e) {
-        if (!e.ctrlKey) return;
-        if (e.key.toLowerCase() === 'g') {
-            e.preventDefault();
-            const buttons = doc.querySelectorAll('button');
-            for (const b of buttons) {
-                if (b.innerText && b.innerText.includes('Guardar borrador')) {
-                    b.click();
-                    return;
-                }
-            }
-            return;
-        }
-        const map = { s: 0, i: 1, m: 2, a: 3, c: 4 };
-        const idx = map[e.key.toLowerCase()];
-        if (idx === undefined) return;
-        e.preventDefault();
-        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-        if (!sidebar) return;
-        const radios = sidebar.querySelectorAll('div[role="radiogroup"] label');
-        if (radios.length > idx) radios[idx].click();
-    });
-    </script>
-    """,
-    height=0,
-    width=0,
-)
+# Atajos Ctrl+S/I/M/A/C: desactivados en Cloud (evita components.html al arrancar).
 
 # --- Búsqueda de proveedores (normalización en util_busqueda) ---
 _STOPWORDS_PROV = frozenset({
