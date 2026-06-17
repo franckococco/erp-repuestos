@@ -66,6 +66,7 @@ if _faltantes:
     st.stop()
 
 try:
+    import streamlit.components.v1 as components
     import pandas as pd
     from PIL import Image
     from fpdf import FPDF
@@ -149,9 +150,9 @@ except Exception as e:
 aplicar_estilos_globales()
 
 # --- MOTOR DE ATAJOS DE TECLADO (sidebar radio) ---
-st.iframe(
-    srcdoc="""
-    <!DOCTYPE html><html><body><script>
+components.html(
+    """
+    <script>
     const doc = window.parent.document;
     doc.addEventListener('keydown', function(e) {
         if (!e.ctrlKey) return;
@@ -175,7 +176,7 @@ st.iframe(
         const radios = sidebar.querySelectorAll('div[role="radiogroup"] label');
         if (radios.length > idx) radios[idx].click();
     });
-    </script></body></html>
+    </script>
     """,
     height=0,
     width=0,

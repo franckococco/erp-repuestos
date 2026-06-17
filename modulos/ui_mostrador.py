@@ -6,6 +6,7 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from modulos.util_busqueda import normalizar_para_busqueda
 
@@ -1055,10 +1056,9 @@ def carrito_a_items_factura(carrito, descuento_pct):
     return items
 
 
-def _embed_iframe_html(body: str, height: int = 0):
-    """HTML embebido (reemplazo de components.v1.html deprecado)."""
-    srcdoc = f"<!DOCTYPE html><html><body>{body}</body></html>"
-    st.iframe(srcdoc=srcdoc, height=height, width=0)
+def _embed_html(body: str, height: int = 0):
+    """HTML/JS embebido compatible con todas las versiones de Streamlit en Cloud."""
+    components.html(body, height=height, scrolling=False)
 
 
 def _auto_imprimir_pdf(pdf_bytes):
@@ -1066,7 +1066,7 @@ def _auto_imprimir_pdf(pdf_bytes):
     if not pdf_bytes:
         return
     base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    _embed_iframe_html(
+    _embed_html(
         f"""
         <script>
         (function() {{
@@ -1089,7 +1089,7 @@ def _auto_imprimir_pdf(pdf_bytes):
 
 def _mostrar_boton_imprimir_pdf(pdf_bytes):
     base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    _embed_iframe_html(
+    _embed_html(
         f"""
         <button onclick="imprimir()" style="
             background-color: #ff4b4b; color: white; padding: 10px;
