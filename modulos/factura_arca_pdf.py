@@ -14,7 +14,7 @@ from modulos.pdf_a4_comun import (
     dibujar_caja_cliente,
     dibujar_tabla_items,
     dibujar_totales_cliente_pdf,
-    dibujar_etiqueta_pie_pdf,
+    dibujar_etiqueta_discreta_cae,
     nueva_pagina_a4,
 )
 from modulos.util_branding import NOMBRE_EMPRESA
@@ -284,6 +284,7 @@ def crear_a4(
     pdf.cell(ANCHO_UTIL, 5, f"CAE N: {cae}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_x(MARGIN_L)
     pdf.cell(ANCHO_UTIL, 5, f"Vto. CAE: {vto}")
+    dibujar_etiqueta_discreta_cae(pdf, etiqueta_pie)
 
     leyenda = _get_str(config, "leyenda_extra", "")
     if leyenda:
@@ -291,7 +292,5 @@ def crear_a4(
         pdf.set_x(MARGIN_L)
         pdf.set_font("Helvetica", "I", 9)
         pdf.multi_cell(ANCHO_UTIL, 4, leyenda)
-
-    dibujar_etiqueta_pie_pdf(pdf, etiqueta_pie)
 
     return bytes(pdf.output())

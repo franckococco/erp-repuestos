@@ -9,7 +9,7 @@ from modulos.pdf_a4_comun import (
     dibujar_caja_cliente,
     dibujar_tabla_items,
     dibujar_totales_cliente_pdf,
-    dibujar_etiqueta_pie_pdf,
+    dibujar_etiqueta_discreta_cae,
     nueva_pagina_a4,
 )
 from modulos.util_pdf import texto_para_pdf
@@ -72,7 +72,6 @@ def crear_pdf_presupuesto(
     etiqueta = dibujar_totales_cliente_pdf(pdf, float(total_bruto), cli)
 
     pdf.ln(4)
-    dibujar_etiqueta_pie_pdf(pdf, etiqueta)
     pdf.set_xy(MARGIN_L, pdf.get_y())
     pdf.set_font("Helvetica", "", 8)
     leyendas = [
@@ -80,6 +79,8 @@ def crear_pdf_presupuesto(
         "Documento sin validez fiscal. No reemplaza factura.",
         "Precios y stock sujetos a disponibilidad al momento de la compra.",
     ]
+    if etiqueta:
+        leyendas[-1] = leyendas[-1] + f"  ({etiqueta})"
     if nota:
         leyendas.insert(0, texto_para_pdf(nota))
     for linea in leyendas:

@@ -53,6 +53,12 @@ from modulos.mostrador_voz_flujo import (
 
 VENDEDOR_MOSTRADOR = "Caja Principal"
 
+TIPOS_CLIENTE_NEGOCIO = {
+    "ocasional": "Cliente ocasional",
+    "mecanico": "Mecánico",
+    "cuenta_corriente": "Cuenta corriente",
+}
+
 # Credenciales fijas del facturador ARCA (mostrador)
 CUIT_EMISOR_ARCA = "20265010505"
 CLAVE_EMISOR_ARCA = "111"
@@ -76,6 +82,10 @@ CONFIG_TICKET_DEFAULT = {
 }
 
 
+def _label_tipo_cliente_negocio(tipo: str) -> str:
+    return TIPOS_CLIENTE_NEGOCIO.get(str(tipo or "ocasional"), "Cliente ocasional")
+
+
 def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     base = cliente_consumidor_final()
     if not isinstance(cliente, dict):
@@ -85,12 +95,18 @@ def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
         cbte = "6"
     cuit = "".join(filter(str.isdigit, str(cliente.get("cuit", "00000000000")))) or "00000000000"
     etiqueta = str(cliente.get("etiqueta_descuento", "") or "").strip().upper()
+    tipo_cli = str(cliente.get("tipo_cliente", "ocasional") or "ocasional").strip().lower()
+    if tipo_cli not in TIPOS_CLIENTE_NEGOCIO:
+        tipo_cli = "mecanico" if etiqueta and float(cliente.get("descuento", 0) or 0) > 0 else "ocasional"
+    if tipo_cli != "mecanico":
+        etiqueta = ""
     return {
         "nombre": str(cliente.get("nombre", base["nombre"])).upper(),
         "cuit": cuit,
         "descuento": float(cliente.get("descuento", 0.0)),
         "tipo_comprobante": cbte,
         "etiqueta_descuento": etiqueta,
+        "tipo_cliente": tipo_cli,
     }
 
 
@@ -353,7 +369,8 @@ def _label_cliente_listado(id_cli: str, datos: dict) -> str:
     extra = f" · {desc:g}% desc." if desc > 0 else ""
     if etq:
         extra += f" · {etq}"
-    return f"{nombre} · CUIT/DNI {id_cli} · {tipo}{extra}"
+    tipo_neg = _label_tipo_cliente_negocio(datos.get("tipo_cliente", "ocasional"))
+    return f"{nombre} · CUIT/DNI {id_cli} · {tipo} · {tipo_neg}{extra}"
 
 
 def _filtrar_clientes(clientes_db: dict, termino: str, max_resultados: int = 30) -> list:
@@ -680,7 +697,7 @@ def render_seccion_cliente_mostrador():
         st.caption(
             f"CUIT/DNI: {cli['cuit']} · {_tipo_comprobante_label_largo(cli['tipo_comprobante'])}"
             + (f" · Descuento: {cli['descuento']}%" if cli["descuento"] > 0 else "")
-            + (f" · Etq: {cli['etiqueta_descuento']}" if cli.get("etiqueta_descuento") else "")
+            + (f" · {_label_tipo_cliente_negocio(cli.get('tipo_cliente'))}" if cli.get("tipo_cliente") else "")
         )
     with col_cf:
         if st.button("Consumidor final", use_container_width=True):
@@ -726,39 +743,66 @@ def render_seccion_cliente_mostrador():
                             st.warning("Seleccioná un cliente de la lista.")
                     datos_sel = clientes_db.get(sel_id or "", {}) if sel_id else {}
                     if datos_sel:
-                        with st.form("mostrador_edit_etiqueta_cliente"):
-                            etq_edit = st.text_input(
-                                "Etiqueta factura (ej. MEC, TALLER)",
-                                value=str(datos_sel.get("etiqueta_descuento", "") or ""),
-                                help="Cada mecánico puede tener su sigla. Oculta el Dto en PDF y la muestra al pie.",
+                        with st.form("mostrador_edit_cliente_negocio"):
+                            tipo_edit = st.radio(
+                                "Tipo en el negocio",
+                                options=list(TIPOS_CLIENTE_NEGOCIO.keys()),
+                                format_func=_label_tipo_cliente_negocio,
+                                index=list(TIPOS_CLIENTE_NEGOCIO.keys()).index(
+                                    str(datos_sel.get("tipo_cliente", "ocasional") or "ocasional")
+                                    if str(datos_sel.get("tipo_cliente", "ocasional") or "ocasional")
+                                    in TIPOS_CLIENTE_NEGOCIO
+                                    else "ocasional"
+                                ),
+                                horizontal=True,
                             )
-                            if st.form_submit_button("Guardar etiqueta en cliente"):
+                            etq_edit = ""
+                            if tipo_edit == "mecanico":
+                                etq_edit = st.text_input(
+                                    "Sigla en comprobante (ej. MEC)",
+                                    value=str(datos_sel.get("etiqueta_descuento", "") or ""),
+                                    help="Discreta, al pie del CAE o en la última línea del presupuesto.",
+                                )
+                            if st.form_submit_button("Guardar datos del cliente"):
                                 ok, msj = configurar_cliente(
                                     datos_sel.get("nombre", ""),
                                     sel_id,
                                     float(datos_sel.get("descuento", 0)),
                                     datos_sel.get("tipo_comprobante", "6"),
-                                    etiqueta_descuento=etq_edit,
+                                    etiqueta_descuento=etq_edit if tipo_edit == "mecanico" else "",
+                                    tipo_cliente=tipo_edit,
                                 )
                                 if ok:
-                                    st.session_state.cliente_activo = cliente_db_a_activo(
-                                        {**datos_sel, "etiqueta_descuento": str(etq_edit or "").strip().upper()}
-                                    )
+                                    st.session_state.cliente_activo = cliente_db_a_activo({
+                                        **datos_sel,
+                                        "tipo_cliente": tipo_edit,
+                                        "etiqueta_descuento": str(etq_edit or "").strip().upper()
+                                        if tipo_edit == "mecanico" else "",
+                                    })
                                     st.success(msj)
                                     st.rerun()
                                 else:
                                     st.error(msj)
 
         with st.form("mostrador_alta_cliente_rapida"):
-            c1, c2, c3, c4 = st.columns([3, 2, 1, 1])
+            c1, c2 = st.columns(2)
             nombre_nuevo = c1.text_input("Nombre / Razón Social")
             cuit_nuevo = c2.text_input("DNI o CUIT")
+            c3, c4 = st.columns(2)
             desc_nuevo = c3.number_input("% Desc.", min_value=0.0, step=1.0, value=0.0)
-            etiqueta_nuevo = c4.text_input(
-                "Etiqueta",
-                placeholder="MEC",
-                help="Opcional. Si tiene descuento fijo, no muestra Dto en PDF y figura esta sigla al pie.",
+            tipo_negocio = c4.radio(
+                "Tipo en el negocio",
+                options=list(TIPOS_CLIENTE_NEGOCIO.keys()),
+                format_func=_label_tipo_cliente_negocio,
+                horizontal=True,
             )
+            etiqueta_nuevo = ""
+            if tipo_negocio == "mecanico":
+                etiqueta_nuevo = st.text_input(
+                    "Sigla en comprobante (ej. MEC)",
+                    placeholder="MEC",
+                    help="Solo para mecánicos. No muestra el Dto en el PDF; la sigla va discreta al pie.",
+                )
             st.markdown("**Tipo de factura**")
             tipo_nuevo = st.radio(
                 "Tipo de factura",
@@ -775,7 +819,8 @@ def render_seccion_cliente_mostrador():
                         cuit_nuevo,
                         desc_nuevo,
                         tipo_nuevo,
-                        etiqueta_descuento=etiqueta_nuevo,
+                        etiqueta_descuento=etiqueta_nuevo if tipo_negocio == "mecanico" else "",
+                        tipo_cliente=tipo_negocio,
                     )
                     if ok:
                         id_cli = "".join(filter(str.isdigit, str(cuit_nuevo)))
@@ -784,7 +829,9 @@ def render_seccion_cliente_mostrador():
                             "cuit": id_cli,
                             "descuento": float(desc_nuevo),
                             "tipo_comprobante": tipo_nuevo,
-                            "etiqueta_descuento": str(etiqueta_nuevo or "").strip().upper(),
+                            "etiqueta_descuento": str(etiqueta_nuevo or "").strip().upper()
+                            if tipo_negocio == "mecanico" else "",
+                            "tipo_cliente": tipo_negocio,
                         })
                         st.success(msj)
                         st.rerun()
@@ -1065,6 +1112,7 @@ def _cliente_para_pdf(cliente):
         "cbte_tipo": cbte,
         "descuento": cli.get("descuento", 0.0),
         "etiqueta_descuento": cli.get("etiqueta_descuento", ""),
+        "tipo_cliente": cli.get("tipo_cliente", "ocasional"),
     }
 
 
@@ -1465,7 +1513,7 @@ def render_ia_mostrador(
     _render_ia_feedback(vendedor)
 
     st.caption(
-        "Orden: «factura B para Juan, buje de directa 3 unidades» o «código 111 3 unidades». "
+        "Orden: «factura B para Juan, código 111 3 unidades» o «buje de directa 3 unidades». "
         "Opcional: **listo** al final."
     )
 

@@ -182,9 +182,35 @@ def _modo_descuento_cliente(cliente: Optional[Dict[str, Any]]) -> Tuple[float, s
     cli = dict(cliente or {})
     desc = float(cli.get("descuento", 0) or 0)
     etiqueta = str(cli.get("etiqueta_descuento", "") or "").strip().upper()
-    if desc > 0 and etiqueta:
+    tipo = str(cli.get("tipo_cliente", "ocasional") or "ocasional").strip().lower()
+    if tipo == "mecanico" and desc > 0:
+        return desc, etiqueta, False
+    if desc > 0 and etiqueta and tipo != "ocasional":
         return desc, etiqueta, False
     return desc, "", desc > 0
+
+
+def sufijo_etiqueta_discreta(etiqueta: str) -> str:
+    etq = str(etiqueta or "").strip().upper()
+    return etq
+
+
+def dibujar_etiqueta_discreta_cae(pdf: FPDF, etiqueta: str):
+    """Sigla discreta debajo del bloque CAE (factura)."""
+    etq = sufijo_etiqueta_discreta(etiqueta)
+    if not etq:
+        return
+    pdf.ln(1)
+    pdf.set_x(MARGIN_L)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(ANCHO_UTIL, 3, etq, align="L", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+
+
+def dibujar_etiqueta_pie_pdf(pdf: FPDF, etiqueta: str):
+    """Compat: ya no usa bloque aparte; ver presupuesto/factura."""
+    pass
 
 
 def dibujar_totales_cliente_pdf(
@@ -203,17 +229,6 @@ def dibujar_totales_cliente_pdf(
     else:
         _fila_total_pdf(pdf, "TOTAL:", f"${total_final:,.2f}", alto=9, tam=12, estilo="B")
     return etiqueta
-
-
-def dibujar_etiqueta_pie_pdf(pdf: FPDF, etiqueta: str):
-    """Sigla de descuento habitual (ej. MEC) al pie del documento."""
-    etq = str(etiqueta or "").strip().upper()
-    if not etq:
-        return
-    pdf.ln(2)
-    pdf.set_x(MARGIN_L)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(ANCHO_UTIL, 5, etq, align="R", new_x="LMARGIN", new_y="NEXT")
 
 
 def dibujar_totales_con_dto(

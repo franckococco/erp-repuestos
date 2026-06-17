@@ -78,7 +78,7 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     t = re.sub(r"\bcliente\b", " ", t)
     t = re.sub(r"\bcodigo\b", " ", t)
     t = re.sub(
-        r"\bpara\s+(?:el\s+)?(?:cliente\s+)?.+?(?=\s+(?:un|una|codigo|\d+\s+unidad))",
+        r"\bpara\s+(?:el\s+)?(?:cliente\s+)?.+?(?=\s+(?:un|una|codigo|\d+\s+\d|\d+\s+unidad))",
         " ",
         t,
         count=1,
@@ -136,6 +136,8 @@ def extraer_items_orden_voz(texto):
             return
         if not es_descripcion and term in _STOPWORDS_ITEM:
             return
+        if not es_descripcion and not re.search(r"\d", term) and len(term) < 4:
+            return
         clave = (term, cant)
         if clave in vistos:
             return
@@ -146,6 +148,7 @@ def extraer_items_orden_voz(texto):
         (rf"(?:codigo)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
         (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
         (rf"(?:codigo)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
+        (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
     ]
     for patron, _ in patrones_codigo:
         for m in re.finditer(patron, t):
@@ -176,7 +179,10 @@ def extraer_cliente_orden_voz(texto):
     if re.search(r"consumidor\s+final|particular", t):
         return {"consumidor_final": True}
 
-    fin = r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|\d+\s+unidad|\s+\d+\s+unidades|$)"
+    fin = (
+        r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|"
+        r"\b[\dA-Za-z]*\d[\dA-Za-z\-]*\s+\d{1,4}\s+unidades?\b|$)"
+    )
     patrones = (
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
@@ -268,7 +274,7 @@ def agregar_termino_voz(
         if len(coincidencias) > 1:
             return (
                 False,
-                f"Hay {len(coincidencias)} variantes para '{id_limpio}'. Decí el código con marca.",
+                f"Hay {len(coincidencias)} variantes para '{id_limpio}'. Elegí en la lista.",
                 coincidencias[:10],
             )
 

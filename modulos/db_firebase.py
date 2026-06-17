@@ -289,6 +289,7 @@ def cliente_consumidor_final() -> dict:
         "descuento": 0.0,
         "tipo_comprobante": "6",
         "etiqueta_descuento": "",
+        "tipo_cliente": "ocasional",
     }
 
 
@@ -298,6 +299,7 @@ def configurar_cliente(
     descuento=0.0,
     tipo_comprobante="6",
     etiqueta_descuento="",
+    tipo_cliente="ocasional",
 ):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     if not id_cli:
@@ -305,18 +307,19 @@ def configurar_cliente(
     cbte = str(tipo_comprobante).strip()
     if cbte not in ("1", "6"):
         cbte = "6"
-    etq = str(etiqueta_descuento or "").strip().upper()
+    tipo = str(tipo_cliente or "ocasional").strip().lower()
+    if tipo not in ("ocasional", "mecanico", "cuenta_corriente"):
+        tipo = "ocasional"
+    etq = str(etiqueta_descuento or "").strip().upper() if tipo == "mecanico" else ""
     payload = {
         "nombre": str(nombre).upper(),
         "cuit_dni": id_cli,
         "descuento": float(descuento),
         "tipo_comprobante": cbte,
+        "tipo_cliente": tipo,
+        "etiqueta_descuento": etq,
         "actualizado": datetime.now(timezone.utc),
     }
-    if etq:
-        payload["etiqueta_descuento"] = etq
-    else:
-        payload["etiqueta_descuento"] = ""
     get_db().collection("clientes").document(id_cli).set(payload, merge=True)
     return True, "Cliente configurado."
 
@@ -335,6 +338,7 @@ def cliente_db_a_activo(datos: dict) -> dict:
         "descuento": float(datos.get("descuento", 0.0)),
         "tipo_comprobante": cbte,
         "etiqueta_descuento": str(datos.get("etiqueta_descuento", "") or "").strip().upper(),
+        "tipo_cliente": str(datos.get("tipo_cliente", "ocasional") or "ocasional"),
     }
 
 
