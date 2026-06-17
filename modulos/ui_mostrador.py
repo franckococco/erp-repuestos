@@ -120,10 +120,9 @@ def _defaults_desde_streamlit_secrets():
 
 
 def init_credenciales_arca_session():
-    cuit, clave = _credenciales_arca_emisor()
-    st.session_state.facturador_cuit_ui = cuit
-    st.session_state.facturador_clave_ui = clave
-    st.session_state._credenciales_arca_inited = True
+    from modulos.mostrador_session import init_credenciales_arca_session as _init
+
+    _init()
 
 
 def _merge_config_ticket(base: dict) -> dict:
@@ -589,7 +588,21 @@ def _render_banner_armado_voz(vendedor):
 def render_presupuestos_guardados(vendedor):
     with st.expander("📁 Presupuestos guardados", expanded=False):
         solo_abiertos = st.checkbox("Solo abiertos", value=True, key="pres_solo_abiertos")
-        lista = listar_presupuestos_guardados(solo_abiertos=solo_abiertos, limite=30)
+        col_load, _ = st.columns([1, 3])
+        with col_load:
+            refrescar = st.button("↻ Cargar lista", key="pres_cargar_lista", use_container_width=True)
+
+        cache_key = f"pres_lista_{solo_abiertos}"
+        if refrescar or cache_key not in st.session_state:
+            if refrescar:
+                st.session_state[cache_key] = listar_presupuestos_guardados(
+                    solo_abiertos=solo_abiertos, limite=30
+                )
+            elif cache_key not in st.session_state:
+                st.caption("Pulsá **Cargar lista** para ver presupuestos guardados.")
+                return
+
+        lista = st.session_state.get(cache_key) or []
 
         if not lista:
             st.info("No hay presupuestos guardados.")
@@ -645,23 +658,27 @@ def render_presupuestos_guardados(vendedor):
         cli_pres = pres.get("cliente") or {}
         desc_pres = float(cli_pres.get("descuento", 0))
         total_bruto_pres = float(pres.get("total_bruto", 0))
-        pdf_pres = generar_pdf_presupuesto_mostrador(
-            pres.get("vendedor", vendedor),
-            items_pres,
-            total_bruto_pres,
-            desc_pres,
-            numero=pres.get("numero_presupuesto"),
-            nota=pres.get("nota", ""),
-        )
         nro_pres = pres.get("numero_presupuesto")
-        col_pdf.download_button(
-            "📄 PDF",
-            pdf_pres,
-            _nombre_archivo_presupuesto(nro_pres, cli_pres.get("nombre", "CLIENTE")),
-            "application/pdf",
-            use_container_width=True,
-            key="pres_dl_pdf",
-        )
+        pdf_cache_key = f"pres_pdf_bytes_{sel_id}"
+        if col_pdf.button("📄 Preparar PDF", use_container_width=True, key="pres_gen_pdf"):
+            st.session_state[pdf_cache_key] = generar_pdf_presupuesto_mostrador(
+                pres.get("vendedor", vendedor),
+                items_pres,
+                total_bruto_pres,
+                desc_pres,
+                numero=pres.get("numero_presupuesto"),
+                nota=pres.get("nota", ""),
+            )
+        pdf_pres = st.session_state.get(pdf_cache_key)
+        if pdf_pres:
+            col_pdf.download_button(
+                "⬇ Descargar PDF",
+                pdf_pres,
+                _nombre_archivo_presupuesto(nro_pres, cli_pres.get("nombre", "CLIENTE")),
+                "application/pdf",
+                use_container_width=True,
+                key="pres_dl_pdf",
+            )
 
         if col_anu.button("Anular", use_container_width=True, key="pres_anular"):
             ok, msj = actualizar_estado_presupuesto(sel_id, "anulado")

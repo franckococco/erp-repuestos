@@ -363,9 +363,15 @@ def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pag
 
 def listar_comprobantes_arca(limite=40, fecha_desde=None, fecha_hasta=None, busqueda=""):
     try:
-        docs = list(get_db().collection("comprobantes_arca").limit(500).stream())
+        q = get_db().collection("comprobantes_arca").order_by(
+            "fecha", direction=firestore.Query.DESCENDING  # type: ignore
+        ).limit(max(limite * 3, 60))
+        docs = list(q.stream())
     except Exception:
-        return []
+        try:
+            docs = list(get_db().collection("comprobantes_arca").limit(120).stream())
+        except Exception:
+            return []
     items = [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
     t_norm = _norm_busqueda(busqueda) if busqueda else ""

@@ -33,6 +33,7 @@ _ARCHIVOS_MODULOS = (
     "ui_mostrador.py",
     "ia_mostrador.py",
     "mostrador_voz_flujo.py",
+    "mostrador_session.py",
     "util_pdf.py",
 )
 
@@ -117,7 +118,12 @@ try:
         texto_item_inventario,
     )
 
-    get_db()
+    if not st.session_state.get("_firebase_ok"):
+        with st.spinner("Conectando con la base de datos…"):
+            get_db()
+        st.session_state["_firebase_ok"] = True
+    else:
+        get_db()
 
 except Exception as e:
     st.error("Error al iniciar la aplicación")
@@ -307,13 +313,6 @@ if "hist_arca_preview" not in st.session_state:
     st.session_state.hist_arca_preview = None
 if "pagina" not in st.session_state:
     st.session_state.pagina = "carga"
-
-from modulos.ui_mostrador import init_credenciales_arca_session
-
-try:
-    init_credenciales_arca_session()
-except Exception as exc:
-    st.warning(f"Aviso mostrador (no bloquea el resto): {exc}")
 
 pagina = render_sidebar(st.session_state.cliente_activo)
 
@@ -622,6 +621,9 @@ elif pagina == "inventario":
 
 # --- MOSTRADOR ---
 elif pagina == "mostrador":
+    from modulos.mostrador_session import init_credenciales_arca_session
+
+    init_credenciales_arca_session()
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
         render_credenciales_arca,
@@ -644,9 +646,17 @@ elif pagina == "mostrador":
     aplicar_estilos_mostrador()
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
 
-    tab_caja, tab_facturas = st.tabs(["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"])
+    vista_mostrador = st.radio(
+        "Vista mostrador",
+        ["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="mostrador_vista_principal",
+    )
 
-    with tab_caja:
+    if vista_mostrador.startswith("🧾"):
+        render_historial_facturas_arca()
+    else:
         bar_cli, bar_cred = st.columns([3, 2])
         with bar_cli:
             render_seccion_cliente_mostrador()
@@ -724,9 +734,6 @@ elif pagina == "mostrador":
 
         with col_der:
             render_mostrador_venta_actual(vendedor)
-
-    with tab_facturas:
-        render_historial_facturas_arca()
 
 # --- ASISTENTE ---
 elif pagina == "asistente":
@@ -1035,6 +1042,9 @@ elif pagina == "asistente":
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
+    from modulos.mostrador_session import init_credenciales_arca_session
+
+    init_credenciales_arca_session()
     from modulos.ui_mostrador import render_config_ticket_mostrador
 
     titulo_seccion("Configuración", "Ctrl+C")
