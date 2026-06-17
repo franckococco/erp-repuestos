@@ -155,8 +155,8 @@ def render_carga_factura():
                     if mejorar_img:
                         with st.expander("Vista previa de imagen", expanded=False):
                             c1, c2 = st.columns(2)
-                            c1.image(img, caption="Original", use_container_width=True)
-                            c2.image(img_proc, caption="Mejorada", use_container_width=True)
+                            c1.image(img, caption="Original", width="stretch")
+                            c2.image(img_proc, caption="Mejorada", width="stretch")
                     datos = procesar_factura_con_ia(img_proc, mejorar_imagen=False)
                     if datos:
                         for art in datos.get("articulos", []):
@@ -279,23 +279,23 @@ def render_carga_factura():
                 required=True,
             ),
         },
-        use_container_width=True,
+        width="stretch",
         num_rows="dynamic",
         key="grilla_validacion",
     )
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)
-    if col_btn1.button("💾 Guardar borrador (Ctrl+G)", type="secondary", use_container_width=True):
+    if col_btn1.button("💾 Guardar borrador (Ctrl+G)", type="secondary", width="stretch"):
         _guardar_borrador_actual(d, df_editado, condicion_pago)
 
-    if col_btn2.button("🔤 Normalizar códigos", use_container_width=True):
+    if col_btn2.button("🔤 Normalizar códigos", width="stretch"):
         n = normalizar_codigos_en_articulos(articulos)
         d["articulos"] = articulos
         st.session_state.temp_datos = d
         st.success(f"Normalizados {n} código(s).")
         st.rerun()
 
-    if col_btn3.button("Descartar factura", use_container_width=True):
+    if col_btn3.button("Descartar factura", width="stretch"):
         if st.session_state.borrador_id:
             eliminar_borrador_factura(st.session_state.borrador_id)
         st.session_state.temp_datos = None
@@ -329,7 +329,7 @@ def render_carga_factura():
     if st.button(
         "💾 Confirmar ingreso y generar TODOS los QR",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         disabled=not cuit_valido,
     ):
         if not cuit_valido:
@@ -391,7 +391,7 @@ def render_carga_factura():
             file_name=st.session_state.zip_nombre,
             mime="application/zip",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
         if st.button("Limpiar pantalla"):
             del st.session_state.zip_listo

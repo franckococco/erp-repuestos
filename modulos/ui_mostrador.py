@@ -6,7 +6,6 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from modulos.util_busqueda import normalizar_para_busqueda
 
@@ -477,7 +476,7 @@ def render_descarga_presupuesto_prominente(vendedor):
         st.session_state.get("presupuesto_pdf_nombre", "Presupuesto.pdf"),
         "application/pdf",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         key=f"dl_pres_top_{vendedor}",
     )
 
@@ -590,7 +589,7 @@ def render_presupuestos_guardados(vendedor):
         solo_abiertos = st.checkbox("Solo abiertos", value=True, key="pres_solo_abiertos")
         col_load, _ = st.columns([1, 3])
         with col_load:
-            refrescar = st.button("↻ Cargar lista", key="pres_cargar_lista", use_container_width=True)
+            refrescar = st.button("↻ Cargar lista", key="pres_cargar_lista", width="stretch")
 
         cache_key = f"pres_lista_{solo_abiertos}"
         if refrescar or cache_key not in st.session_state:
@@ -620,7 +619,7 @@ def render_presupuestos_guardados(vendedor):
                 "Estado": p.get("estado", "abierto"),
                 "Vendedor": p.get("vendedor", "—"),
             })
-        st.dataframe(filas, use_container_width=True, hide_index=True)
+        st.dataframe(filas, width="stretch", hide_index=True)
 
         opciones = {p["id"]: p for p in lista}
         sel_id = st.selectbox(
@@ -641,7 +640,7 @@ def render_presupuestos_guardados(vendedor):
             st.caption(f"Nota: {pres['nota']}")
 
         col_r, col_pdf, col_anu, col_del = st.columns(4)
-        if col_r.button("↩️ Reabrir en carrito", use_container_width=True, key="pres_reabrir"):
+        if col_r.button("↩️ Reabrir en carrito", width="stretch", key="pres_reabrir"):
             ok, msj, cliente = reabrir_presupuesto_en_carrito(str(vendedor), sel_id, reemplazar=True)
             if ok:
                 st.session_state.cliente_activo = normalizar_cliente_activo(cliente)
@@ -660,7 +659,7 @@ def render_presupuestos_guardados(vendedor):
         total_bruto_pres = float(pres.get("total_bruto", 0))
         nro_pres = pres.get("numero_presupuesto")
         pdf_cache_key = f"pres_pdf_bytes_{sel_id}"
-        if col_pdf.button("📄 Preparar PDF", use_container_width=True, key="pres_gen_pdf"):
+        if col_pdf.button("📄 Preparar PDF", width="stretch", key="pres_gen_pdf"):
             st.session_state[pdf_cache_key] = generar_pdf_presupuesto_mostrador(
                 pres.get("vendedor", vendedor),
                 items_pres,
@@ -676,11 +675,11 @@ def render_presupuestos_guardados(vendedor):
                 pdf_pres,
                 _nombre_archivo_presupuesto(nro_pres, cli_pres.get("nombre", "CLIENTE")),
                 "application/pdf",
-                use_container_width=True,
+                width="stretch",
                 key="pres_dl_pdf",
             )
 
-        if col_anu.button("Anular", use_container_width=True, key="pres_anular"):
+        if col_anu.button("Anular", width="stretch", key="pres_anular"):
             ok, msj = actualizar_estado_presupuesto(sel_id, "anulado")
             if ok:
                 if st.session_state.get("presupuesto_cargado_id") == sel_id:
@@ -690,7 +689,7 @@ def render_presupuestos_guardados(vendedor):
             else:
                 st.error(msj)
 
-        if col_del.button("🗑️ Eliminar", use_container_width=True, key="pres_eliminar"):
+        if col_del.button("🗑️ Eliminar", width="stretch", key="pres_eliminar"):
             ok, msj = eliminar_presupuesto_guardado(sel_id)
             if ok:
                 if st.session_state.get("presupuesto_cargado_id") == sel_id:
@@ -717,11 +716,11 @@ def render_seccion_cliente_mostrador():
             + (f" · {_label_tipo_cliente_negocio(cli.get('tipo_cliente'))}" if cli.get("tipo_cliente") else "")
         )
     with col_cf:
-        if st.button("Consumidor final", use_container_width=True):
+        if st.button("Consumidor final", width="stretch"):
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
     with col_lim:
-        if st.button("Limpiar cliente", use_container_width=True):
+        if st.button("Limpiar cliente", width="stretch"):
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
 
@@ -945,7 +944,7 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
     col_b1, col_b2 = st.columns([1, 3])
     cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
 
-    if col_b2.button("➕ Agregar al Presupuesto", use_container_width=True, type="primary"):
+    if col_b2.button("➕ Agregar al Presupuesto", width="stretch", type="primary"):
         if sel_prod:
             id_real = opciones_desc[sel_prod]
             exito, msj = agregar_al_carrito(str(vendedor), id_real, int(cant_b))
@@ -1056,12 +1055,18 @@ def carrito_a_items_factura(carrito, descuento_pct):
     return items
 
 
+def _embed_iframe_html(body: str, height: int = 0):
+    """HTML embebido (reemplazo de components.v1.html deprecado)."""
+    srcdoc = f"<!DOCTYPE html><html><body>{body}</body></html>"
+    st.iframe(srcdoc=srcdoc, height=height, width=0)
+
+
 def _auto_imprimir_pdf(pdf_bytes):
     """Abre el diálogo de impresión del navegador (ticket tras facturar)."""
     if not pdf_bytes:
         return
     base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    components.html(
+    _embed_iframe_html(
         f"""
         <script>
         (function() {{
@@ -1084,7 +1089,7 @@ def _auto_imprimir_pdf(pdf_bytes):
 
 def _mostrar_boton_imprimir_pdf(pdf_bytes):
     base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-    components.html(
+    _embed_iframe_html(
         f"""
         <button onclick="imprimir()" style="
             background-color: #ff4b4b; color: white; padding: 10px;
@@ -1169,7 +1174,7 @@ def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_tic
                 pdf_ticket,
                 file_name=f"Ticket_{nro}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
                 key=f"{key_prefix}_ticket",
             )
         idx += 1
@@ -1180,7 +1185,7 @@ def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_tic
                 pdf_a4,
                 file_name=f"Factura_{nro}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
                 key=f"{key_prefix}_a4",
             )
     elif solo_ticket and pdf_a4:
@@ -1321,7 +1326,7 @@ def render_historial_facturas_arca():
             "CAE": c.get("cae", "—"),
             "Total": f"${float(c.get('total', 0)):,.2f}",
         })
-    st.dataframe(filas, use_container_width=True, hide_index=True)
+    st.dataframe(filas, width="stretch", hide_index=True)
 
     opciones = {x["id"]: x for x in lista}
     sel_id = st.selectbox(
@@ -1344,7 +1349,7 @@ def render_historial_facturas_arca():
         f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
     )
 
-    if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
+    if st.button("Cargar PDFs", key="hist_arca_reimprimir", width="stretch"):
         pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
         nro = _formato_nro_comprobante(datos)
         st.session_state.hist_arca_preview = {
@@ -1514,7 +1519,7 @@ def render_confirmacion_pendiente_mostrador(vendedor, carrito, total_final, desc
 
     st.warning(pend.get("mensaje", "¿Confirmás esta acción?"))
     col_ok, col_no = st.columns(2)
-    if col_ok.button("✅ Confirmar", type="primary", use_container_width=True, key="most_pend_ok"):
+    if col_ok.button("✅ Confirmar", type="primary", width="stretch", key="most_pend_ok"):
         ok, msj = _ejecutar_accion_pendiente(vendedor, pend, carrito, total_final, desc_porc)
         _limpiar_accion_pendiente()
         if ok:
@@ -1522,7 +1527,7 @@ def render_confirmacion_pendiente_mostrador(vendedor, carrito, total_final, desc
             st.rerun()
         else:
             st.error(msj)
-    if col_no.button("❌ Cancelar", use_container_width=True, key="most_pend_no"):
+    if col_no.button("❌ Cancelar", width="stretch", key="most_pend_no"):
         _limpiar_accion_pendiente()
         st.info("Acción cancelada.")
         st.rerun()
@@ -1556,7 +1561,7 @@ def render_ia_mostrador(
 
     col_ia1, col_ia2 = st.columns([4, 1])
     orden = col_ia1.text_input("Orden rápida (voz o texto):", key=f"ia_most_{vendedor}")
-    submit_ia = col_ia2.button("▶ Ejecutar", use_container_width=True, type="primary")
+    submit_ia = col_ia2.button("▶ Ejecutar", width="stretch", type="primary")
     if st.session_state.pop(f"auto_run_ia_{vendedor}", False) and orden:
         submit_ia = True
 
@@ -1959,13 +1964,13 @@ def render_carrito_grilla(vendedor, carrito):
                 "Precio unit.", min_value=0.0, step=0.01, format="$ %.2f"
             ),
         },
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         key=_cart_editor_session_key(vendedor),
     )
 
     act1, act2, act3 = st.columns([2, 2, 3])
-    if act1.button("✅ Aplicar cambios", type="primary", use_container_width=True, key=f"cart_apply_{vendedor}"):
+    if act1.button("✅ Aplicar cambios", type="primary", width="stretch", key=f"cart_apply_{vendedor}"):
         cambios, errores = _aplicar_cambios_carrito(vendedor, carrito, df_edit)
         if errores:
             st.error("\n".join(errores))
@@ -1987,7 +1992,7 @@ def render_carrito_grilla(vendedor, carrito):
             key=f"cart_del_sel_{vendedor}",
             label_visibility="collapsed",
         )
-    if act3.button("🗑️ Quitar seleccionado", use_container_width=True, key=f"cart_del_btn_{vendedor}"):
+    if act3.button("🗑️ Quitar seleccionado", width="stretch", key=f"cart_del_btn_{vendedor}"):
         if quitar:
             ok, msj = eliminar_item_carrito(str(vendedor), quitar)
             if ok:
@@ -2023,7 +2028,7 @@ def render_panel_cobro_mostrador(
                 st.caption("Descargá el PDF arriba de la grilla.")
                 if st.button(
                     "💾 Guardar presupuesto numerado",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"btn_guardar_pres_{vendedor}",
                 ):
                     _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
@@ -2060,7 +2065,7 @@ def render_panel_cobro_mostrador(
                 if st.button(
                     "🧾 FACTURAR E IMPRIMIR",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     key=f"btn_verif_arca_{vendedor}",
                 ):
                     ok, msj = _facturar_desde_carrito(
@@ -2075,7 +2080,7 @@ def render_panel_cobro_mostrador(
 
         with st.expander("Más acciones", expanded=False):
             nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
-            if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
+            if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", width="stretch"):
                 ok, msj, nuevo_id = guardar_presupuesto(
                     str(vendedor), st.session_state.cliente_activo, nota_pres
                 )
@@ -2084,7 +2089,7 @@ def render_panel_cobro_mostrador(
                     st.success(msj)
                 else:
                     st.error(msj)
-            if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
+            if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", width="stretch"):
                 _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
                 if err_sync:
                     st.error("\n".join(err_sync))
@@ -2097,7 +2102,7 @@ def render_panel_cobro_mostrador(
                         st.rerun()
                     else:
                         st.error(msj)
-            if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
+            if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", width="stretch"):
                 limpiar_venta_mostrador(vendedor, reset_cliente=False)
                 st.rerun()
 

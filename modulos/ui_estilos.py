@@ -79,7 +79,7 @@ def render_sidebar(cliente_activo):
         if logo:
             col_logo, col_tit = st.columns([1, 1.4])
             with col_logo:
-                st.image(logo, use_container_width=True)
+                st.image(logo, width="stretch")
             with col_tit:
                 st.markdown("### Hafid Repuestos")
                 st.caption("Inventario · Mostrador · IA")

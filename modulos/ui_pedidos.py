@@ -66,7 +66,7 @@ def _render_detalle_pedido(p, prefijo_key):
         st.dataframe(
             df_items,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "Precio est.": st.column_config.NumberColumn(format="$ %.2f"),
             },
@@ -187,7 +187,7 @@ def render_pedidos():
                     "precio_estimado": 0.0,
                 }]),
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "codigo": st.column_config.TextColumn("Cód. proveedor", required=True),
                     "descripcion": st.column_config.TextColumn("Descripción"),
@@ -277,7 +277,7 @@ def render_pedidos():
 
         if pedido and pedido.get("items"):
             with st.expander("Ver contenido del pedido seleccionado", expanded=False):
-                st.dataframe(_items_a_dataframe(pedido["items"]), hide_index=True, use_container_width=True)
+                st.dataframe(_items_a_dataframe(pedido["items"]), hide_index=True, width="stretch")
 
         if session_doc_key not in st.session_state:
             st.session_state[session_doc_key] = None
@@ -328,7 +328,7 @@ def render_pedidos():
 
             tabla = resultado_a_tabla(resultado, tipo_documento=tipo_doc)
             if tabla:
-                st.dataframe(pd.DataFrame(tabla), hide_index=True, use_container_width=True)
+                st.dataframe(pd.DataFrame(tabla), hide_index=True, width="stretch")
 
             if st.button("Limpiar", key=f"limpiar_{tipo_doc}"):
                 st.session_state[session_res_key] = None

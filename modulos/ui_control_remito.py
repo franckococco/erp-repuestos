@@ -38,14 +38,14 @@ def render_control_factura_remito():
     with col_f:
         st.subheader("Factura")
         if st.session_state.get("temp_datos"):
-            if st.button("Usar factura de la pestaña Carga", use_container_width=True):
+            if st.button("Usar factura de la pestaña Carga", width="stretch"):
                 st.session_state.control_factura = dict(st.session_state.temp_datos)
                 st.session_state.control_resultado = None
                 st.rerun()
         foto_f = st.camera_input("Foto factura", key="cam_ctrl_fact")
         arch_f = st.file_uploader("Imagen factura", type=["png", "jpg", "jpeg"], key="up_ctrl_fact")
         img_f = foto_f or arch_f
-        if img_f and st.button("Leer factura", key="btn_leer_fact_ctrl", use_container_width=True):
+        if img_f and st.button("Leer factura", key="btn_leer_fact_ctrl", width="stretch"):
             with st.spinner("Leyendo factura..."):
                 try:
                     datos = procesar_factura_con_ia(Image.open(img_f))
@@ -74,7 +74,7 @@ def render_control_factura_remito():
         foto_r = st.camera_input("Foto remito", key="cam_ctrl_rem")
         arch_r = st.file_uploader("Imagen remito", type=["png", "jpg", "jpeg"], key="up_ctrl_rem")
         img_r = foto_r or arch_r
-        if img_r and st.button("Leer remito", key="btn_leer_rem_ctrl", use_container_width=True):
+        if img_r and st.button("Leer remito", key="btn_leer_rem_ctrl", width="stretch"):
             with st.spinner("Leyendo remito..."):
                 try:
                     datos = procesar_remito_con_ia(Image.open(img_r))
@@ -109,7 +109,7 @@ def render_control_factura_remito():
         if cuit_f and cuit_r and cuit_f != cuit_r:
             st.warning(f"⚠️ CUIT distinto: factura {cuit_f} vs remito {cuit_r}. Revisá que sean del mismo proveedor.")
 
-        if st.button("🔍 Comparar factura vs remito", type="primary", use_container_width=True):
+        if st.button("🔍 Comparar factura vs remito", type="primary", width="stretch"):
             cuit = cuit_f or cuit_r
             with st.spinner("Comparando mercadería..."):
                 resultado = comparar_factura_remito(
@@ -149,7 +149,7 @@ def render_control_factura_remito():
 
         tabla = resultado_a_tabla(resultado)
         if tabla:
-            st.dataframe(pd.DataFrame(tabla), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(tabla), hide_index=True, width="stretch")
 
         sugerencias = resultado.get("sugerencias_pares") or []
         if sugerencias:
@@ -161,7 +161,7 @@ def render_control_factura_remito():
                     f"↔ Remito: {r.get('descripcion')} ({r.get('cant_remito')} u.) · {par.get('motivo', '')}"
                 )
 
-        if st.button("💾 Guardar control en historial", use_container_width=True):
+        if st.button("💾 Guardar control en historial", width="stretch"):
             cuit = "".join(filter(str.isdigit, str((fac or {}).get("cuit_proveedor", ""))))
             prov = (fac or {}).get("proveedor") or (rem or {}).get("proveedor", "")
             num_f = f"{(fac or {}).get('punto_venta', '')}-{(fac or {}).get('numero_comprobante', '')}"
