@@ -117,7 +117,7 @@ try:
         texto_item_inventario,
     )
 
-    get_db()
+    # Firebase se inicializa en el primer uso (get_db), no bloquea el primer frame.
 
 except Exception as e:
     st.error("Error al iniciar la aplicación")
@@ -301,21 +301,41 @@ if "msg_ia_mostrador" not in st.session_state:
     st.session_state.msg_ia_mostrador = None
 if "mostrador_listo_para_ticket" not in st.session_state:
     st.session_state.mostrador_listo_para_ticket = False
+if "hist_arca_resultados" not in st.session_state:
+    st.session_state.hist_arca_resultados = None
+if "hist_arca_preview" not in st.session_state:
+    st.session_state.hist_arca_preview = None
 if "pagina" not in st.session_state:
     st.session_state.pagina = "carga"
 
-from modulos.ui_mostrador import init_credenciales_arca_session
+def _asegurar_firebase():
+    """Conexión Firebase bajo demanda; muestra error claro si falla."""
+    try:
+        get_db()
+        return True
+    except Exception as exc:
+        st.error("No se pudo conectar a Firebase.")
+        st.exception(exc)
+        st.info(
+            "En **Streamlit Cloud** → Settings → Secrets debe existir `firebase_key`. "
+            "Revisá también los logs en Manage app."
+        )
+        st.stop()
+        return False
 
-try:
-    init_credenciales_arca_session()
-except Exception as exc:
-    st.error(f"No se pudo inicializar el módulo de mostrador: {exc}")
-    st.stop()
+def _init_mostrador_session():
+    from modulos.ui_mostrador import init_credenciales_arca_session
+    try:
+        init_credenciales_arca_session()
+    except Exception as exc:
+        st.error(f"No se pudo inicializar el mostrador: {exc}")
+        st.stop()
 
 pagina = render_sidebar(st.session_state.cliente_activo)
 
 # --- CARGA DE STOCK ---
 if pagina == "carga":
+    _asegurar_firebase()
     titulo_seccion("Carga y control", "Ctrl+S")
     vista_carga = st.radio(
         "Sección",
@@ -339,6 +359,7 @@ if pagina == "carga":
 
 # --- INVENTARIO Y ALTA MANUAL ---
 elif pagina == "inventario":
+    _asegurar_firebase()
     titulo_seccion("Inventario", "Ctrl+I")
 
     tab_lista, tab_alta, tab_vinc = st.tabs(["Listado", "Alta manual", "Vincular códigos"])
@@ -619,6 +640,8 @@ elif pagina == "inventario":
 
 # --- MOSTRADOR ---
 elif pagina == "mostrador":
+    _asegurar_firebase()
+    _init_mostrador_session()
     from modulos.ui_mostrador import (
         render_seccion_cliente_mostrador,
         render_credenciales_arca,
@@ -642,9 +665,6 @@ elif pagina == "mostrador":
     titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
 
     tab_caja, tab_facturas = st.tabs(["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"])
-
-    with tab_facturas:
-        render_historial_facturas_arca()
 
     with tab_caja:
         bar_cli, bar_cred = st.columns([3, 2])
@@ -725,8 +745,12 @@ elif pagina == "mostrador":
         with col_der:
             render_mostrador_venta_actual(vendedor)
 
+    with tab_facturas:
+        render_historial_facturas_arca()
+
 # --- ASISTENTE ---
 elif pagina == "asistente":
+    _asegurar_firebase()
     titulo_seccion("Asistente de depósito", "Ctrl+A")
     ayuda(
         "Ayuda — Comandos",
@@ -1032,6 +1056,7 @@ elif pagina == "asistente":
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
+    _asegurar_firebase()
     from modulos.ui_mostrador import render_config_ticket_mostrador
 
     titulo_seccion("Configuración", "Ctrl+C")
