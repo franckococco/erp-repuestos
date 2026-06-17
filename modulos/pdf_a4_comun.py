@@ -89,8 +89,8 @@ def dibujar_cabecera_documento(
     y = y_inicio
     logo = ruta_logo_hafid()
     if logo:
-        pdf.image(logo, x=MARGIN_L, y=8, h=24)
-        y = 34.0
+        pdf.image(logo, x=MARGIN_L, y=6, h=32)
+        y = 40.0
 
     y_izq = y
     pdf.set_xy(MARGIN_L, y_izq)

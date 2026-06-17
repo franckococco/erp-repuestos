@@ -63,6 +63,27 @@ _STOPWORDS_ITEM = frozenset({
     "HACER", "ARME", "ARMAR", "PARA", "EL", "LA", "UN", "UNA", "DE",
 })
 
+# Palabras que suelen iniciar la descripción del repuesto (corte de nombre de cliente).
+_INICIO_DESCRIPCION_VOZ = (
+    "buje", "bujes", "filtro", "filtros", "pastilla", "pastillas", "aceite",
+    "amortiguador", "amortiguadores", "disco", "discos", "bomba", "kit",
+    "rotula", "rótula", "fuelle", "tensor", "correa", "cadena", "resorte",
+    "espiral", "bujia", "bujía", "bobina", "ruleman", "rulemán", "cruceta",
+    "homocinetica", "homocinética", "semieje", "palier", "terminal", "barra",
+    "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
+    "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
+    "embrague", "crapodina", "crápodina", "cazoleta", "soporte", "silent",
+)
+
+
+def _patron_fin_cliente_voz() -> str:
+    prod = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
+    return (
+        r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|"
+        r"\b[\dA-Za-z]*\d[\dA-Za-z\-]*\s+\d{1,4}\s+unidades?\b|"
+        rf"\s+(?:{prod})\b|$)"
+    )
+
 
 def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     """Quita cliente, factura y prefijos de armado para buscar por descripción."""
@@ -77,12 +98,12 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     t = re.sub(r"\bpresupuesto\b", " ", t)
     t = re.sub(r"\bcliente\b", " ", t)
     t = re.sub(r"\bcodigo\b", " ", t)
-    t = re.sub(
-        r"\bpara\s+(?:el\s+)?(?:cliente\s+)?.+?(?=\s+(?:un|una|codigo|\d+\s+\d|\d+\s+unidad))",
-        " ",
-        t,
-        count=1,
-    )
+    cliente_info = extraer_cliente_orden_voz(texto)
+    if cliente_info.get("nombre_cliente"):
+        nom = re.escape(str(cliente_info["nombre_cliente"]).lower())
+        t = re.sub(rf"\bpara\s+(?:el\s+)?(?:cliente\s+)?{nom}\b", " ", t, flags=re.I)
+    elif cliente_info.get("consumidor_final"):
+        t = re.sub(r"\b(consumidor\s+final|particular)\b", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -179,10 +200,7 @@ def extraer_cliente_orden_voz(texto):
     if re.search(r"consumidor\s+final|particular", t):
         return {"consumidor_final": True}
 
-    fin = (
-        r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|"
-        r"\b[\dA-Za-z]*\d[\dA-Za-z\-]*\s+\d{1,4}\s+unidades?\b|$)"
-    )
+    fin = _patron_fin_cliente_voz()
     patrones = (
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
@@ -194,6 +212,7 @@ def extraer_cliente_orden_voz(texto):
             continue
         nombre = re.sub(r"\s+(el|la|del|de|una|un)$", "", m.group(1).strip(" ,."), flags=re.I)
         nombre = re.sub(r"^(el|la)\s+", "", nombre, flags=re.I)
+        nombre = re.sub(r"\s+", " ", nombre).strip()
         if len(nombre) >= 3 and nombre not in ("factura", "presupuesto", "consumidor final"):
             return {"nombre_cliente": nombre.upper()}
     return {}
@@ -305,10 +324,16 @@ def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_compro
     elif nombre_cliente:
         nombre_up = str(nombre_cliente).upper()
         clientes_db = obtener_clientes() or {}
-        encontrado = next(
-            (c for c in clientes_db.values() if nombre_up in str(c.get("nombre", "")).upper()),
-            None,
-        )
+        encontrado = None
+        mejor_len = 0
+        for c in clientes_db.values():
+            cn = str(c.get("nombre", "")).upper().strip()
+            if not cn:
+                continue
+            if cn == nombre_up or nombre_up.startswith(cn) or cn.startswith(nombre_up):
+                if len(cn) > mejor_len:
+                    encontrado = c
+                    mejor_len = len(cn)
         if encontrado:
             cli = cliente_db_a_activo(encontrado)
         else:
@@ -427,7 +452,8 @@ def ejecutar_flujo_factura_voz(
             if not items:
                 return (
                     False,
-                    "No detecté código ni cantidad. Ejemplo: «código 3524150 5 unidades».",
+                    "No detecté producto ni cantidad. Ejemplo: «buje de directa 3 unidades» "
+                    "o «código 111 3 unidades».",
                     None,
                 )
             return False, "No hay ítems en el carrito. Revisá el código.", None
@@ -436,6 +462,15 @@ def ejecutar_flujo_factura_voz(
             "Listo para verificar. Revisá la grilla arriba y elegí "
             "Facturar ARCA o Presupuesto en el panel derecho."
         )
+    elif intent in ("presupuesto", "factura_b", "factura_a") and (flujo.get("nombre_cliente") or flujo.get("consumidor_final")):
+        carrito = obtener_carrito(str(vendedor)) or []
+        if not carrito and not items:
+            return (
+                False,
+                "No detecté producto ni cantidad en la orden. "
+                "Ejemplo: «presupuesto para Juan, buje de directa 3 unidades».",
+                None,
+            )
 
     resumen = " · ".join(pasos_ok) if pasos_ok else "Listo."
     if ir_verificacion:

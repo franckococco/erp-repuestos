@@ -1233,34 +1233,48 @@ def _rango_fechas_utc(fecha_desde: date, fecha_hasta: date):
 
 
 def render_historial_facturas_arca():
-    with st.expander("Facturas ARCA — reimprimir", expanded=False):
-        hoy = date.today()
-        col_d1, col_d2, col_f = st.columns([1, 1, 2])
-        with col_d1:
-            fecha_desde = st.date_input(
-                "Desde",
-                value=hoy - timedelta(days=30),
-                key="hist_arca_desde",
-                format="DD/MM/YYYY",
-            )
-        with col_d2:
-            fecha_hasta = st.date_input(
-                "Hasta",
-                value=hoy,
-                key="hist_arca_hasta",
-                format="DD/MM/YYYY",
-            )
-        with col_f:
-            filtro_txt = st.text_input(
-                "Filtrar por nro., cliente o CAE",
-                key="hist_arca_filtro",
-                placeholder="0001-00000123, García, 7abc…",
-            )
+    """Buscar y reimprimir facturas ARCA (pestaña dedicada; carga bajo demanda)."""
+    st.markdown("#### Facturas ARCA — buscar y reimprimir")
+    st.caption("Consultá comprobantes emitidos por fecha, número, cliente o CAE.")
 
-        if fecha_desde > fecha_hasta:
-            st.error("«Desde» no puede ser posterior a «Hasta».")
-            return
+    hoy = date.today()
+    col_d1, col_d2, col_f = st.columns([1, 1, 2])
+    with col_d1:
+        fecha_desde = st.date_input(
+            "Desde",
+            value=hoy - timedelta(days=30),
+            key="hist_arca_desde",
+            format="DD/MM/YYYY",
+        )
+    with col_d2:
+        fecha_hasta = st.date_input(
+            "Hasta",
+            value=hoy,
+            key="hist_arca_hasta",
+            format="DD/MM/YYYY",
+        )
+    with col_f:
+        filtro_txt = st.text_input(
+            "Filtrar por nro., cliente o CAE",
+            key="hist_arca_filtro",
+            placeholder="0001-00000123, García, 7abc…",
+        )
 
+    if fecha_desde > fecha_hasta:
+        st.error("«Desde» no puede ser posterior a «Hasta».")
+        return
+
+    buscar = st.button("🔍 Buscar facturas", key="hist_arca_buscar", type="primary")
+    if buscar:
+        st.session_state.hist_arca_resultados = None
+        st.session_state.hist_arca_preview = None
+
+    if not buscar and not st.session_state.get("hist_arca_resultados"):
+        st.info("Elegí el rango de fechas y pulsá **Buscar facturas**.")
+        return
+
+    lista = st.session_state.get("hist_arca_resultados")
+    if lista is None or buscar:
         try:
             ini, fin = _rango_fechas_utc(fecha_desde, fecha_hasta)
             lista = listar_comprobantes_arca(
@@ -1269,70 +1283,72 @@ def render_historial_facturas_arca():
                 fecha_hasta=fin,
                 busqueda=filtro_txt,
             )
+            st.session_state.hist_arca_resultados = lista
         except Exception as ex:
             st.error(f"No se pudo leer el historial: {ex}")
             return
-        if not lista:
-            st.info("No hay facturas en ese rango o filtro.")
-            return
 
-        filas = []
-        for c in lista:
-            cli = c.get("cliente") or {}
-            cbte = str(cli.get("cbte_tipo") or cli.get("tipo_comprobante") or "6")
-            filas.append({
-                "Tipo": _tipo_comprobante_label(cbte),
-                "Nro": _formato_nro_comprobante(c),
-                "Fecha": formatear_fecha_ar(c.get("fecha")),
-                "Cliente": cli.get("nombre", "—"),
-                "CAE": c.get("cae", "—"),
-                "Total": f"${float(c.get('total', 0)):,.2f}",
-            })
-        st.dataframe(filas, use_container_width=True, hide_index=True)
+    if not lista:
+        st.info("No hay facturas en ese rango o filtro.")
+        return
 
-        opciones = {x["id"]: x for x in lista}
-        sel_id = st.selectbox(
-            "Elegir factura para reimprimir",
-            options=list(opciones.keys()),
-            format_func=lambda x: (
-                f"{_tipo_comprobante_label(str((opciones[x].get('cliente') or {}).get('tipo_comprobante', '6')))} · "
-                f"{_formato_nro_comprobante(opciones[x])} · "
-                f"{formatear_fecha_ar(opciones[x].get('fecha'), con_hora=False)} · "
-                f"{(opciones[x].get('cliente') or {}).get('nombre', '')} · "
-                f"${float(opciones[x].get('total', 0)):,.2f}"
-            ),
-            key="hist_arca_sel",
+    filas = []
+    for c in lista:
+        cli = c.get("cliente") or {}
+        cbte = str(cli.get("cbte_tipo") or cli.get("tipo_comprobante") or "6")
+        filas.append({
+            "Tipo": _tipo_comprobante_label(cbte),
+            "Nro": _formato_nro_comprobante(c),
+            "Fecha": formatear_fecha_ar(c.get("fecha")),
+            "Cliente": cli.get("nombre", "—"),
+            "CAE": c.get("cae", "—"),
+            "Total": f"${float(c.get('total', 0)):,.2f}",
+        })
+    st.dataframe(filas, use_container_width=True, hide_index=True)
+
+    opciones = {x["id"]: x for x in lista}
+    sel_id = st.selectbox(
+        "Elegir factura para reimprimir",
+        options=list(opciones.keys()),
+        format_func=lambda x: (
+            f"{_tipo_comprobante_label(str((opciones[x].get('cliente') or {}).get('tipo_comprobante', '6')))} · "
+            f"{_formato_nro_comprobante(opciones[x])} · "
+            f"{formatear_fecha_ar(opciones[x].get('fecha'), con_hora=False)} · "
+            f"{(opciones[x].get('cliente') or {}).get('nombre', '')} · "
+            f"${float(opciones[x].get('total', 0)):,.2f}"
+        ),
+        key="hist_arca_sel",
+    )
+    comp = opciones.get(sel_id) or {}
+    cli_sel = comp.get("cliente") or {}
+    st.caption(
+        f"{_tipo_comprobante_label(str(cli_sel.get('tipo_comprobante', '6')))} · "
+        f"Vto. CAE: {comp.get('vencimiento_cae', '—')} · "
+        f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
+    )
+
+    if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
+        pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
+        nro = _formato_nro_comprobante(datos)
+        st.session_state.hist_arca_preview = {
+            "respuesta": datos,
+            "pdf_ticket": pdf_t,
+            "pdf_a4": pdf_a,
+            "total": comp.get("total"),
+            "comprobante_id": sel_id,
+            "nro": nro,
+        }
+        st.rerun()
+
+    preview = st.session_state.get("hist_arca_preview")
+    if preview and preview.get("comprobante_id") == sel_id:
+        st.caption(f"Comprobante {preview.get('nro', '—')}")
+        _render_acciones_pdf_compactas(
+            preview.get("nro", "—"),
+            preview.get("pdf_ticket"),
+            preview.get("pdf_a4"),
+            f"hist_{sel_id[:8]}",
         )
-        comp = opciones.get(sel_id) or {}
-        cli_sel = comp.get("cliente") or {}
-        st.caption(
-            f"{_tipo_comprobante_label(str(cli_sel.get('tipo_comprobante', '6')))} · "
-            f"Vto. CAE: {comp.get('vencimiento_cae', '—')} · "
-            f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
-        )
-
-        if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
-            pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
-            nro = _formato_nro_comprobante(datos)
-            st.session_state.hist_arca_preview = {
-                "respuesta": datos,
-                "pdf_ticket": pdf_t,
-                "pdf_a4": pdf_a,
-                "total": comp.get("total"),
-                "comprobante_id": sel_id,
-                "nro": nro,
-            }
-            st.rerun()
-
-        preview = st.session_state.get("hist_arca_preview")
-        if preview and preview.get("comprobante_id") == sel_id:
-            st.caption(f"Comprobante {preview.get('nro', '—')}")
-            _render_acciones_pdf_compactas(
-                preview.get("nro", "—"),
-                preview.get("pdf_ticket"),
-                preview.get("pdf_a4"),
-                f"hist_{sel_id[:8]}",
-            )
 
 
 def _forma_pago_actual(vendedor):
@@ -1513,8 +1529,8 @@ def render_ia_mostrador(
     _render_ia_feedback(vendedor)
 
     st.caption(
-        "Orden: «factura B para Juan, código 111 3 unidades» o «buje de directa 3 unidades». "
-        "Opcional: **listo** al final."
+        "Orden: «presupuesto para Juan, buje de directa 3 unidades» · "
+        "«factura B para Juan, código 111 3 unidades». Opcional: **listo** al final."
     )
 
     carrito_voz = obtener_carrito(str(vendedor)) or []
@@ -2094,7 +2110,6 @@ def render_mostrador_venta_actual(vendedor):
         if st.session_state.get("mostrador_listo_para_ticket"):
             reset_estado_orden_mostrador(vendedor, reset_cliente=False)
         st.caption("Carrito vacío.")
-    render_historial_facturas_arca()
 
 
 def render_acciones_carrito(vendedor, carrito, total_bruto, total_final, desc_porc):
