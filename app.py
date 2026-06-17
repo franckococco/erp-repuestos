@@ -446,7 +446,7 @@ elif pagina == "inventario":
                                             "Proveedor": v.get('proveedor', ''),
                                             "ID": v.get('id', '')
                                         })
-                                    st.dataframe(pd.DataFrame(filas_var), hide_index=True, width="stretch")
+                                    st.dataframe(pd.DataFrame(filas_var), hide_index=True, use_container_width=True)
 
                     elif vista_inv == "Editar variantes":
                         ayuda(
@@ -464,7 +464,7 @@ elif pagina == "inventario":
 
                         st.data_editor(
                             df_filtrado,
-                            width="stretch",
+                            use_container_width=True,
                             hide_index=True,
                             column_config={
                                 "id": st.column_config.TextColumn("ID variante", disabled=True, width="small"),
@@ -586,7 +586,7 @@ elif pagina == "inventario":
                 modulo_manual = col_u3.number_input("Módulo", min_value=0, step=1)
                 fila_manual = col_u4.number_input("Fila", min_value=0, step=1)
 
-                submit_alta = st.form_submit_button("💾 Guardar Repuesto en Inventario", type="primary", width="stretch")
+                submit_alta = st.form_submit_button("💾 Guardar Repuesto en Inventario", type="primary", use_container_width=True)
 
                 if submit_alta:
                     if not codigo_manual or not desc_manual:
@@ -718,7 +718,7 @@ elif pagina == "mostrador":
                         "Ingreso Manual o Pistola (ID variante CODIGO_MARCA):",
                         key=f"scan_{vendedor}",
                     )
-                    submit_btn = col_scan2.form_submit_button("➕ Agregar", width="stretch")
+                    submit_btn = col_scan2.form_submit_button("➕ Agregar", use_container_width=True)
 
                     if submit_btn and codigo_manual_scan:
                         exito, msj = agregar_al_carrito(str(vendedor), codigo_manual_scan)
@@ -1035,14 +1035,14 @@ elif pagina == "asistente":
             if st.session_state.producto_pendiente_voz:
                 pend = st.session_state.producto_pendiente_voz
                 col_ok, col_no = st.columns(2)
-                if col_ok.button("Confirmar carga", type="primary", width="stretch", key="btn_conf_prod_voz"):
+                if col_ok.button("Confirmar carga", type="primary", use_container_width=True, key="btn_conf_prod_voz"):
                     exito, msj_db = ejecutar_carga_producto_voz(pend.get("payload"))
                     st.session_state.producto_pendiente_voz = None
                     st.session_state.ultima_orden = "Confirmar carga de producto"
                     st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                     st.rerun()
-                if col_no.button("Cancelar", width="stretch", key="btn_cancel_prod_voz"):
+                if col_no.button("Cancelar", use_container_width=True, key="btn_cancel_prod_voz"):
                     st.session_state.producto_pendiente_voz = None
                     st.session_state.ultima_orden = "Cancelar carga de producto"
                     st.session_state.ultima_respuesta = "Carga cancelada."
@@ -1050,7 +1050,7 @@ elif pagina == "asistente":
                     st.rerun()
 
             if st.session_state.get("df_reporte") is not None:
-                st.dataframe(st.session_state.df_reporte, hide_index=True, width="stretch")
+                st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
@@ -1145,7 +1145,7 @@ elif pagina == "config":
 
             df_prov_edit = st.data_editor(
                 df_prov,
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
                 column_config={
                     "Proveedor": st.column_config.TextColumn("Proveedor", disabled=True),
@@ -1157,7 +1157,7 @@ elif pagina == "config":
                 key="grilla_proveedores"
             )
 
-            if st.button("💾 Guardar Cambios de Proveedores", type="primary", width="stretch"):
+            if st.button("💾 Guardar Cambios de Proveedores", type="primary", use_container_width=True):
                 guardados = 0
                 filas = df_prov_edit.to_dict('records')
                 originales = {r['CUIT']: r for r in datos_tabla}
@@ -1226,7 +1226,7 @@ elif pagina == "config":
         with col_m:
             nueva_marca = st.text_input("Agregar nueva marca (Ej: BOSCH, SKF)", label_visibility="collapsed")
         with col_b:
-            if st.button("Guardar Marca", width="stretch"):
+            if st.button("Guardar Marca", use_container_width=True):
                 if nueva_marca:
                     agregar_marca(nueva_marca)
                     st.success("Agregada")
@@ -1286,7 +1286,7 @@ elif pagina == "config":
                     "Descuento": f"{d_cli.get('descuento', 0)}%",
                     "Comprobante": "A" if str(d_cli.get("tipo_comprobante", "6")) == "1" else "B",
                 })
-            st.dataframe(datos_cli, width="stretch")
+            st.dataframe(datos_cli, use_container_width=True)
 
             with st.expander("🗑️ Eliminar un Cliente"):
                 cli_borrar = st.selectbox(
