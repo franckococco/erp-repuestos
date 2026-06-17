@@ -5,6 +5,14 @@ import traceback
 # Debe ser la primera llamada a Streamlit (evita pantalla genérica "Oh, no")
 st.set_page_config(page_title="Hafid Repuestos", layout="wide", initial_sidebar_state="expanded")
 
+_carga_ui = st.empty()
+with _carga_ui.container():
+    st.info(
+        "⏳ **Cargando Hafid Repuestos…**  "
+        "Si la app estuvo inactiva en Streamlit Cloud, la primera apertura puede tardar **1–3 minutos**. "
+        "Luego entra mucho más rápido."
+    )
+
 _ARCHIVOS_MODULOS = (
     "__init__.py",
     "ia_vision.py",
@@ -118,13 +126,16 @@ try:
     )
 
     if not st.session_state.get("_firebase_ok"):
-        with st.spinner("Conectando con la base de datos…"):
+        with st.spinner("Conectando con Firebase…"):
             get_db()
         st.session_state["_firebase_ok"] = True
     else:
         get_db()
 
+    _carga_ui.empty()
+
 except Exception as e:
+    _carga_ui.empty()
     st.error("Error al iniciar la aplicación")
     st.exception(e)
     st.markdown(
