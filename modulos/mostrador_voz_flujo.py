@@ -57,8 +57,61 @@ def _normalizar_codigo_con_inventario(termino, inventario):
     return directo
 
 
+_STOPWORDS_ITEM = frozenset({
+    "LISTO", "FIN", "FACTURA", "PRESUPUESTO", "CODIGO", "UNIDAD",
+    "UNIDADES", "CLIENTE", "CARGAME", "HACEME", "CARGA", "CARGAR",
+    "HACER", "ARME", "ARMAR", "PARA", "EL", "LA", "UN", "UNA", "DE",
+})
+
+
+def _limpiar_texto_para_items_descripcion(texto: str) -> str:
+    """Quita cliente, factura y prefijos de armado para buscar por descripción."""
+    t = normalizar_texto_basico(texto).lower()
+    t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
+    t = re.sub(
+        r"\b(carg\w*|hac\w*|arm\w*|rgame|cargame|haceme|armeme|armame)\b",
+        " ",
+        t,
+    )
+    t = re.sub(r"\bfactura\s+[ab]\b", " ", t)
+    t = re.sub(r"\bpresupuesto\b", " ", t)
+    t = re.sub(r"\bcliente\b", " ", t)
+    t = re.sub(r"\bcodigo\b", " ", t)
+    t = re.sub(
+        r"\bpara\s+(?:el\s+)?(?:cliente\s+)?.+?(?=\s+(?:un|una|codigo|\d+\s+unidad))",
+        " ",
+        t,
+        count=1,
+    )
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _termino_descripcion_valido(termino: str) -> bool:
+    term = _limpiar_termino_item(termino)
+    if not term or len(term) < 3:
+        return False
+    if not re.search(r"[A-Z]", term):
+        return False
+    palabras = [p for p in term.split() if p not in _STOPWORDS_ITEM]
+    if not palabras:
+        return False
+    if all(p.isdigit() for p in palabras):
+        return False
+    return True
+
+
+def _normalizar_termino_descripcion(termino: str) -> str:
+    t = normalizar_texto_basico(str(termino or "")).upper()
+    palabras = [
+        p for p in t.split()
+        if p not in _STOPWORDS_ITEM and p not in ("UN", "UNA", "EL", "LA", "DE", "DEL")
+    ]
+    return " ".join(palabras).strip()
+
+
 def extraer_items_orden_voz(texto):
-    """Extrae código + cantidad desde la orden hablada/escrita."""
+    """Extrae código o descripción + cantidad desde la orden hablada/escrita."""
     if not texto:
         return []
     t = normalizar_texto_basico(texto).lower()
@@ -68,18 +121,20 @@ def extraer_items_orden_voz(texto):
     vistos = set()
     cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
 
-    def agregar(termino, cantidad):
-        term = _limpiar_termino_item(termino)
+    def agregar(termino, cantidad, es_descripcion=False):
+        if es_descripcion:
+            term = _normalizar_termino_descripcion(termino)
+        else:
+            term = _limpiar_termino_item(termino)
         try:
             cant = max(1, int(cantidad))
         except (TypeError, ValueError):
             return
-        if not term or not re.search(r"[A-Z0-9]", term):
-            return
-        if term in (
-            "LISTO", "FIN", "FACTURA", "PRESUPUESTO", "CODIGO", "UNIDAD",
-            "UNIDADES", "CLIENTE", "CARGAME", "HACEME",
+        if not _termino_descripcion_valido(term) if es_descripcion else (
+            not term or not re.search(r"[A-Z0-9]", term)
         ):
+            return
+        if not es_descripcion and term in _STOPWORDS_ITEM:
             return
         clave = (term, cant)
         if clave in vistos:
@@ -87,14 +142,29 @@ def extraer_items_orden_voz(texto):
         vistos.add(clave)
         items.append({"termino": term, "cantidad": cant})
 
-    patrones = [
+    patrones_codigo = [
         (rf"(?:codigo)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
         (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
         (rf"(?:codigo)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
     ]
-    for patron, invertido in patrones:
+    for patron, _ in patrones_codigo:
         for m in re.finditer(patron, t):
-            agregar(m.group(1), m.group(2))
+            agregar(m.group(1), m.group(2), es_descripcion=False)
+
+    if items:
+        return items
+
+    resto = _limpiar_texto_para_items_descripcion(texto)
+    patrones_desc = [
+        r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+        r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+    ]
+    for patron in patrones_desc:
+        m = re.search(patron, resto)
+        if m:
+            agregar(m.group(1), m.group(2), es_descripcion=True)
+            break
+
     return items
 
 
@@ -106,7 +176,7 @@ def extraer_cliente_orden_voz(texto):
     if re.search(r"consumidor\s+final|particular", t):
         return {"consumidor_final": True}
 
-    fin = r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+\d+\s+unidad|\s+\d+\s+unidades|$)"
+    fin = r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|\d+\s+unidad|\s+\d+\s+unidades|$)"
     patrones = (
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
@@ -219,8 +289,8 @@ def agregar_termino_voz(
         ok, msj = agregar_al_carrito(str(vendedor), encontrados[0]["id"], cant)
         return ok, msj, None
     if len(encontrados) > 1:
-        return False, f"Varias opciones para '{termino}'. Decí el código exacto.", encontrados[:10]
-    return False, f"No encontré '{termino}'.", None
+        return False, f"Varias similitudes para '{termino}'. Elegí en la lista.", encontrados[:10]
+    return False, f"No encontré '{termino}'. Probá con código o otra descripción.", None
 
 
 def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_comprobante=None):

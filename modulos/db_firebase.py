@@ -288,23 +288,36 @@ def cliente_consumidor_final() -> dict:
         "cuit": "00000000000",
         "descuento": 0.0,
         "tipo_comprobante": "6",
+        "etiqueta_descuento": "",
     }
 
 
-def configurar_cliente(nombre, cuit_dni, descuento=0.0, tipo_comprobante="6"):
+def configurar_cliente(
+    nombre,
+    cuit_dni,
+    descuento=0.0,
+    tipo_comprobante="6",
+    etiqueta_descuento="",
+):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     if not id_cli:
         return False, "CUIT/DNI inválido."
     cbte = str(tipo_comprobante).strip()
     if cbte not in ("1", "6"):
         cbte = "6"
-    get_db().collection("clientes").document(id_cli).set({
+    etq = str(etiqueta_descuento or "").strip().upper()
+    payload = {
         "nombre": str(nombre).upper(),
         "cuit_dni": id_cli,
         "descuento": float(descuento),
         "tipo_comprobante": cbte,
-        "actualizado": datetime.now(timezone.utc)
-    }, merge=True)
+        "actualizado": datetime.now(timezone.utc),
+    }
+    if etq:
+        payload["etiqueta_descuento"] = etq
+    else:
+        payload["etiqueta_descuento"] = ""
+    get_db().collection("clientes").document(id_cli).set(payload, merge=True)
     return True, "Cliente configurado."
 
 
@@ -321,6 +334,7 @@ def cliente_db_a_activo(datos: dict) -> dict:
         "cuit": cuit,
         "descuento": float(datos.get("descuento", 0.0)),
         "tipo_comprobante": cbte,
+        "etiqueta_descuento": str(datos.get("etiqueta_descuento", "") or "").strip().upper(),
     }
 
 

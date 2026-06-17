@@ -89,8 +89,8 @@ def dibujar_cabecera_documento(
     y = y_inicio
     logo = ruta_logo_hafid()
     if logo:
-        pdf.image(logo, x=MARGIN_L, y=10, h=16)
-        y = 28.0
+        pdf.image(logo, x=MARGIN_L, y=8, h=24)
+        y = 34.0
 
     y_izq = y
     pdf.set_xy(MARGIN_L, y_izq)
@@ -175,6 +175,45 @@ def _fila_total_pdf(pdf: FPDF, label: str, valor: str, alto: float = 7, tam: int
     pdf.cell(W_TOT_LABEL, alto, label, align="R")
     pdf.set_xy(X_TOT_VALUE, y)
     pdf.cell(W_TOT_VALUE, alto, valor, align="R", new_x="LMARGIN", new_y="NEXT")
+
+
+def _modo_descuento_cliente(cliente: Optional[Dict[str, Any]]) -> Tuple[float, str, bool]:
+    """Devuelve (desc_pct, etiqueta, mostrar_dto_en_pdf)."""
+    cli = dict(cliente or {})
+    desc = float(cli.get("descuento", 0) or 0)
+    etiqueta = str(cli.get("etiqueta_descuento", "") or "").strip().upper()
+    if desc > 0 and etiqueta:
+        return desc, etiqueta, False
+    return desc, "", desc > 0
+
+
+def dibujar_totales_cliente_pdf(
+    pdf: FPDF,
+    total_bruto: float,
+    cliente: Optional[Dict[str, Any]] = None,
+    total_final_override: Optional[float] = None,
+):
+    """Totales según tipo de cliente: Dto visible u oculto con etiqueta al pie."""
+    desc, etiqueta, mostrar_dto = _modo_descuento_cliente(cliente)
+    bruto, monto_dto, total_final = calc_totales_con_dto(total_bruto, desc)
+    if total_final_override is not None:
+        total_final = float(total_final_override)
+    if mostrar_dto and monto_dto > 0.005:
+        dibujar_totales_con_dto(pdf, bruto, desc)
+    else:
+        _fila_total_pdf(pdf, "TOTAL:", f"${total_final:,.2f}", alto=9, tam=12, estilo="B")
+    return etiqueta
+
+
+def dibujar_etiqueta_pie_pdf(pdf: FPDF, etiqueta: str):
+    """Sigla de descuento habitual (ej. MEC) al pie del documento."""
+    etq = str(etiqueta or "").strip().upper()
+    if not etq:
+        return
+    pdf.ln(2)
+    pdf.set_x(MARGIN_L)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(ANCHO_UTIL, 5, etq, align="R", new_x="LMARGIN", new_y="NEXT")
 
 
 def dibujar_totales_con_dto(

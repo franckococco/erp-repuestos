@@ -8,7 +8,8 @@ from modulos.pdf_a4_comun import (
     dibujar_cabecera_documento,
     dibujar_caja_cliente,
     dibujar_tabla_items,
-    dibujar_totales_con_dto,
+    dibujar_totales_cliente_pdf,
+    dibujar_etiqueta_pie_pdf,
     nueva_pagina_a4,
 )
 from modulos.util_pdf import texto_para_pdf
@@ -44,9 +45,10 @@ def crear_pdf_presupuesto(
 ) -> bytes:
     cfg = dict(config or {})
     cli = dict(cliente or {})
+    if descuento_pct and not cli.get("descuento"):
+        cli["descuento"] = float(descuento_pct)
     nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL"))
     cuit_cli = str(cli.get("cuit", cli.get("cuit_dni", "")) or "")
-    desc = float(descuento_pct)
     nro_txt = _fmt_nro_presupuesto(numero)
 
     ahora = datetime.now()
@@ -67,9 +69,10 @@ def crear_pdf_presupuesto(
     y_tab = dibujar_tabla_items(pdf, y_tab, items, _codigo_item_presupuesto)
 
     pdf.set_y(y_tab + 4)
-    dibujar_totales_con_dto(pdf, float(total_bruto), desc)
+    etiqueta = dibujar_totales_cliente_pdf(pdf, float(total_bruto), cli)
 
     pdf.ln(4)
+    dibujar_etiqueta_pie_pdf(pdf, etiqueta)
     pdf.set_xy(MARGIN_L, pdf.get_y())
     pdf.set_font("Helvetica", "", 8)
     leyendas = [

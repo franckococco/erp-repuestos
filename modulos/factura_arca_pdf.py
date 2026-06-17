@@ -13,7 +13,8 @@ from modulos.pdf_a4_comun import (
     dibujar_cabecera_documento,
     dibujar_caja_cliente,
     dibujar_tabla_items,
-    dibujar_totales_con_dto,
+    dibujar_totales_cliente_pdf,
+    dibujar_etiqueta_pie_pdf,
     nueva_pagina_a4,
 )
 from modulos.util_branding import NOMBRE_EMPRESA
@@ -256,6 +257,7 @@ def crear_a4(
     y_tab = dibujar_tabla_items(pdf, y_tab, filas, _codigo_item_factura)
 
     pdf.set_y(y_tab + 4)
+    etiqueta_pie = ""
     if es_factura_a:
         subtotal = total_factura / 1.21
         iva = total_factura - subtotal
@@ -264,11 +266,15 @@ def crear_a4(
         _fila_total_pdf(pdf, "TOTAL:", f"${total_factura:,.2f}", alto=9, tam=12, estilo="B")
     else:
         desc_pct = float(datos_cliente.get("descuento", 0) or 0)
-        bruto_items = sum(_get_float(it, "precio", 0.0) for it in items)
-        if desc_pct > 0 and bruto_items > total_factura:
-            dibujar_totales_con_dto(pdf, bruto_items, desc_pct)
-        else:
-            _fila_total_pdf(pdf, "TOTAL:", f"${total_factura:,.2f}", alto=9, tam=12, estilo="B")
+        bruto_sin_dto = (
+            total_factura / max(0.01, 1.0 - desc_pct / 100.0) if desc_pct > 0 else total_factura
+        )
+        etiqueta_pie = dibujar_totales_cliente_pdf(
+            pdf,
+            bruto_sin_dto,
+            datos_cliente,
+            total_final_override=total_factura,
+        )
 
     pdf.ln(6)
     pdf.set_x(MARGIN_L)
@@ -285,5 +291,7 @@ def crear_a4(
         pdf.set_x(MARGIN_L)
         pdf.set_font("Helvetica", "I", 9)
         pdf.multi_cell(ANCHO_UTIL, 4, leyenda)
+
+    dibujar_etiqueta_pie_pdf(pdf, etiqueta_pie)
 
     return bytes(pdf.output())
