@@ -1,6 +1,7 @@
 """Persistencia de pedidos a proveedores en Firestore."""
 from datetime import datetime, timezone, date, time
 
+from modulos.util_fechas import formatear_fecha_ar, rango_fechas_ar_a_utc, ahora_ar
 from modulos.db_firebase import (
     get_db,
     normalizar_codigo_proveedor,
@@ -28,16 +29,7 @@ def _a_datetime(valor):
 
 
 def formatear_fecha_pedido(valor, con_hora=True):
-    dt = _a_datetime(valor)
-    if not dt:
-        return "—"
-    try:
-        local = dt.astimezone()
-    except Exception:
-        local = dt
-    if con_hora:
-        return local.strftime("%d/%m/%Y %H:%M")
-    return local.strftime("%d/%m/%Y")
+    return formatear_fecha_ar(valor, con_hora=con_hora)
 
 
 def crear_pedido(cuit, nombre_proveedor, items, notas=""):
@@ -71,7 +63,7 @@ def crear_pedido(cuit, nombre_proveedor, items, notas=""):
         return False, "El pedido no tiene ítems válidos.", None
 
     ahora = datetime.now(timezone.utc)
-    pedido_id = f"PED_{cuit_l}_{ahora.strftime('%Y%m%d_%H%M%S')}"
+    pedido_id = f"PED_{cuit_l}_{ahora_ar().strftime('%Y%m%d_%H%M%S')}"
     cantidad_total = sum(ln["cantidad_pedida"] for ln in lineas)
     db = get_db()
     ref_ped = db.collection("pedidos").document(pedido_id)
@@ -120,16 +112,21 @@ def listar_pedidos(cuit=None, estado=None, fecha_desde=None, fecha_hasta=None, l
     resultado = []
     cuit_f = "".join(filter(str.isdigit, str(cuit or "")))
 
-    dt_desde = _a_datetime(fecha_desde)
-    if dt_desde and isinstance(fecha_desde, date) and not isinstance(fecha_desde, datetime):
-        dt_desde = datetime.combine(fecha_desde, time.min, tzinfo=timezone.utc)
-
-    dt_hasta = _a_datetime(fecha_hasta)
-    if dt_hasta:
+    dt_desde, dt_hasta = None, None
+    if fecha_desde is not None:
+        if isinstance(fecha_desde, date) and not isinstance(fecha_desde, datetime):
+            fh = fecha_hasta if fecha_hasta is not None else fecha_desde
+            if isinstance(fh, date) and not isinstance(fh, datetime):
+                dt_desde, dt_hasta = rango_fechas_ar_a_utc(fecha_desde, fh)
+            else:
+                dt_desde, _ = rango_fechas_ar_a_utc(fecha_desde, fecha_desde)
+        else:
+            dt_desde = _a_datetime(fecha_desde)
+    if fecha_hasta is not None and dt_hasta is None:
         if isinstance(fecha_hasta, date) and not isinstance(fecha_hasta, datetime):
-            dt_hasta = datetime.combine(fecha_hasta, time.max, tzinfo=timezone.utc)
-        elif isinstance(fecha_hasta, datetime) and fecha_hasta.time() == time.min:
-            dt_hasta = datetime.combine(fecha_hasta.date(), time.max, tzinfo=timezone.utc)
+            _, dt_hasta = rango_fechas_ar_a_utc(fecha_hasta, fecha_hasta)
+        else:
+            dt_hasta = _a_datetime(fecha_hasta)
 
     for doc in docs:
         data = doc.to_dict() or {}

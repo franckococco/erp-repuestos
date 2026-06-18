@@ -1,6 +1,7 @@
 """Caja negra: registro de acciones (solo visible para admin)."""
 import json
 from datetime import date, datetime, time, timezone
+from modulos.util_fechas import formatear_fecha_ar, rango_fechas_ar_a_utc, fecha_hoy_ar
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -118,10 +119,20 @@ def listar_auditoria(
             reverse=True,
         )
         docs = docs[: min(limite * 3, 1200)]
-    dt_desde = _a_datetime(fecha_desde)
-    dt_hasta = _a_datetime(fecha_hasta)
-    if dt_hasta and isinstance(fecha_hasta, date) and not isinstance(fecha_hasta, datetime):
-        dt_hasta = datetime.combine(fecha_hasta, time.max, tzinfo=timezone.utc)
+    dt_desde, dt_hasta = None, None
+    if fecha_desde is not None:
+        if isinstance(fecha_desde, date) and not isinstance(fecha_desde, datetime):
+            if fecha_hasta is not None and isinstance(fecha_hasta, date) and not isinstance(fecha_hasta, datetime):
+                dt_desde, dt_hasta = rango_fechas_ar_a_utc(fecha_desde, fecha_hasta)
+            else:
+                dt_desde, _ = rango_fechas_ar_a_utc(fecha_desde, fecha_desde)
+        else:
+            dt_desde = _a_datetime(fecha_desde)
+    if fecha_hasta is not None and dt_hasta is None:
+        if isinstance(fecha_hasta, date) and not isinstance(fecha_hasta, datetime):
+            _, dt_hasta = rango_fechas_ar_a_utc(fecha_hasta, fecha_hasta)
+        else:
+            dt_hasta = _a_datetime(fecha_hasta)
 
     u_f = str(usuario or "").strip().lower()
     m_f = str(modulo or "").strip().lower()
@@ -174,7 +185,7 @@ def render_panel_auditoria_admin():
         if x.get("usuario")
     })
 
-    hoy = date.today()
+    hoy = fecha_hoy_ar()
     c1, c2, c3, c4 = st.columns(4)
     f_desde = c1.date_input("Desde", value=hoy - timedelta(days=7), key="aud_desde")
     f_hasta = c2.date_input("Hasta", value=hoy, key="aud_hasta")
@@ -206,7 +217,7 @@ def render_panel_auditoria_admin():
     filas = []
     for it in items:
         f = it.get("fecha")
-        fs = f.astimezone().strftime("%d/%m/%Y %H:%M") if f else "—"
+        fs = formatear_fecha_ar(f) if f else "—"
         filas.append({
             "Fecha": fs,
             "Usuario": it.get("nombre") or it.get("usuario"),
@@ -222,7 +233,7 @@ def render_panel_auditoria_admin():
     with st.expander("Detalle del último evento filtrado", expanded=False):
         ult = items[0]
         st.json({
-            "fecha": str(ult.get("fecha")),
+            "fecha": formatear_fecha_ar(ult.get("fecha")),
             "usuario": ult.get("usuario"),
             "vendedor_id": ult.get("vendedor_id"),
             "modulo": ult.get("modulo"),

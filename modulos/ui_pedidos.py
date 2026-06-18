@@ -1,8 +1,10 @@
-from datetime import date, timedelta
+from datetime import timedelta
 
 import streamlit as st
 import pandas as pd
 from PIL import Image
+
+from modulos.util_fechas import fecha_hoy_ar
 
 from modulos.pedidos_db import (
     crear_pedido,
@@ -105,7 +107,7 @@ def _render_historial_pedidos(provs):
         options=["Todos", "Abiertos", "Cerrados"],
         key="hist_filtro_estado",
     )
-    hoy = date.today()
+    hoy = fecha_hoy_ar()
     fecha_desde = col_f3.date_input(
         "Desde",
         value=hoy - timedelta(days=90),
@@ -243,8 +245,8 @@ def render_pedidos():
             options=["— Todos —"] + sorted({lbl.split(" | ")[0] for lbl in opciones_ped.keys()}),
             key=f"cmp_prov_{tipo_doc}",
         )
-        cmp_desde = col_pd1.date_input("Desde", value=date.today() - timedelta(days=90), key=f"cmp_desde_{tipo_doc}")
-        cmp_hasta = col_pd2.date_input("Hasta", value=date.today(), key=f"cmp_hasta_{tipo_doc}")
+        cmp_desde = col_pd1.date_input("Desde", value=fecha_hoy_ar() - timedelta(days=90), key=f"cmp_desde_{tipo_doc}")
+        cmp_hasta = col_pd2.date_input("Hasta", value=fecha_hoy_ar(), key=f"cmp_hasta_{tipo_doc}")
 
         opts_filtradas = {}
         for lbl, pid in opciones_ped.items():

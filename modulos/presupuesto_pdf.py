@@ -1,6 +1,8 @@
 """PDF de presupuesto numerado (formato profesional)."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
+
+from modulos.util_fechas import ahora_ar
 
 from modulos.pdf_a4_comun import (
     MARGIN_L,
@@ -51,7 +53,7 @@ def crear_pdf_presupuesto(
     cuit_cli = str(cli.get("cuit", cli.get("cuit_dni", "")) or "")
     nro_txt = _fmt_nro_presupuesto(numero)
 
-    ahora = datetime.now()
+    ahora = ahora_ar()
     validez = ahora + timedelta(days=VALIDEZ_PRESUPUESTO_DIAS)
 
     pdf = nueva_pagina_a4()

@@ -34,7 +34,7 @@ from modulos.db_firebase import (
 from modulos.presupuesto_pdf import crear_pdf_presupuesto, VALIDEZ_PRESUPUESTO_DIAS
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_ticket, crear_a4
-from modulos.util_fechas import formatear_fecha_ar, TZ_ARGENTINA
+from modulos.util_fechas import formatear_fecha_ar, rango_fechas_ar_a_utc, fecha_hoy_ar
 from modulos.ia_mostrador import (
     FORMAS_PAGO,
     procesar_orden_mostrador,
@@ -1183,24 +1183,12 @@ def render_factura_arca_exitosa(key_suffix=""):
     return True
 
 
-def _rango_fechas_utc(fecha_desde: date, fecha_hasta: date):
-    inicio = datetime.combine(fecha_desde, time.min)
-    fin = datetime.combine(fecha_hasta, time.max)
-    try:
-        inicio = inicio.replace(tzinfo=TZ_ARGENTINA).astimezone(timezone.utc)
-        fin = fin.replace(tzinfo=TZ_ARGENTINA).astimezone(timezone.utc)
-    except Exception:
-        inicio = inicio.replace(tzinfo=timezone.utc)
-        fin = fin.replace(tzinfo=timezone.utc)
-    return inicio, fin
-
-
 def render_historial_facturas_arca():
     """Buscar y reimprimir facturas ARCA (pestaña dedicada; carga bajo demanda)."""
     st.markdown("#### Facturas ARCA — buscar y reimprimir")
     st.caption("Consultá comprobantes emitidos por fecha, número, cliente o CAE.")
 
-    hoy = date.today()
+    hoy = fecha_hoy_ar()
     col_d1, col_d2, col_f = st.columns([1, 1, 2])
     with col_d1:
         fecha_desde = st.date_input(
@@ -1239,7 +1227,7 @@ def render_historial_facturas_arca():
     lista = st.session_state.get("hist_arca_resultados")
     if lista is None or buscar:
         try:
-            ini, fin = _rango_fechas_utc(fecha_desde, fecha_hasta)
+            ini, fin = rango_fechas_ar_a_utc(fecha_desde, fecha_hasta)
             lista = listar_comprobantes_arca(
                 limite=80,
                 fecha_desde=ini,

@@ -1,8 +1,9 @@
 """Generación de PDF ticket (58mm) y A4 para comprobantes ARCA."""
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fpdf import FPDF
+
+from modulos.util_fechas import ahora_ar
 
 from modulos.pdf_a4_comun import (
     MARGIN_L,
@@ -93,7 +94,7 @@ def crear_ticket(
     pdf.cell(ancho_util, 4, f"FACTURA {tipo_letra} Nro: {nro_fc}", align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", font_base - 1)
     pdf.cell(
-        ancho_util, 3, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+        ancho_util, 3, f"Fecha: {ahora_ar().strftime('%d/%m/%Y %H:%M')}",
         align="C", new_x="LMARGIN", new_y="NEXT",
     )
 
@@ -236,7 +237,7 @@ def crear_a4(
             f"Pto. Vta: {nro_pto:04d}",
             f"Comp. Nro: {nro_fc:08d}",
             f"Cod. {cod_afip}",
-            f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            f"Fecha: {ahora_ar().strftime('%d/%m/%Y %H:%M')}",
         ],
     )
 

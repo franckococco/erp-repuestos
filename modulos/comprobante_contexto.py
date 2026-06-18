@@ -1,8 +1,8 @@
 """Contexto unificado para PDF ticket y A4 (emisor + cliente)."""
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from modulos.util_branding import NOMBRE_EMPRESA
+from modulos.util_fechas import ahora_ar
 from modulos.util_pdf import texto_para_pdf
 
 
@@ -53,7 +53,7 @@ def armar_contexto_comprobante(
             "cod_afip": "001" if _s(cli, "cbte_tipo", "6") == "1" else "006",
             "punto_venta": int(float(datos_respuesta.get("punto_venta") or 0)),
             "numero": int(float(datos_respuesta.get("numero_factura") or 0)),
-            "fecha_emision": datetime.now().strftime("%d/%m/%Y"),
+            "fecha_emision": ahora_ar().strftime("%d/%m/%Y"),
         },
         "cliente": {
             "cuit": _s(cli, "cuit", "00000000000"),

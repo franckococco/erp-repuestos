@@ -1102,10 +1102,11 @@ elif pagina == "config":
             st.caption("Descargar inventario actual (CSV).")
             csv_data = exportar_inventario_csv()
             if csv_data:
+                from modulos.util_fechas import fecha_hoy_ar
                 st.download_button(
                     "Descargar CSV",
                     data=csv_data,
-                    file_name=f"backup_inventario_{datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"backup_inventario_{fecha_hoy_ar().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     type="primary",
                 )

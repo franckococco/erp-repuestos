@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from modulos.db_firebase import get_db, invalidar_cache_datos
-from modulos.util_fechas import formatear_fecha_ar
+from modulos.util_fechas import formatear_fecha_ar, ahora_ar
 
 
 def _ahora():
@@ -31,7 +31,7 @@ def guardar_borrador_factura(datos, borrador_id=None):
             borrador_id = None
 
     if not borrador_id:
-        borrador_id = f"BORRADOR_{cuit}_{ahora.strftime('%Y%m%d_%H%M%S')}"
+        borrador_id = f"BORRADOR_{cuit}_{ahora_ar().strftime('%Y%m%d_%H%M%S')}"
         ref = db.collection("facturas_borrador").document(borrador_id)
 
     payload = {
