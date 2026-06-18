@@ -320,6 +320,19 @@ def render_pedidos():
                 tipo_documento=tipo_doc,
             )
             st.session_state[session_res_key] = resultado
+            try:
+                from modulos.auditoria_app import registrar_auditoria
+                res = resultado.get("resumen", {})
+                registrar_auditoria(
+                    "pedidos",
+                    f"comparar_pedido_{tipo_doc}",
+                    f"Pedido {pedido_id} vs {tipo_doc}: OK={res.get('ok')}",
+                    detalle=res,
+                    exito=bool(res.get("ok")),
+                    ref_id=pedido_id,
+                )
+            except Exception:
+                pass
             st.rerun()
 
         resultado = st.session_state.get(session_res_key)

@@ -129,6 +129,19 @@ def render_control_factura_remito():
                 else:
                     resultado["sugerencias_pares"] = []
                 st.session_state.control_resultado = resultado
+                try:
+                    from modulos.auditoria_app import registrar_auditoria
+                    res = resultado.get("resumen", {})
+                    registrar_auditoria(
+                        "carga",
+                        "comparar_factura_remito",
+                        f"Factura vs remito CUIT {cuit}: OK={res.get('ok')}",
+                        detalle=res,
+                        exito=bool(res.get("ok")),
+                        ref_id=cuit,
+                    )
+                except Exception:
+                    pass
                 st.rerun()
 
     resultado = st.session_state.control_resultado

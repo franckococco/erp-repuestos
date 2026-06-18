@@ -352,6 +352,22 @@ def render_carga_factura():
             st.error(msg)
             return
 
+        from modulos.auditoria_app import registrar_auditoria
+        registrar_auditoria(
+            "carga",
+            "confirmar_factura_proveedor",
+            f"Ingreso factura {nombre_prov} · {len(articulos_lista)} artículos",
+            detalle={
+                "proveedor": nombre_prov,
+                "cuit": cuit_detectado,
+                "comprobante": f"{pv_fmt}-{num_fmt}",
+                "articulos": len(articulos_lista),
+                "condicion_pago": condicion_pago,
+            },
+            exito=True,
+            ref_id=f"{cuit_detectado}_{pv_fmt}_{num_fmt}",
+        )
+
         if st.session_state.borrador_id:
             eliminar_borrador_factura(st.session_state.borrador_id)
             st.session_state.borrador_id = None

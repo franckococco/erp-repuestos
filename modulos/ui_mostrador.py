@@ -1379,14 +1379,38 @@ def ejecutar_emitir_factura_arca(
     comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
+    nro = _formato_nro_comprobante(datos_resp)
     try:
         from modulos.puntos_vendedor import registrar_venta_puntos, asegurar_vendedor
         asegurar_vendedor(str(vendedor), nombre=str(vendedor))
-        registrar_venta_puntos(str(vendedor), float(total_final), comp_id)
+        ok_pt, msg_pt, pts = registrar_venta_puntos(str(vendedor), float(total_final), comp_id)
+    except Exception:
+        ok_pt, msg_pt, pts = True, "", 0
+
+    try:
+        from modulos.auditoria_app import registrar_auditoria
+        registrar_auditoria(
+            "mostrador",
+            "facturar_arca",
+            f"Factura {nro} · ${total_final:,.2f} · {datos_cliente.get('nombre', '')}",
+            detalle={
+                "comprobante_id": comp_id,
+                "nro": nro,
+                "cae": datos_resp.get("cae"),
+                "total": total_final,
+                "cliente": datos_cliente.get("nombre"),
+                "forma_pago": forma_pago,
+                "vendedor": str(vendedor),
+                "items": len(items_fc),
+                "puntos_msg": msg_pt if ok_pt else None,
+            },
+            exito=True,
+            ref_id=comp_id,
+            vendedor_id=str(vendedor),
+        )
     except Exception:
         pass
 
-    nro = _formato_nro_comprobante(datos_resp)
     datos_panel = {
         "respuesta": datos_resp,
         "pdf_ticket": pdf_ticket,
@@ -1412,6 +1436,17 @@ def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pag
     return ok, msj
 
 
+def _audit_mostrador(accion, resumen, detalle=None, exito=True, ref_id=None, error_msg=None):
+    try:
+        from modulos.auditoria_app import registrar_auditoria
+        registrar_auditoria(
+            "mostrador", accion, resumen, detalle=detalle,
+            exito=exito, ref_id=ref_id, error_msg=error_msg,
+        )
+    except Exception:
+        pass
+
+
 def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_porc):
     tipo = pendiente.get("tipo")
     forma_pago = pendiente.get("forma_pago") or _forma_pago_actual(vendedor)
@@ -1421,6 +1456,13 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         if exito:
             _cerrar_presupuesto_cargado("vendido")
             limpiar_venta_mostrador(vendedor, reset_cliente=True)
+        _audit_mostrador(
+            "confirmar_venta",
+            f"Venta sin factura · ${total_final:,.2f}",
+            detalle={"vendedor": str(vendedor), "total": total_final},
+            exito=exito,
+            error_msg=None if exito else msj,
+        )
         return exito, msj
 
     if tipo == "facturar":
@@ -1447,6 +1489,14 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         )
         if ok:
             st.session_state.presupuesto_cargado_id = nuevo_id
+        _audit_mostrador(
+            "guardar_presupuesto",
+            f"Presupuesto guardado · ${total_final:,.2f}",
+            detalle={"presupuesto_id": nuevo_id, "vendedor": str(vendedor), "total": total_final},
+            exito=ok,
+            ref_id=nuevo_id,
+            error_msg=None if ok else msj,
+        )
         return ok, msj
 
     if tipo == "vaciar_carrito":

@@ -123,6 +123,8 @@ try:
     if not st.session_state._firebase_ok:
         get_db()
         st.session_state._firebase_ok = True
+        from modulos.usuarios_app_db import inicializar_usuarios_predeterminados
+        inicializar_usuarios_predeterminados()
     else:
         get_db()
 
@@ -143,15 +145,29 @@ from modulos.auth_app import (
     sesion_activa,
     render_login,
     render_puntos_sidebar,
+    render_cambiar_clave_sidebar,
     es_admin,
     cerrar_sesion,
     vendedor_id_sesion,
     rol_actual,
+    render_admin_secciones,
 )
 
 if not sesion_activa():
     render_login()
     st.stop()
+
+from modulos.auditoria_app import registrar_auditoria
+
+
+def _aud(modulo, accion, resumen, detalle=None, exito=True, ref_id=None, error_msg=None):
+    try:
+        registrar_auditoria(
+            modulo, accion, resumen,
+            detalle=detalle, exito=exito, ref_id=ref_id, error_msg=error_msg,
+        )
+    except Exception:
+        pass
 
 # Atajos Ctrl+S/I/M/A/C: desactivados en Cloud (evita components.html al arrancar).
 
@@ -297,7 +313,7 @@ if "hist_arca_resultados" not in st.session_state:
 if "hist_arca_preview" not in st.session_state:
     st.session_state.hist_arca_preview = None
 if "pagina" not in st.session_state:
-    st.session_state.pagina = "mostrador" if rol_actual() == "vendedor" else "carga"
+    st.session_state.pagina = "carga"
 
 pagina = render_sidebar(
     st.session_state.cliente_activo,
@@ -306,6 +322,7 @@ pagina = render_sidebar(
 )
 with st.sidebar:
     render_puntos_sidebar()
+    render_cambiar_clave_sidebar()
     if st.button("Salir", use_container_width=True):
         cerrar_sesion()
         st.rerun()
@@ -604,6 +621,13 @@ elif pagina == "inventario":
                         )
 
                         if exito:
+                            _aud(
+                                "inventario", "alta_manual",
+                                f"Alta {codigo_manual} / {marca_manual} · {stock_manual} u.",
+                                detalle={"codigo": codigo_manual, "marca": marca_manual, "stock": stock_manual},
+                                exito=True,
+                                ref_id=codigo_manual,
+                            )
                             st.success(f"✅ {msj_alta}")
                             st.rerun()
                         else:
@@ -903,6 +927,14 @@ elif pagina == "asistente":
 
                     st.session_state.ultima_respuesta = "✅ Listo. Operación registrada." if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
+                    _aud(
+                        "asistente", accion + "_stock",
+                        f"{accion} {cant} u. · {encontrados[0].get('id', termino)}",
+                        detalle={"termino": termino, "cantidad": cant, "id": encontrados[0].get("id")},
+                        exito=exito,
+                        ref_id=encontrados[0].get("id"),
+                        error_msg=None if exito else msj_db,
+                    )
                 elif len(encontrados) > 1:
                     st.session_state.ultima_respuesta = (
                         f"⚠️ Hay {len(encontrados)} variantes para '{termino}'. "
@@ -1035,12 +1067,15 @@ elif pagina == "asistente":
                     st.session_state.ultima_orden = "Confirmar carga de producto"
                     st.session_state.ultima_respuesta = f"✅ {msj_db}" if exito else f"❌ {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
+                    if not exito:
+                        _aud("asistente", "carga_producto_cancelada", "Error al confirmar carga", exito=False, error_msg=msj_db)
                     st.rerun()
                 if col_no.button("Cancelar", use_container_width=True, key="btn_cancel_prod_voz"):
                     st.session_state.producto_pendiente_voz = None
                     st.session_state.ultima_orden = "Cancelar carga de producto"
                     st.session_state.ultima_respuesta = "Carga cancelada."
                     st.session_state.ultimo_estado = "normal"
+                    _aud("asistente", "carga_producto_cancelada", "Usuario canceló carga de producto", exito=True)
                     st.rerun()
 
             if st.session_state.get("df_reporte") is not None:
@@ -1059,8 +1094,7 @@ elif pagina == "config":
 
     if es_admin():
         st.divider()
-        from modulos.auth_app import render_panel_puntos_admin
-        render_panel_puntos_admin()
+        render_admin_secciones()
 
     with st.expander("Backup y restauración de stock", expanded=False):
         col_down, col_up = st.columns(2)
@@ -1099,6 +1133,7 @@ elif pagina == "config":
                     with st.spinner("Procesando archivo..."):
                         exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
                         if exito:
+                            _aud("config", "restaurar_csv", f"Restauración CSV modo {modo_restauracion}", exito=True)
                             st.success(msg_rest)
                             st.rerun()
 
@@ -1108,6 +1143,7 @@ elif pagina == "config":
             if st.button("💥 BORRAR TODA LA BASE DE DATOS", type="primary"):
                 exito, msg = borrar_toda_la_base_de_datos()
                 if exito:
+                    _aud("config", "borrar_base_datos", "Borrado total de la base", exito=True)
                     st.success(msg)
                     st.rerun()
                 else:

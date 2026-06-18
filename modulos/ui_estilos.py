@@ -92,41 +92,33 @@ def render_sidebar(cliente_activo, rol="admin", nombre_usuario=""):
 
         st.divider()
 
-        if rol == "vendedor":
-            nav_labels = ["🛒 Mostrador"]
-            nav_keys = ["mostrador"]
-            st.session_state.pagina = "mostrador"
-            st.radio("Menú", nav_labels, index=0, label_visibility="collapsed", disabled=True)
-        else:
-            nav_labels = [
-                "📸 Carga Stock",
-                "📦 Inventario",
-                "🛒 Mostrador",
-                "🤖 Asistente",
-                "⚙️ Configuración",
-            ]
-            nav_keys = ["carga", "inventario", "mostrador", "asistente", "config"]
-            idx = nav_keys.index(st.session_state.get("pagina", "carga"))
-            elegido = st.radio(
-                "Menú",
-                nav_labels,
-                index=idx,
-                label_visibility="collapsed",
-            )
-            st.session_state.pagina = nav_keys[nav_labels.index(elegido)]
-
-        if rol != "vendedor":
-            st.divider()
-            st.markdown("**Cliente activo**")
-            st.write(cliente_activo.get("nombre", "Particular"))
-            cbte = str(cliente_activo.get("tipo_comprobante", "6"))
-            st.caption(f"Factura {'A' if cbte == '1' else 'B'} · CUIT {cliente_activo.get('cuit', '—')}")
-            if float(cliente_activo.get("descuento", 0)) > 0:
-                st.caption(f"Descuento: {cliente_activo['descuento']}%")
+        nav_labels = [
+            "📸 Carga Stock",
+            "📦 Inventario",
+            "🛒 Mostrador",
+            "🤖 Asistente",
+            "⚙️ Configuración",
+        ]
+        nav_keys = ["carga", "inventario", "mostrador", "asistente", "config"]
+        idx = nav_keys.index(st.session_state.get("pagina", "carga")) if st.session_state.get("pagina") in nav_keys else 0
+        elegido = st.radio(
+            "Menú",
+            nav_labels,
+            index=idx,
+            label_visibility="collapsed",
+        )
+        st.session_state.pagina = nav_keys[nav_labels.index(elegido)]
 
         st.divider()
-        if rol != "vendedor":
-            st.caption("Atajos: Ctrl+S · I · M · A · C")
+        st.markdown("**Cliente activo**")
+        st.write(cliente_activo.get("nombre", "Particular"))
+        cbte = str(cliente_activo.get("tipo_comprobante", "6"))
+        st.caption(f"Factura {'A' if cbte == '1' else 'B'} · CUIT {cliente_activo.get('cuit', '—')}")
+        if float(cliente_activo.get("descuento", 0)) > 0:
+            st.caption(f"Descuento: {cliente_activo['descuento']}%")
+
+        st.divider()
+        st.caption("Atajos: Ctrl+S · I · M · A · C")
 
     return st.session_state.pagina
 

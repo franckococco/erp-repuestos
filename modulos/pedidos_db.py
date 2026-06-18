@@ -92,6 +92,22 @@ def crear_pedido(cuit, nombre_proveedor, items, notas=""):
         batch.set(ref_ped.collection("items").document(item_id), ln)
     batch.commit()
 
+    from modulos.auditoria_app import registrar_auditoria
+    registrar_auditoria(
+        "pedidos",
+        "crear_pedido",
+        f"Pedido {pedido_id} · {len(lineas)} ítems · {cantidad_total} u.",
+        detalle={
+            "pedido_id": pedido_id,
+            "cuit": cuit_l,
+            "proveedor": nombre_proveedor,
+            "item_count": len(lineas),
+            "cantidad_total": cantidad_total,
+        },
+        exito=True,
+        ref_id=pedido_id,
+    )
+
     return True, f"Pedido {pedido_id} guardado ({len(lineas)} ítems, {cantidad_total} u.).", pedido_id
 
 

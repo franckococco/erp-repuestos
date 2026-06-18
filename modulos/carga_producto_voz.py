@@ -163,19 +163,34 @@ def ejecutar_carga_producto_voz(payload):
             })
 
         invalidar_cache_datos()
-        return True, f"Variante {marca} agregada al código {codigo} ({stock} u.)."
+        exito, msj = True, f"Variante {marca} agregada al código {codigo} ({stock} u.)."
+    else:
+        exito, msj = alta_manual_producto(
+            codigo=codigo,
+            condicion=marca,
+            vehiculo=payload.get("vehiculos", ["UNIVERSAL"]),
+            descripcion=payload.get("descripcion", ""),
+            cuit_proveedor=payload.get("cuit_proveedor", "0"),
+            precio_base=precio,
+            recargo=float(payload.get("recargo", 0)),
+            stock=stock,
+            pasillo=_entero_ubicacion(payload.get("pasillo")),
+            piso=_entero_ubicacion(payload.get("piso")),
+            modulo=_entero_ubicacion(payload.get("modulo")),
+            fila=_entero_ubicacion(payload.get("fila")),
+        )
 
-    return alta_manual_producto(
-        codigo=codigo,
-        condicion=marca,
-        vehiculo=payload.get("vehiculos", ["UNIVERSAL"]),
-        descripcion=payload.get("descripcion", ""),
-        cuit_proveedor=payload.get("cuit_proveedor", "0"),
-        precio_base=precio,
-        recargo=float(payload.get("recargo", 0)),
-        stock=stock,
-        pasillo=_entero_ubicacion(payload.get("pasillo")),
-        piso=_entero_ubicacion(payload.get("piso")),
-        modulo=_entero_ubicacion(payload.get("modulo")),
-        fila=_entero_ubicacion(payload.get("fila")),
-    )
+    try:
+        from modulos.auditoria_app import registrar_auditoria
+        registrar_auditoria(
+            "asistente",
+            "carga_producto",
+            f"{'OK' if exito else 'Error'}: {codigo} / {marca} · {stock} u.",
+            detalle={"codigo": codigo, "marca": marca, "stock": stock, "descripcion": payload.get("descripcion")},
+            exito=bool(exito),
+            ref_id=codigo,
+            error_msg=None if exito else str(msj),
+        )
+    except Exception:
+        pass
+    return exito, msj
