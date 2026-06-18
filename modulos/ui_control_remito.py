@@ -43,12 +43,13 @@ def render_control_factura_remito():
                 st.session_state.control_resultado = None
                 st.rerun()
         foto_f = st.camera_input("Foto factura", key="cam_ctrl_fact")
-        arch_f = st.file_uploader("Imagen factura", type=["png", "jpg", "jpeg"], key="up_ctrl_fact")
+        arch_f = st.file_uploader("Factura (PDF o imagen)", type=["png", "jpg", "jpeg", "pdf"], key="up_ctrl_fact")
         img_f = foto_f or arch_f
         if img_f and st.button("Leer factura", key="btn_leer_fact_ctrl", use_container_width=True):
             with st.spinner("Leyendo factura..."):
                 try:
-                    datos = procesar_factura_con_ia(Image.open(img_f))
+                    from modulos.util_imagen import imagen_desde_upload
+                    datos = procesar_factura_con_ia(imagen_desde_upload(img_f))
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):
                             art["codigo_proveedor"] = art.get("codigo", "")
@@ -72,12 +73,13 @@ def render_control_factura_remito():
     with col_r:
         st.subheader("Remito")
         foto_r = st.camera_input("Foto remito", key="cam_ctrl_rem")
-        arch_r = st.file_uploader("Imagen remito", type=["png", "jpg", "jpeg"], key="up_ctrl_rem")
+        arch_r = st.file_uploader("Remito (PDF o imagen)", type=["png", "jpg", "jpeg", "pdf"], key="up_ctrl_rem")
         img_r = foto_r or arch_r
         if img_r and st.button("Leer remito", key="btn_leer_rem_ctrl", use_container_width=True):
             with st.spinner("Leyendo remito..."):
                 try:
-                    datos = procesar_remito_con_ia(Image.open(img_r))
+                    from modulos.util_imagen import imagen_desde_upload
+                    datos = procesar_remito_con_ia(imagen_desde_upload(img_r))
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):
                             art["codigo_proveedor"] = art.get("codigo", "")

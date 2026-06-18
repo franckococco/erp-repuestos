@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 from modulos.util_vehiculos import normalizar_lista_vehiculos, vehiculos_a_texto
+from modulos.normalizar_carga_producto import normalizar_orden_cargar_producto
 from modulos.db_firebase import (
     normalizar_codigo_proveedor,
     sanitizar_clave_marca,
@@ -30,6 +31,8 @@ def validar_y_preparar_carga_producto_voz(datos):
     """
     if not isinstance(datos, dict):
         return False, None, "Datos inválidos."
+
+    datos = normalizar_orden_cargar_producto(dict(datos))
 
     codigo = normalizar_codigo_proveedor(datos.get("codigo", ""))
     descripcion = str(datos.get("descripcion", "") or "").strip()

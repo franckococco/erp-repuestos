@@ -194,7 +194,8 @@ def parse_cargar_producto_rapido(texto_usuario):
     }
     for k, v in ubi.items():
         out[k] = v
-    return out
+    from modulos.normalizar_carga_producto import normalizar_orden_cargar_producto
+    return normalizar_orden_cargar_producto(out, texto_usuario)
 
 
 def parse_alta_baja_rapido(texto_usuario):
@@ -369,6 +370,10 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
                 resultado["operador"] = "mayor_o_igual"
             else:
                 resultado["operador"] = operador
+
+        if isinstance(resultado, dict) and resultado.get("accion") == "cargar_producto":
+            from modulos.normalizar_carga_producto import normalizar_orden_cargar_producto
+            resultado = normalizar_orden_cargar_producto(resultado, texto_usuario)
 
         return resultado
         

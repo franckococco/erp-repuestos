@@ -1379,6 +1379,13 @@ def ejecutar_emitir_factura_arca(
     comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
     )
+    try:
+        from modulos.puntos_vendedor import registrar_venta_puntos, asegurar_vendedor
+        asegurar_vendedor(str(vendedor), nombre=str(vendedor))
+        registrar_venta_puntos(str(vendedor), float(total_final), comp_id)
+    except Exception:
+        pass
+
     nro = _formato_nro_comprobante(datos_resp)
     datos_panel = {
         "respuesta": datos_resp,

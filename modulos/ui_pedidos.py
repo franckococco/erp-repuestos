@@ -286,12 +286,18 @@ def render_pedidos():
 
         col_cam, col_up = st.columns(2)
         foto = col_cam.camera_input(f"Foto {tipo_doc}", key=f"cam_ped_{tipo_doc}")
-        arch = col_up.file_uploader(f"Imagen {tipo_doc}", type=["png", "jpg", "jpeg"], key=f"up_ped_{tipo_doc}")
-        img = foto or arch
-        if img and st.button(f"Leer {tipo_doc}", key=f"leer_{tipo_doc}"):
+        arch = col_up.file_uploader(
+            f"Archivo {tipo_doc} (PDF o imagen)",
+            type=["png", "jpg", "jpeg", "pdf"],
+            key=f"up_ped_{tipo_doc}",
+        )
+        img_src = foto or arch
+        if img_src and st.button(f"Leer {tipo_doc}", key=f"leer_{tipo_doc}"):
             with st.spinner(f"Leyendo {tipo_doc}..."):
                 try:
-                    datos = leer_fn(Image.open(img))
+                    from modulos.util_imagen import imagen_desde_upload
+                    pil = imagen_desde_upload(img_src)
+                    datos = leer_fn(pil)
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):
                             art.setdefault("codigo_proveedor", art.get("codigo", ""))
@@ -301,7 +307,7 @@ def render_pedidos():
                     st.success(f"{titulo_doc} leído: {len(datos.get('articulos', []))} ítems.")
                     st.rerun()
                 except Exception as e:
-                    st.error(str(e))
+                    st.error(f"No se pudo leer el archivo: {e}")
 
         doc = st.session_state.get(session_doc_key)
         if doc:

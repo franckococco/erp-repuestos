@@ -136,8 +136,8 @@ def render_carga_factura():
         )
     with col_arch:
         archivo = st.file_uploader(
-            "Subir imagen de factura",
-            type=["png", "jpg", "jpeg"],
+            "Subir factura (PDF o imagen)",
+            type=["png", "jpg", "jpeg", "pdf"],
             label_visibility="visible",
         )
         mejorar_img = st.checkbox(
@@ -150,7 +150,8 @@ def render_carga_factura():
         if st.button("Procesar Factura", type="primary"):
             with st.spinner("Mejorando imagen y leyendo factura con IA..."):
                 try:
-                    img = Image.open(archivo)
+                    from modulos.util_imagen import imagen_desde_upload
+                    img = imagen_desde_upload(archivo)
                     img_proc = mejorar_imagen_documento(img.copy()) if mejorar_img else img
                     if mejorar_img:
                         with st.expander("Vista previa de imagen", expanded=False):

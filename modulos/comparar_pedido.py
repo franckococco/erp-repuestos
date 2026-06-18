@@ -1,5 +1,6 @@
 """Comparación pedido vs factura o remito (por código proveedor)."""
 from modulos.db_firebase import normalizar_codigo_proveedor, sanitizar_clave_marca, clave_linea_factura
+from modulos.normalizar_carga_producto import extraer_marca_desde_texto
 
 
 def _clave_codigo_proveedor(codigo, marca):
@@ -8,13 +9,21 @@ def _clave_codigo_proveedor(codigo, marca):
     return clave_linea_factura(cod, mar) if cod else ""
 
 
+def _marca_linea(art: dict) -> str:
+    marca = sanitizar_clave_marca(art.get("marca", "GENERICO"))
+    if marca != "GENERICO":
+        return marca
+    desc = str(art.get("descripcion", "") or "")
+    return extraer_marca_desde_texto(desc, "GENERICO")
+
+
 def preparar_lineas_pedido(items):
     lineas = []
     for art in items or []:
         if not isinstance(art, dict):
             continue
         cod = normalizar_codigo_proveedor(art.get("codigo_proveedor") or art.get("codigo", ""))
-        marca = sanitizar_clave_marca(art.get("marca", "GENERICO"))
+        marca = _marca_linea(art)
         if not cod:
             continue
         try:
@@ -35,13 +44,13 @@ def preparar_lineas_pedido(items):
 
 
 def preparar_lineas_documento(items):
-    """Factura o remito: empareja siempre por código proveedor + marca."""
+    """Factura o remito: empareja por código proveedor + marca (inferida si falta)."""
     lineas = []
     for art in items or []:
         if not isinstance(art, dict):
             continue
         cod = normalizar_codigo_proveedor(art.get("codigo_proveedor") or art.get("codigo", ""))
-        marca = sanitizar_clave_marca(art.get("marca_variante") or art.get("marca", "GENERICO"))
+        marca = _marca_linea(art)
         if not cod:
             desc = str(art.get("descripcion", ""))
             cod = desc.replace(" ", "_").upper()[:15] if desc else ""
@@ -74,6 +83,38 @@ def _agrupar_por_clave(lineas):
     return grupos
 
 
+def _indice_por_codigo(grupos):
+    """codigo_proveedor -> lista de claves (todas las marcas)."""
+    idx = {}
+    for clave, ln in grupos.items():
+        cod = ln["codigo_proveedor"]
+        idx.setdefault(cod, []).append(clave)
+    return idx
+
+
+def _emparejar_linea_pedido(p, doc, idx_doc):
+    """Busca línea en documento: clave exacta o mismo código si hay GENERICO."""
+    clave = p["clave"]
+    if clave in doc:
+        return doc[clave], clave
+
+    cod = p["codigo_proveedor"]
+    candidatos = idx_doc.get(cod, [])
+    if len(candidatos) == 1:
+        k = candidatos[0]
+        return doc[k], k
+
+    if p["marca"] == "GENERICO":
+        for k in candidatos:
+            return doc[k], k
+
+    for k in candidatos:
+        if doc[k]["marca"] == "GENERICO":
+            return doc[k], k
+
+    return None, None
+
+
 def comparar_pedido_con_documento(items_pedido, items_documento, tipo_documento="documento"):
     """
     Compara pedido (base) contra factura o remito.
@@ -81,14 +122,15 @@ def comparar_pedido_con_documento(items_pedido, items_documento, tipo_documento=
     """
     ped = _agrupar_por_clave(preparar_lineas_pedido(items_pedido))
     doc = _agrupar_por_clave(preparar_lineas_documento(items_documento))
+    idx_doc = _indice_por_codigo(doc)
+    doc_usado = set()
 
     coinciden = []
     dif_cantidad = []
     faltan_en_doc = []
-    sobran_en_doc = []
 
     for clave, p in ped.items():
-        d = doc.get(clave)
+        d, clave_doc = _emparejar_linea_pedido(p, doc, idx_doc)
         base = {
             "codigo_proveedor": p["codigo_proveedor"],
             "marca": p["marca"],
@@ -96,19 +138,22 @@ def comparar_pedido_con_documento(items_pedido, items_documento, tipo_documento=
             "cant_pedido": p["cantidad"],
             "cant_documento": d["cantidad"] if d else 0,
         }
-        if d and p["cantidad"] == d["cantidad"]:
-            coinciden.append({**base, "estado": "ok"})
-        elif d:
-            dif_cantidad.append({
-                **base,
-                "estado": "diferencia",
-                "delta": d["cantidad"] - p["cantidad"],
-            })
+        if d:
+            doc_usado.add(clave_doc)
+            if p["cantidad"] == d["cantidad"]:
+                coinciden.append({**base, "estado": "ok"})
+            else:
+                dif_cantidad.append({
+                    **base,
+                    "estado": "diferencia",
+                    "delta": d["cantidad"] - p["cantidad"],
+                })
         else:
             faltan_en_doc.append({**base, "estado": "falta_documento"})
 
+    sobran_en_doc = []
     for clave, d in doc.items():
-        if clave not in ped:
+        if clave not in doc_usado:
             sobran_en_doc.append({
                 "codigo_proveedor": d["codigo_proveedor"],
                 "marca": d["marca"],

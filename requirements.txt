@@ -9,4 +9,4 @@ firebase-admin
 fpdf2
 qrcode
 groq
-requests
+pymupdf

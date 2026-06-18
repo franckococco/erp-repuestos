@@ -139,6 +139,20 @@ except Exception as e:
 
 aplicar_estilos_globales()
 
+from modulos.auth_app import (
+    sesion_activa,
+    render_login,
+    render_puntos_sidebar,
+    es_admin,
+    cerrar_sesion,
+    vendedor_id_sesion,
+    rol_actual,
+)
+
+if not sesion_activa():
+    render_login()
+    st.stop()
+
 # Atajos Ctrl+S/I/M/A/C: desactivados en Cloud (evita components.html al arrancar).
 
 # --- Búsqueda de proveedores (normalización en util_busqueda) ---
@@ -283,9 +297,18 @@ if "hist_arca_resultados" not in st.session_state:
 if "hist_arca_preview" not in st.session_state:
     st.session_state.hist_arca_preview = None
 if "pagina" not in st.session_state:
-    st.session_state.pagina = "carga"
+    st.session_state.pagina = "mostrador" if rol_actual() == "vendedor" else "carga"
 
-pagina = render_sidebar(st.session_state.cliente_activo)
+pagina = render_sidebar(
+    st.session_state.cliente_activo,
+    rol=rol_actual(),
+    nombre_usuario=st.session_state.get("auth_nombre", ""),
+)
+with st.sidebar:
+    render_puntos_sidebar()
+    if st.button("Salir", use_container_width=True):
+        cerrar_sesion()
+        st.rerun()
 
 # --- CARGA DE STOCK ---
 if pagina == "carga":
@@ -634,7 +657,19 @@ elif pagina == "mostrador":
         with bar_cred:
             render_credenciales_arca()
 
-        vendedor = VENDEDOR_MOSTRADOR
+        vendedor = vendedor_id_sesion()
+        if es_admin():
+            from modulos.puntos_vendedor import listar_vendedores
+            vends = listar_vendedores()
+            if vends:
+                opciones_v = {f"{v.get('nombre', v['id'])}": v["id"] for v in vends}
+                sel_v = st.selectbox(
+                    "Vendedor de la venta",
+                    options=list(opciones_v.keys()),
+                    key="sel_vendedor_admin_mostrador",
+                )
+                vendedor = opciones_v.get(sel_v, vendedor)
+                st.session_state.vendedor_mostrador_sel = vendedor
 
         if render_factura_arca_exitosa("top"):
             st.divider()
@@ -1021,6 +1056,11 @@ elif pagina == "config":
     titulo_seccion("Configuración", "Ctrl+C")
 
     render_config_ticket_mostrador(en_pagina_config=True)
+
+    if es_admin():
+        st.divider()
+        from modulos.auth_app import render_panel_puntos_admin
+        render_panel_puntos_admin()
 
     with st.expander("Backup y restauración de stock", expanded=False):
         col_down, col_up = st.columns(2)
