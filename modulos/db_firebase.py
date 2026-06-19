@@ -16,6 +16,16 @@ from modulos.util_vehiculos import (
     vehiculos_en_busqueda,
     combinar_vehiculos,
 )
+from modulos.precios_proveedor import (
+    calcular_cascada_precios,
+    calcular_cascada_desde_proveedor,
+    margenes_desde_proveedor,
+    recalcular_precios_proveedor,
+    recalcular_precios_todos,
+    recalcular_precios_items,
+    IVA_PCT_DEFAULT,
+    RENTABILIDAD_PCT_DEFAULT,
+)
 
 load_dotenv(override=True)
 
@@ -668,12 +678,22 @@ def obtener_proveedores() -> dict:
     docs = get_db().collection("proveedores").get()
     return {d.id: d.to_dict() or {} for d in docs}
 
-def configurar_proveedor(nombre, cuit, recargo_contado=0.0, recargo_30_dias=15.0, descuento=0.0):
+def configurar_proveedor(
+    nombre,
+    cuit,
+    recargo_contado=0.0,
+    recargo_30_dias=15.0,
+    descuento=0.0,
+    iva_pct=21.0,
+    rentabilidad_pct=40.0,
+):
     id_prov = "".join(filter(str.isdigit, str(cuit)))
     get_db().collection("proveedores").document(id_prov).set({
         "nombre": str(nombre).upper(),
         "cuit": id_prov,
         "descuento": float(descuento),
+        "iva_pct": float(iva_pct),
+        "rentabilidad_pct": float(rentabilidad_pct),
         "condiciones": {
             "Contado": float(recargo_contado),
             "30 Días": float(recargo_30_dias)
@@ -686,22 +706,6 @@ def eliminar_proveedor(cuit):
     get_db().collection("proveedores").document(id_prov).delete()
     invalidar_cache_datos()
     return True
-
-# --- MOTOR DE CÁLCULO DE PRECIOS ---
-def calcular_cascada_precios(precio_base, recargo_financiero, descuento_proveedor=0.0) -> dict:
-    base = float(precio_base)
-    base_con_descuento = base * (1 - (float(descuento_proveedor) / 100.0))
-    costo_iva = base_con_descuento * 1.21
-    costo_final = costo_iva * (1 + (float(recargo_financiero) / 100.0))
-    precio_interno = costo_final * 1.40
-    precio_venta = math.ceil(precio_interno / 10.0) * 10
-    
-    return {
-        "costo_iva": round(costo_iva, 2),
-        "costo_final": round(costo_final, 2),
-        "precio_interno": round(precio_interno, 2),
-        "precio_venta": int(precio_venta)
-    }
 
 # --- AYUDANTE PARA MEMORIA DE DESCRIPCIONES ---
 def obtener_producto_por_codigo(codigo_base):
@@ -949,9 +953,6 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         return False, "Proveedor no configurado (CUIT inexistente)."
     
     datos_prov = prov_doc.to_dict() or {}
-    condiciones = datos_prov.get("condiciones", {})
-    recargo = float(condiciones.get(condicion_pago, 0.0))
-    descuento_prov = float(datos_prov.get("descuento", 0.0))
 
     articulos = datos_ia.get('articulos', [])
     if not articulos:
@@ -981,7 +982,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         precio_unitario = float(art.get('precio_unitario', 0.0))
         cantidad = int(art.get('cantidad', 0))
 
-        calculos = calcular_cascada_precios(precio_unitario, recargo, descuento_prov)
+        calculos = calcular_cascada_desde_proveedor(precio_unitario, datos_prov, condicion_pago)
         ref_prod = get_db().collection("productos").document(codigo_base)
 
         snap_existente = ref_prod.get()
@@ -1051,9 +1052,10 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
     prov_doc = get_db().collection("proveedores").document(cuit_prov_limpio).get()
     datos_proveedor_db = prov_doc.to_dict() or {} 
     nombre_proveedor = datos_proveedor_db.get("nombre", "DESCONOCIDO") if prov_doc.exists else "DESCONOCIDO"
-    descuento_prov = float(datos_proveedor_db.get("descuento", 0.0))
-
-    calculos = calcular_cascada_precios(float(precio_base), float(recargo), descuento_prov)
+    m = margenes_desde_proveedor(datos_proveedor_db)
+    calculos = calcular_cascada_precios(
+        float(precio_base), float(recargo), m["descuento"], m["iva_pct"], m["rentabilidad_pct"],
+    )
     ahora = datetime.now(timezone.utc)
 
     ref_prod.set({

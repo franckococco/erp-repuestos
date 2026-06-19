@@ -74,8 +74,6 @@ try:
         get_db,
         obtener_inventario_completo,
         obtener_proveedores,
-        configurar_proveedor,
-        eliminar_proveedor,
         obtener_marcas,
         agregar_marca,
         eliminar_marca,
@@ -84,7 +82,7 @@ try:
         vaciar_carrito,
         confirmar_venta,
         borrar_toda_la_base_de_datos,
-        calcular_cascada_precios,
+        recalcular_precios_items,
         registrar_merma,
         registrar_aumento_stock,
         alta_manual_producto,
@@ -416,6 +414,21 @@ elif pagina == "inventario":
                                     st.rerun()
                                 else:
                                     st.error(msg)
+                        st.divider()
+                        cond_precio = st.selectbox(
+                            "Recargo para recalcular precios del filtro",
+                            ["Contado", "30 Días"],
+                            key="mass_precio_cond",
+                        )
+                        if st.button("🔄 Recalcular precios del filtro", key="mass_precio_btn"):
+                            with st.spinner("Recalculando…"):
+                                exito, msg = recalcular_precios_items(inv_filtrado, cond_precio)
+                            if exito:
+                                _aud("inventario", "recalcular_precios_filtro", msg, exito=True)
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
                     vista_inv = st.radio(
                         "Vista",
@@ -1084,177 +1097,83 @@ elif pagina == "asistente":
 # --- CONFIGURACIÓN ---
 elif pagina == "config":
     from modulos.mostrador_session import init_credenciales_arca_session
+    from modulos.ui_config_proveedores import render_config_proveedores
 
     init_credenciales_arca_session()
     from modulos.ui_mostrador import render_config_ticket_mostrador
 
     titulo_seccion("Configuración", "Ctrl+C")
 
-    render_config_ticket_mostrador(en_pagina_config=True)
+    tab_general, tab_prov, tab_marcas, tab_clientes = st.tabs([
+        "⚙️ General",
+        "🏭 Proveedores y precios",
+        "🏷️ Marcas",
+        "👥 Clientes",
+    ])
 
-    if es_admin():
-        st.divider()
-        render_admin_secciones()
+    with tab_general:
+        render_config_ticket_mostrador(en_pagina_config=True)
 
-    with st.expander("Backup y restauración de stock", expanded=False):
-        col_down, col_up = st.columns(2)
-        with col_down:
-            st.caption("Descargar inventario actual (CSV).")
-            csv_data = exportar_inventario_csv()
-            if csv_data:
-                from modulos.util_fechas import fecha_hoy_ar
-                st.download_button(
-                    "Descargar CSV",
-                    data=csv_data,
-                    file_name=f"backup_inventario_{fecha_hoy_ar().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    type="primary",
-                )
-            else:
-                st.download_button(
-                    "Descargar CSV",
-                    data="",
-                    file_name="vacio.csv",
-                    disabled=True,
-                    help="El inventario está vacío",
-                )
+        if es_admin():
+            st.divider()
+            render_admin_secciones()
 
-        with col_up:
-            st.caption("Restaurar o sumar stock desde CSV.")
-            archivo_csv = st.file_uploader("Restaurar stock (CSV)", type=["csv"])
-            if archivo_csv:
-                df_upload = pd.read_csv(archivo_csv)
-                st.write(f"Vista previa: {len(df_upload)} filas.")
-                modo_restauracion = st.radio(
-                    "Modo",
-                    ["sumar_stock", "sobreescribir"],
-                    format_func=lambda x: "Sumar stock" if x == "sumar_stock" else "Sobreescribir todo (peligro)",
-                )
-                if st.button("Ejecutar restauración", type="primary"):
-                    with st.spinner("Procesando archivo..."):
-                        exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
-                        if exito:
-                            _aud("config", "restaurar_csv", f"Restauración CSV modo {modo_restauracion}", exito=True)
-                            st.success(msg_rest)
-                            st.rerun()
-
-    with st.expander("Zona de peligro — borrar base de datos"):
-        st.warning("Esto borrará todo el inventario, carritos y el historial de facturas. Es irreversible.")
-        if st.checkbox("Entiendo los riesgos, habilitar borrado"):
-            if st.button("💥 BORRAR TODA LA BASE DE DATOS", type="primary"):
-                exito, msg = borrar_toda_la_base_de_datos()
-                if exito:
-                    _aud("config", "borrar_base_datos", "Borrado total de la base", exito=True)
-                    st.success(msg)
-                    st.rerun()
+        with st.expander("Backup y restauración de stock", expanded=False):
+            col_down, col_up = st.columns(2)
+            with col_down:
+                st.caption("Descargar inventario actual (CSV).")
+                csv_data = exportar_inventario_csv()
+                if csv_data:
+                    from modulos.util_fechas import fecha_hoy_ar
+                    st.download_button(
+                        "Descargar CSV",
+                        data=csv_data,
+                        file_name=f"backup_inventario_{fecha_hoy_ar().strftime('%Y%m%d')}.csv",
+                        mime="text/csv",
+                        type="primary",
+                    )
                 else:
-                    st.error(msg)
+                    st.download_button(
+                        "Descargar CSV",
+                        data="",
+                        file_name="vacio.csv",
+                        disabled=True,
+                        help="El inventario está vacío",
+                    )
 
-    st.divider()
+            with col_up:
+                st.caption("Restaurar o sumar stock desde CSV.")
+                archivo_csv = st.file_uploader("Restaurar stock (CSV)", type=["csv"])
+                if archivo_csv:
+                    df_upload = pd.read_csv(archivo_csv)
+                    st.write(f"Vista previa: {len(df_upload)} filas.")
+                    modo_restauracion = st.radio(
+                        "Modo",
+                        ["sumar_stock", "sobreescribir"],
+                        format_func=lambda x: "Sumar stock" if x == "sumar_stock" else "Sobreescribir todo (peligro)",
+                    )
+                    if st.button("Ejecutar restauración", type="primary"):
+                        with st.spinner("Procesando archivo..."):
+                            exito, msg_rest = restaurar_inventario_csv(df_upload, modo=str(modo_restauracion))
+                            if exito:
+                                _aud("config", "restaurar_csv", f"Restauración CSV modo {modo_restauracion}", exito=True)
+                                st.success(msg_rest)
+                                st.rerun()
 
-    tab_prov, tab_marcas, tab_clientes = st.tabs(["🏭 Proveedores y Recargos", "🏷️ Marcas", "👥 Clientes"])
+        with st.expander("Zona de peligro — borrar base de datos"):
+            st.warning("Esto borrará todo el inventario, carritos y el historial de facturas. Es irreversible.")
+            if st.checkbox("Entiendo los riesgos, habilitar borrado"):
+                if st.button("💥 BORRAR TODA LA BASE DE DATOS", type="primary"):
+                    exito, msg = borrar_toda_la_base_de_datos()
+                    if exito:
+                        _aud("config", "borrar_base_datos", "Borrado total de la base", exito=True)
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
     with tab_prov:
-        st.subheader("Directorio de Proveedores")
-        st.caption("Editá recargos y descuentos en la grilla. Usá el formulario de abajo solo para **dar de alta** uno nuevo.")
-
-        provs = obtener_proveedores() or {}
-
-        if provs:
-            datos_tabla = []
-            for cuit, datos_prov in provs.items():
-                if not isinstance(datos_prov, dict):
-                    datos_prov = {}
-                condiciones = datos_prov.get('condiciones', {})
-                if not isinstance(condiciones, dict):
-                    condiciones = {}
-
-                datos_tabla.append({
-                    "Proveedor": datos_prov.get("nombre", ""),
-                    "CUIT": cuit,
-                    "Descuento (%)": float(datos_prov.get('descuento', 0)),
-                    "Recargo Contado (%)": float(condiciones.get('Contado', 0)),
-                    "Recargo 30 Días (%)": float(condiciones.get('30 Días', 0)),
-                })
-
-            df_prov = pd.DataFrame(datos_tabla)
-
-            df_prov_edit = st.data_editor(
-                df_prov,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Proveedor": st.column_config.TextColumn("Proveedor", disabled=True),
-                    "CUIT": st.column_config.TextColumn("CUIT", disabled=True),
-                    "Descuento (%)": st.column_config.NumberColumn("Descuento (%)", min_value=0.0, step=1.0),
-                    "Recargo Contado (%)": st.column_config.NumberColumn("Rec. Contado (%)", min_value=0.0, step=1.0),
-                    "Recargo 30 Días (%)": st.column_config.NumberColumn("Rec. 30 Días (%)", min_value=0.0, step=1.0),
-                },
-                key="grilla_proveedores"
-            )
-
-            if st.button("💾 Guardar Cambios de Proveedores", type="primary", use_container_width=True):
-                guardados = 0
-                filas = df_prov_edit.to_dict('records')
-                originales = {r['CUIT']: r for r in datos_tabla}
-
-                for fila in filas:
-                    cuit = str(fila.get('CUIT', ''))
-                    orig = originales.get(cuit, {})
-                    cambio = (
-                        float(fila.get('Descuento (%)', 0)) != float(orig.get('Descuento (%)', 0))
-                        or float(fila.get('Recargo Contado (%)', 0)) != float(orig.get('Recargo Contado (%)', 0))
-                        or float(fila.get('Recargo 30 Días (%)', 0)) != float(orig.get('Recargo 30 Días (%)', 0))
-                    )
-                    if cambio:
-                        configurar_proveedor(
-                            fila.get('Proveedor', orig.get('Proveedor', '')),
-                            cuit,
-                            float(fila.get('Recargo Contado (%)', 0)),
-                            float(fila.get('Recargo 30 Días (%)', 0)),
-                            float(fila.get('Descuento (%)', 0)),
-                        )
-                        guardados += 1
-
-                if guardados:
-                    st.success(f"✅ {guardados} proveedor(es) actualizado(s).")
-                    st.rerun()
-                else:
-                    st.info("No hubo cambios para guardar.")
-
-            with st.expander("🗑️ Eliminar un Proveedor"):
-                prov_a_borrar = st.selectbox(
-                    "Seleccionar proveedor a eliminar:",
-                    options=list(provs.keys()),
-                    format_func=lambda x: f"{(provs.get(x) or {}).get('nombre', 'Desconocido')} (CUIT: {x})"
-                )
-                if st.button("Eliminar Proveedor", type="primary"):
-                    eliminar_proveedor(str(prov_a_borrar))
-                    st.success("Proveedor eliminado del sistema.")
-                    st.rerun()
-        else:
-            st.info("Aún no hay proveedores cargados.")
-
-        st.divider()
-        st.subheader("➕ Alta de Proveedor Nuevo")
-        with st.form("conf_prov"):
-            col1, col2 = st.columns(2)
-            nombre_prov = col1.text_input("Nombre Proveedor (Ej: Filtros Juan)").upper()
-            cuit_prov = col2.text_input("CUIT (Solo números)")
-
-            st.write("Recargos Financieros y Descuentos (%)")
-            col3, col4, col5 = st.columns(3)
-            rec_contado = col3.number_input("Recargo Contado (%)", min_value=0.0, value=0.0, step=1.0)
-            rec_30 = col4.number_input("Recargo 30 Días (%)", min_value=0.0, value=15.0, step=1.0)
-            desc_prov = col5.number_input("Descuento Factura (%)", min_value=0.0, value=0.0, step=1.0)
-
-            if st.form_submit_button("Guardar Proveedor Nuevo"):
-                if nombre_prov and cuit_prov:
-                    configurar_proveedor(nombre_prov, cuit_prov, rec_contado, rec_30, desc_prov)
-                    st.success(f"Proveedor {nombre_prov} guardado.")
-                    st.rerun()
-                else:
-                    st.error("El nombre y el CUIT son obligatorios.")
+        render_config_proveedores(auditoria_fn=_aud)
 
     with tab_marcas:
         st.subheader("Gestión de Marcas")

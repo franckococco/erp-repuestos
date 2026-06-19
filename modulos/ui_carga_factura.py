@@ -18,12 +18,33 @@ from modulos.db_firebase import (
     registrar_ingreso_inteligente,
     obtener_proveedores,
     obtener_producto_por_codigo,
-    calcular_cascada_precios,
     sanitizar_clave_marca,
     formatear_id_variante,
 )
+from modulos.precios_proveedor import calcular_cascada_desde_proveedor
 from modulos.generador_qr import generar_qr_producto
 from modulos.ui_estilos import ayuda
+
+
+def _datos_proveedor_factura(cuit, provs):
+    cuit_l = "".join(filter(str.isdigit, str(cuit or "")))
+    if cuit_l in (provs or {}) and isinstance(provs[cuit_l], dict):
+        return provs[cuit_l]
+    return {}
+
+
+def _tabla_precios_calculados(df_editado, datos_prov, condicion_pago):
+    filas = []
+    for row in df_editado.to_dict("records"):
+        precio = float(row.get("precio_unitario", 0) or 0)
+        calc = calcular_cascada_desde_proveedor(precio, datos_prov, condicion_pago)
+        filas.append({
+            "Código": row.get("codigo", ""),
+            "Marca": row.get("marca", ""),
+            "P. lista": precio,
+            "P. venta calc.": calc["precio_venta"],
+        })
+    return pd.DataFrame(filas)
 
 
 def _vehiculos_por_codigo(articulos):
@@ -285,6 +306,15 @@ def render_carga_factura():
         key="grilla_validacion",
     )
 
+    datos_prov_fact = _datos_proveedor_factura(cuit_detectado, provs_check) if cuit_valido else {}
+    if not df_editado.empty and datos_prov_fact:
+        st.caption("Precios de venta calculados (según márgenes del proveedor y condición de pago):")
+        st.dataframe(
+            _tabla_precios_calculados(df_editado, datos_prov_fact, condicion_pago),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     if col_btn1.button("💾 Guardar borrador (Ctrl+G)", type="secondary", use_container_width=True):
         _guardar_borrador_actual(d, df_editado, condicion_pago)
@@ -314,13 +344,7 @@ def render_carga_factura():
         marca_ej = sanitizar_clave_marca(art_ej.get("marca", "GENERICO"))
         id_qr_ej = formatear_id_variante(cod_ej, marca_ej)
         precio_bruto = float(art_ej.get("precio_unitario", 0))
-        provs = obtener_proveedores() or {}
-        recargo_prev = descuento_prev = 0.0
-        if cuit_detectado in provs and isinstance(provs[cuit_detectado], dict):
-            dp = provs[cuit_detectado]
-            recargo_prev = float(dp.get("condiciones", {}).get(str(condicion_pago), 0.0))
-            descuento_prev = float(dp.get("descuento", 0.0))
-        calculos = calcular_cascada_precios(precio_bruto, recargo_prev, descuento_prev)
+        calculos = calcular_cascada_desde_proveedor(precio_bruto, datos_prov_fact, condicion_pago)
         qr_preview = generar_qr_producto(
             id_qr_ej, f"{art_ej.get('descripcion', 'Repuesto')} ({marca_ej})",
             calculos["precio_venta"], tamano_caja=tamano_qr,
@@ -374,10 +398,7 @@ def render_carga_factura():
 
         prov_id = cuit_detectado
         provs = obtener_proveedores() or {}
-        recargo = descuento_prov = 0.0
-        if prov_id in provs and isinstance(provs[prov_id], dict):
-            recargo = float(provs[prov_id].get("condiciones", {}).get(str(condicion_pago), 0.0))
-            descuento_prov = float(provs[prov_id].get("descuento", 0.0))
+        datos_prov_zip = _datos_proveedor_factura(prov_id, provs)
 
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
@@ -387,7 +408,9 @@ def render_carga_factura():
                 if not codigo_base:
                     continue
                 id_producto = formatear_id_variante(codigo_base, marca_rep)
-                calc = calcular_cascada_precios(float(art.get("precio_unitario", 0)), recargo, descuento_prov)
+                calc = calcular_cascada_desde_proveedor(
+                    float(art.get("precio_unitario", 0)), datos_prov_zip, condicion_pago,
+                )
                 desc_qr = f"{art.get('descripcion', 'Repuesto')} ({marca_rep})"
                 qr_bytes = generar_qr_producto(id_producto, desc_qr, calc["precio_venta"], tamano_caja=tamano_qr)
                 zip_file.writestr(f"QR_{id_producto}.png", qr_bytes)

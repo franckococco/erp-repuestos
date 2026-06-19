@@ -12,7 +12,9 @@ from modulos.db_firebase import (
     calcular_cascada_precios,
     invalidar_cache_datos,
     alta_manual_producto,
+    obtener_proveedores,
 )
+from modulos.precios_proveedor import margenes_desde_proveedor
 
 
 def _entero_ubicacion(val):
@@ -135,7 +137,14 @@ def ejecutar_carga_producto_voz(payload):
                 return False, f"No encontré el código {codigo}."
             ref_prod = get_db().collection("productos").document(docs[0].id)
 
-        calculos = calcular_cascada_precios(precio, 0.0, 0.0)
+        cuit_v = str(payload.get("cuit_proveedor", "0") or "0")
+        provs = obtener_proveedores() or {}
+        datos_prov = provs.get("".join(filter(str.isdigit, cuit_v)), {}) or {}
+        m = margenes_desde_proveedor(datos_prov)
+        recargo = float(payload.get("recargo", 0))
+        calculos = calcular_cascada_precios(
+            precio, recargo, m["descuento"], m["iva_pct"], m["rentabilidad_pct"],
+        )
         updates = {
             "ultima_actualizacion": ahora,
             "variantes": {
