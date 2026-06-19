@@ -22,10 +22,12 @@ from modulos.sesion_app import (
 )
 
 
-@st.cache_resource
 def _cookie_manager():
-    import extra_streamlit_components as stx
-    return stx.CookieManager(key="hr_auth_cookies")
+    """Una instancia por sesión de Streamlit (no usar @st.cache_resource: usa widgets)."""
+    if "_hr_cookie_manager" not in st.session_state:
+        import extra_streamlit_components as stx
+        st.session_state._hr_cookie_manager = stx.CookieManager(key="hr_auth_cookies")
+    return st.session_state._hr_cookie_manager
 
 
 def _aplicar_datos_sesion(data: dict, token: str):
