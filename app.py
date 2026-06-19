@@ -140,7 +140,7 @@ except Exception as e:
 aplicar_estilos_globales()
 
 from modulos.auth_app import (
-    sesion_activa,
+    gestionar_autenticacion,
     render_login,
     render_puntos_sidebar,
     render_cambiar_clave_sidebar,
@@ -151,7 +151,10 @@ from modulos.auth_app import (
     render_admin_secciones,
 )
 
-if not sesion_activa():
+_auth_estado = gestionar_autenticacion()
+if _auth_estado is None:
+    st.stop()
+if not _auth_estado:
     render_login()
     st.stop()
 
@@ -219,12 +222,14 @@ def preparar_item_inventario(item):
         item['Piso'] = int(ubi.get('piso', 0))
         item['Módulo'] = int(ubi.get('modulo', 0))
         item['Fila'] = int(ubi.get('fila', 0))
+        item['Fondo'] = int(ubi.get('fondo', 0))
     else:
-        item['Pasillo'] = item['Piso'] = item['Módulo'] = item['Fila'] = 0
+        item['Pasillo'] = item['Piso'] = item['Módulo'] = item['Fila'] = item['Fondo'] = 0
     item['Marca'] = item.get('marca', item.get('condicion', 'GENERICO'))
     vehs = item.get('vehiculos')
     item['Vehículo'] = vehiculos_a_texto(vehs) if vehs else item.get('vehiculo', 'UNIVERSAL')
     item['Stock'] = int(item.get('stock', 0))
+    item['Stock crítico'] = int(item.get('stock_critico', 3))
     item['Precio Final'] = int(item.get('precio_venta', 0) or 0)
     item['Descripción'] = item.get('descripcion', '')
     item['id_maestro'] = item.get('id_maestro', item.get('codigo', ''))
@@ -272,7 +277,8 @@ def texto_resultados_agrupados(encontrados, termino):
             ubi = {}
         loc_str = (
             f"Pasillo: {ubi.get('pasillo', 0)} | Piso: {ubi.get('piso', 0)} | "
-            f"Módulo: {ubi.get('modulo', 0)} | Fila: {ubi.get('fila', 0)}"
+            f"Módulo: {ubi.get('modulo', 0)} | Fila: {ubi.get('fila', 0)} | "
+            f"Fondo: {ubi.get('fondo', 0)}"
         )
         lista_txt += f"### {g['descripcion']} ({g['vehiculo']}) — Cód. {g['codigo']}\n"
         lista_txt += f"📍 {loc_str}\n"
@@ -469,7 +475,8 @@ elif pagina == "inventario":
                         df = pd.DataFrame(inv_filtrado)
                         cols_deseadas = [
                             'id', 'id_maestro', 'codigo', 'Descripción', 'Vehículo', 'Marca',
-                            'Stock', 'Precio Final', 'Pasillo', 'Piso', 'Módulo', 'Fila'
+                            'Stock', 'Stock crítico', 'Precio Final',
+                            'Pasillo', 'Piso', 'Módulo', 'Fila', 'Fondo',
                         ]
                         cols_existentes = [c for c in cols_deseadas if c in df.columns]
                         df_filtrado = df[cols_existentes].reset_index(drop=True)
@@ -486,11 +493,13 @@ elif pagina == "inventario":
                                 "Vehículo": st.column_config.TextColumn("Vehículo", width="small"),
                                 "Marca": st.column_config.TextColumn("Marca", width="small"),
                                 "Stock": st.column_config.NumberColumn("Stock", min_value=0, step=1, width="small"),
+                                "Stock crítico": st.column_config.NumberColumn("St. crítico", min_value=0, step=1, width="small"),
                                 "Precio Final": st.column_config.NumberColumn("Precio", min_value=0, step=10, width="small"),
                                 "Pasillo": st.column_config.NumberColumn("Pasillo", min_value=0, step=1, width="small"),
                                 "Piso": st.column_config.NumberColumn("Piso", min_value=0, step=1, width="small"),
                                 "Módulo": st.column_config.NumberColumn("Módulo", min_value=0, step=1, width="small"),
                                 "Fila": st.column_config.NumberColumn("Fila", min_value=0, step=1, width="small"),
+                                "Fondo": st.column_config.NumberColumn("Fondo", min_value=0, step=1, width="small"),
                             },
                             key="grilla_inv"
                         )
@@ -591,12 +600,14 @@ elif pagina == "inventario":
                 precio_base_manual = col_v1.number_input("Precio Costo Base ($)", min_value=0.0, format="%.2f", step=100.0)
                 stock_manual = col_v2.number_input("Stock Inicial", min_value=1, step=1)
 
-                st.write("#### 4. Ubicación Exacta (del artículo maestro)")
-                col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+                st.write("#### 4. Ubicación exacta (del artículo maestro)")
+                col_u1, col_u2, col_u3, col_u4, col_u5 = st.columns(5)
                 pasillo_manual = col_u1.number_input("Pasillo", min_value=0, step=1)
                 piso_manual = col_u2.number_input("Piso", min_value=0, step=1)
                 modulo_manual = col_u3.number_input("Módulo", min_value=0, step=1)
                 fila_manual = col_u4.number_input("Fila", min_value=0, step=1)
+                fondo_manual = col_u5.number_input("Fondo", min_value=0, step=1)
+                stock_critico_manual = st.number_input("Stock crítico", min_value=0, value=3, step=1)
 
                 submit_alta = st.form_submit_button("💾 Guardar Repuesto en Inventario", type="primary", use_container_width=True)
 
@@ -630,7 +641,9 @@ elif pagina == "inventario":
                             pasillo=pasillo_manual,
                             piso=piso_manual,
                             modulo=modulo_manual,
-                            fila=fila_manual
+                            fila=fila_manual,
+                            fondo=fondo_manual,
+                            stock_critico=stock_critico_manual,
                         )
 
                         if exito:
@@ -827,6 +840,7 @@ elif pagina == "asistente":
                 pis = respuesta_json.get("piso")
                 mod = respuesta_json.get("modulo")
                 fil = respuesta_json.get("fila")
+                fondo = respuesta_json.get("fondo")
 
                 encontrados = buscar_en_inventario(inventario, termino)
 
@@ -834,7 +848,7 @@ elif pagina == "asistente":
 
                 if len(maestros_unicos) == 1 and encontrados:
                     id_ref = encontrados[0].get('id_maestro') or encontrados[0].get('codigo')
-                    exito, msj_db = actualizar_ubicacion_relevamiento(id_ref, pas, pis, mod, fil)
+                    exito, msj_db = actualizar_ubicacion_relevamiento(id_ref, pas, pis, mod, fil, fondo)
                     st.session_state.ultima_respuesta = f"✅ Ubicación guardada. {msj_db}" if exito else f"❌ Error: {msj_db}"
                     st.session_state.ultimo_estado = "success" if exito else "error"
                 elif len(encontrados) > 1:
@@ -1073,6 +1087,24 @@ elif pagina == "asistente":
 
             if st.session_state.producto_pendiente_voz:
                 pend = st.session_state.producto_pendiente_voz
+                payload = dict(pend.get("payload") or {})
+                st.markdown("**Ajustá antes de confirmar:**")
+                c_sc, c_fo = st.columns(2)
+                payload["stock_critico"] = c_sc.number_input(
+                    "Stock crítico",
+                    min_value=0,
+                    value=int(payload.get("stock_critico", 3)),
+                    step=1,
+                    key="conf_voz_stock_critico",
+                )
+                payload["fondo"] = c_fo.number_input(
+                    "Fondo",
+                    min_value=0,
+                    value=int(payload.get("fondo", 0)),
+                    step=1,
+                    key="conf_voz_fondo",
+                )
+                pend["payload"] = payload
                 col_ok, col_no = st.columns(2)
                 if col_ok.button("Confirmar carga", type="primary", use_container_width=True, key="btn_conf_prod_voz"):
                     exito, msj_db = ejecutar_carga_producto_voz(pend.get("payload"))

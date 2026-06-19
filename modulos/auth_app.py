@@ -1,4 +1,6 @@
-"""Login, sesión, puntos en sidebar y paneles admin."""
+"""Login, sesión persistente, puntos en sidebar y paneles admin."""
+from datetime import datetime, timedelta
+
 import streamlit as st
 
 from modulos.puntos_vendedor import asegurar_vendedor, resumen_puntos_vendedor, listar_vendedores, UMBRAL_PUNTO
@@ -10,10 +12,80 @@ from modulos.usuarios_app_db import (
     CLAVE_INICIAL,
 )
 from modulos.auditoria_app import registrar_auditoria, render_panel_auditoria_admin
+from modulos.sesion_app import (
+    COOKIE_SESION,
+    COOKIE_DIAS,
+    crear_sesion,
+    validar_y_renovar_sesion,
+    cerrar_sesion_firestore,
+    INACTIVIDAD_MINUTOS,
+)
+
+
+@st.cache_resource
+def _cookie_manager():
+    import extra_streamlit_components as stx
+    return stx.CookieManager(key="hr_auth_cookies")
+
+
+def _aplicar_datos_sesion(data: dict, token: str):
+    st.session_state.auth_usuario = data["usuario"]
+    st.session_state.auth_rol = data["rol"]
+    st.session_state.auth_nombre = data["nombre"]
+    st.session_state.auth_vendedor_id = data.get("vendedor_id")
+    st.session_state.auth_token = token
+
+
+def _limpiar_session_state_auth():
+    token = st.session_state.get("auth_token")
+    for k in (
+        "auth_usuario", "auth_rol", "auth_nombre", "auth_vendedor_id",
+        "auth_token", "vendedor_mostrador_sel",
+    ):
+        st.session_state.pop(k, None)
+    return token
 
 
 def sesion_activa() -> bool:
     return bool(st.session_state.get("auth_usuario"))
+
+
+def gestionar_autenticacion():
+    """
+    Restaura sesión desde cookie, valida inactividad y renueva actividad.
+    Retorna True (autenticado), False (mostrar login) o None (esperando cookies).
+    """
+    if sesion_activa():
+        token = st.session_state.get("auth_token")
+        if token:
+            ok, data = validar_y_renovar_sesion(token)
+            if ok and data:
+                _aplicar_datos_sesion(data, token)
+                return True
+        old = _limpiar_session_state_auth()
+        cerrar_sesion_firestore(old)
+        try:
+            _cookie_manager().delete(COOKIE_SESION, key="hr_del_expired")
+        except Exception:
+            pass
+        return False
+
+    cm = _cookie_manager()
+    if not st.session_state.get("_auth_cookies_ready"):
+        cookies = cm.get_all()
+        if cookies is None:
+            return None
+        st.session_state._auth_cookies_ready = True
+
+    token = cm.get(COOKIE_SESION)
+    if token:
+        ok, data = validar_y_renovar_sesion(token)
+        if ok and data:
+            _aplicar_datos_sesion(data, token)
+            return True
+        cm.delete(COOKIE_SESION, key="hr_del_invalid")
+
+    return False
 
 
 def usuario_actual():
@@ -41,11 +113,12 @@ def cerrar_sesion():
             f"Cierre de sesión: {st.session_state.get('auth_nombre', '')}",
             exito=True,
         )
-    for k in (
-        "auth_usuario", "auth_rol", "auth_nombre", "auth_vendedor_id",
-        "vendedor_mostrador_sel",
-    ):
-        st.session_state.pop(k, None)
+    token = _limpiar_session_state_auth()
+    cerrar_sesion_firestore(token)
+    try:
+        _cookie_manager().delete(COOKIE_SESION, key="hr_del_logout")
+    except Exception:
+        pass
 
 
 def iniciar_sesion(usuario: str, clave: str):
@@ -62,13 +135,23 @@ def iniciar_sesion(usuario: str, clave: str):
         )
         return False, data
 
-    st.session_state.auth_usuario = data["usuario"]
-    st.session_state.auth_rol = data["rol"]
-    st.session_state.auth_nombre = data["nombre"]
-    st.session_state.auth_vendedor_id = data.get("vendedor_id")
+    token = crear_sesion(
+        data["usuario"], data["rol"], data["nombre"], data.get("vendedor_id"),
+    )
+    _aplicar_datos_sesion(data, token)
 
     if data["rol"] == "vendedor" and data.get("vendedor_id"):
         asegurar_vendedor(data["vendedor_id"], nombre=data["nombre"], rol="vendedor")
+
+    try:
+        _cookie_manager().set(
+            COOKIE_SESION,
+            token,
+            expires_at=datetime.now() + timedelta(days=COOKIE_DIAS),
+            key="hr_set_login",
+        )
+    except Exception:
+        pass
 
     registrar_auditoria(
         "auth", "login",
@@ -81,6 +164,10 @@ def iniciar_sesion(usuario: str, clave: str):
 
 def render_login():
     st.markdown("## Hafid Repuestos — Ingreso")
+    st.caption(
+        f"La sesión se mantiene al refrescar la página. "
+        f"Tras **{INACTIVIDAD_MINUTOS} minutos** sin actividad se pide ingresar de nuevo."
+    )
     st.caption(
         "Usuarios: **admin**, **fernando**, **emilio**, **facundo**, **gabriel**, **damian** · "
         f"clave inicial **{CLAVE_INICIAL}** (podés cambiarla después del ingreso)"

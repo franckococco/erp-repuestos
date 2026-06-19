@@ -43,6 +43,7 @@ def extraer_ubicacion_desde_texto(texto: str) -> Dict[str, int]:
         ("piso", rf"piso\s+({num})"),
         ("modulo", rf"modulo\s+({num})"),
         ("fila", rf"fila\s+({num})"),
+        ("fondo", rf"fondo\s+({num})"),
     ):
         m = re.search(pat, t)
         if m:
@@ -59,6 +60,7 @@ def _patrones_quitar_ubicacion():
         rf"\bpiso\s+{num}\b",
         rf"\bmodulo\s+{num}\b",
         rf"\bfila\s+{num}\b",
+        rf"\bfondo\s+{num}\b",
     ]
 
 
@@ -80,6 +82,7 @@ def extraer_marca_desde_texto(texto: str, marca_actual: str = "") -> str:
 
 def _quitar_ruido_descripcion(desc: str, vehiculos: List[str]) -> str:
     d = str(desc or "").upper()
+    d = re.sub(r"\bstock\s+critico\s+(?:\d+|cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b", " ", d, flags=re.IGNORECASE)
     for pat in _patrones_quitar_ubicacion():
         d = re.sub(pat, " ", d, flags=re.IGNORECASE)
     d = re.sub(
@@ -100,6 +103,17 @@ def _quitar_ruido_descripcion(desc: str, vehiculos: List[str]) -> str:
     return d
 
 
+def extraer_stock_critico_desde_texto(texto: str) -> Optional[int]:
+    t = normalizar_texto_basico(str(texto or "")).lower()
+    num = r"(?:\d+|cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)"
+    m = re.search(rf"stock\s+critico\s+({num})", t)
+    if m:
+        v = _entero_ubi(m.group(1))
+        if v is not None:
+            return v
+    return None
+
+
 def normalizar_orden_cargar_producto(
     datos: Dict[str, Any],
     texto_original: Optional[str] = None,
@@ -117,13 +131,24 @@ def normalizar_orden_cargar_producto(
     blob = f"{texto_original or ''} {out.get('descripcion', '')}"
 
     ubi_txt = extraer_ubicacion_desde_texto(blob)
-    for k in ("pasillo", "piso", "modulo", "fila"):
+    for k in ("pasillo", "piso", "modulo", "fila", "fondo"):
         if ubi_txt.get(k) is not None:
             out[k] = ubi_txt[k]
         elif out.get(k) is not None:
             v = _entero_ubi(out.get(k))
             if v is not None:
                 out[k] = v
+
+    sc = extraer_stock_critico_desde_texto(blob)
+    if sc is not None:
+        out["stock_critico"] = sc
+    elif out.get("stock_critico") is not None:
+        try:
+            out["stock_critico"] = max(0, int(out["stock_critico"]))
+        except (TypeError, ValueError):
+            out["stock_critico"] = 3
+    else:
+        out.setdefault("stock_critico", 3)
 
     veh_raw = out.get("vehiculos") or out.get("vehiculo") or []
     if isinstance(veh_raw, str):

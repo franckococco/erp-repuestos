@@ -13,6 +13,7 @@ from modulos.db_firebase import (
     invalidar_cache_datos,
     alta_manual_producto,
     obtener_proveedores,
+    STOCK_CRITICO_DEFAULT,
 )
 from modulos.precios_proveedor import margenes_desde_proveedor
 
@@ -24,6 +25,13 @@ def _entero_ubicacion(val):
         return max(0, int(val))
     except (TypeError, ValueError):
         return 0
+
+
+def _entero_stock_critico(val):
+    try:
+        return max(0, int(val))
+    except (TypeError, ValueError):
+        return STOCK_CRITICO_DEFAULT
 
 
 def validar_y_preparar_carga_producto_voz(datos):
@@ -60,12 +68,15 @@ def validar_y_preparar_carga_producto_voz(datos):
         precio = 0.0
     precio = max(0.0, precio)
 
+    stock_critico = _entero_stock_critico(datos.get("stock_critico", STOCK_CRITICO_DEFAULT))
+
     payload = {
         "codigo": codigo,
         "descripcion": descripcion,
         "marca": marca,
         "vehiculos": vehiculos,
         "stock": stock,
+        "stock_critico": stock_critico,
         "precio_base": precio,
         "cuit_proveedor": "0",
         "recargo": 0.0,
@@ -73,6 +84,7 @@ def validar_y_preparar_carga_producto_voz(datos):
         "piso": _entero_ubicacion(datos.get("piso")),
         "modulo": _entero_ubicacion(datos.get("modulo")),
         "fila": _entero_ubicacion(datos.get("fila")),
+        "fondo": _entero_ubicacion(datos.get("fondo")),
         "solo_variante": False,
     }
 
@@ -90,11 +102,11 @@ def validar_y_preparar_carga_producto_voz(datos):
         payload["id_maestro"] = existente.get("id", codigo)
 
     veh_texto = vehiculos_a_texto(vehiculos)
-    tiene_ubi = any(payload[k] for k in ("pasillo", "piso", "modulo", "fila"))
+    tiene_ubi = any(payload[k] for k in ("pasillo", "piso", "modulo", "fila", "fondo"))
     ubi_txt = (
         f"Pasillo {payload['pasillo']}, Piso {payload['piso']}, "
-        f"Módulo {payload['modulo']}, Fila {payload['fila']}"
-        if tiene_ubi else "Sin ubicación (0/0/0/0)"
+        f"Módulo {payload['modulo']}, Fila {payload['fila']}, Fondo {payload['fondo']}"
+        if tiene_ubi else "Sin ubicación (0/0/0/0/0)"
     )
     precio_txt = f"${precio:,.0f}" if precio > 0 else "Sin precio (completar después)"
 
@@ -105,6 +117,7 @@ def validar_y_preparar_carga_producto_voz(datos):
         f"- **Marca:** {marca}\n"
         f"- **Vehículo(s):** {veh_texto}\n"
         f"- **Stock:** {stock}\n"
+        f"- **Stock crítico:** {stock_critico}\n"
         f"- **Ubicación:** {ubi_txt}\n"
         f"- **Precio:** {precio_txt}\n"
     )
@@ -125,6 +138,7 @@ def ejecutar_carga_producto_voz(payload):
     codigo = payload.get("codigo", "")
     marca = payload.get("marca", "GENERICO")
     stock = int(payload.get("stock", 0))
+    stock_critico = _entero_stock_critico(payload.get("stock_critico", STOCK_CRITICO_DEFAULT))
     precio = float(payload.get("precio_base", 0))
     ahora = datetime.now(timezone.utc)
 
@@ -150,6 +164,7 @@ def ejecutar_carga_producto_voz(payload):
             "variantes": {
                 marca: {
                     "stock": stock,
+                    "stock_critico": stock_critico,
                     "ultimo_costo_base": precio,
                     "precio_interno": calculos["precio_interno"],
                     "precio_venta": calculos["precio_venta"],
@@ -160,13 +175,14 @@ def ejecutar_carga_producto_voz(payload):
         }
         ref_prod.set(updates, merge=True)
 
-        if any(payload.get(k) for k in ("pasillo", "piso", "modulo", "fila")):
+        if any(payload.get(k) for k in ("pasillo", "piso", "modulo", "fila", "fondo")):
             ref_prod.update({
                 "ubicacion": {
                     "pasillo": _entero_ubicacion(payload.get("pasillo")),
                     "piso": _entero_ubicacion(payload.get("piso")),
                     "modulo": _entero_ubicacion(payload.get("modulo")),
                     "fila": _entero_ubicacion(payload.get("fila")),
+                    "fondo": _entero_ubicacion(payload.get("fondo")),
                 },
                 "ultima_actualizacion": ahora,
             })
@@ -187,19 +203,8 @@ def ejecutar_carga_producto_voz(payload):
             piso=_entero_ubicacion(payload.get("piso")),
             modulo=_entero_ubicacion(payload.get("modulo")),
             fila=_entero_ubicacion(payload.get("fila")),
+            fondo=_entero_ubicacion(payload.get("fondo")),
+            stock_critico=stock_critico,
         )
 
-    try:
-        from modulos.auditoria_app import registrar_auditoria
-        registrar_auditoria(
-            "asistente",
-            "carga_producto",
-            f"{'OK' if exito else 'Error'}: {codigo} / {marca} · {stock} u.",
-            detalle={"codigo": codigo, "marca": marca, "stock": stock, "descripcion": payload.get("descripcion")},
-            exito=bool(exito),
-            ref_id=codigo,
-            error_msg=None if exito else str(msj),
-        )
-    except Exception:
-        pass
     return exito, msj

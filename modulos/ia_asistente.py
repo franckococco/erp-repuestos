@@ -54,6 +54,7 @@ def _extraer_ubicacion_orden(t):
         ("piso", r"piso\s+(\d+)"),
         ("modulo", r"modulo\s+(\d+)"),
         ("fila", r"fila\s+(\d+)"),
+        ("fondo", r"fondo\s+(\d+)"),
     ):
         m = re.search(pat, t)
         if m:
@@ -104,7 +105,7 @@ def _es_carga_producto_nuevo(t):
         return False
     if re.search(r"\b(?:agreg\w*|sum\w*|aument\w*)\s+\d+\s*unidad", t):
         return False
-    if re.search(r"\b(pasillo|piso|modulo|fila)\b", t):
+    if re.search(r"\b(pasillo|piso|modulo|fila|fondo)\b", t):
         if re.search(r"\b(carg\w*|registr\w*|ingres\w*)\b", t):
             return True
     if re.search(
@@ -149,6 +150,7 @@ def parse_cargar_producto_rapido(texto_usuario):
         r"\bpiso\s+\d+",
         r"\bmodulo\s+\d+",
         r"\bfila\s+\d+",
+        r"\bfondo\s+\d+",
     ):
         t_sin_ubi = re.sub(pat, " ", t_sin_ubi)
     t_sin_ubi = re.sub(r"\s+", " ", t_sin_ubi).strip()
@@ -280,7 +282,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
        - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", operador: "menor_o_igual".
        - Si pide "3 o más", "al menos 3" o "más de 3", operador: "mayor_o_igual".
        - Si no especifica cantidad en un reporte, asume 3.
-    4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo o fila, extrae los números. Lo que no mencione, es null.
+    4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo, fila o fondo, extrae los números. Lo que no mencione, es null.
     5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
     6. PROVEEDORES: Si pide filtrar por proveedor, extrae solo la raíz del nombre (ej: "expoyer", no "EXPOYER S.A." ni "productos de").
     7. ALTA / BAJA DE STOCK (producto YA EXISTE): Solo si pide sumar/restar unidades a un código existente, SIN dar descripción ni datos de producto nuevo.
@@ -304,7 +306,7 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     {{"accion": "reporte_stock", "operador": "exacto" O "menor_o_igual" O "mayor_o_igual", "cantidad": NUMERO}}
 
     OPCIÓN 3 (Actualizar Ubicación Exacta):
-    {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL}}
+    {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "fondo": NUMERO_O_NULL}}
 
     OPCIÓN 4 (Alta de Stock / Sumar unidades al inventario):
     {{"accion": "alta", "termino": "CODIGO_O_NOMBRE_LIMPIO", "cantidad": NUMERO}}
@@ -342,8 +344,8 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     Si no indica modo, usar "reemplazar". NO confundir con buscar stock ni con cambiar marca.
 
     OPCIÓN 12 (Registrar producto nuevo en inventario — requiere código y descripción):
-    {{"accion": "cargar_producto", "codigo": "CODIGO_LIMPIO", "descripcion": "DESCRIPCION", "vehiculos": ["VOLKSWAGEN"], "stock": NUMERO, "marca": "GENERICO", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "precio_base": NUMERO_O_NULL}}
-    Ejemplo: "registrame el 25412 buje amortiguador para gol 4 unidades pasillo 2" -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, pasillo: 2
+    {{"accion": "cargar_producto", "codigo": "CODIGO_LIMPIO", "descripcion": "DESCRIPCION", "vehiculos": ["VOLKSWAGEN"], "stock": NUMERO, "stock_critico": NUMERO_O_NULL, "marca": "GENERICO", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "fondo": NUMERO_O_NULL, "precio_base": NUMERO_O_NULL}}
+    Ejemplo: "registrame el 25412 buje amortiguador para gol 4 unidades pasillo 2 fondo 1 stock critico 3" -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, stock_critico: 3, pasillo: 2, fondo: 1
     """
 
     try:

@@ -29,6 +29,12 @@ from modulos.precios_proveedor import (
 
 load_dotenv(override=True)
 
+STOCK_CRITICO_DEFAULT = 3
+
+
+def ubicacion_default():
+    return {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0, "fondo": 0}
+
 def inicializar_firebase():
     if not firebase_admin._apps: # type: ignore
         if "firebase_key" in st.secrets:
@@ -99,7 +105,13 @@ def _float_fila(row, key, default=0.0) -> float:
 def _ubicacion_desde_fila(row):
     ubi = row.get("ubicacion")
     if isinstance(ubi, dict):
-        return ubi
+        return {
+            "pasillo": int(ubi.get("pasillo", 0) or 0),
+            "piso": int(ubi.get("piso", 0) or 0),
+            "modulo": int(ubi.get("modulo", 0) or 0),
+            "fila": int(ubi.get("fila", 0) or 0),
+            "fondo": int(ubi.get("fondo", 0) or 0),
+        }
     pasillo = row.get("pasillo")
     if not _celda_vacia(pasillo):
         return {
@@ -107,8 +119,9 @@ def _ubicacion_desde_fila(row):
             "piso": _entero_fila(row, "piso"),
             "modulo": _entero_fila(row, "modulo"),
             "fila": _entero_fila(row, "fila"),
+            "fondo": _entero_fila(row, "fondo"),
         }
-    return {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}
+    return ubicacion_default()
 
 
 def _borrar_subcoleccion(ref_doc, nombre_sub):
@@ -145,7 +158,7 @@ def sanitizar_clave_marca(marca):
 
 _CAMPOS_FORMATO_ANTIGUO = (
     "marca", "condicion", "stock", "precio_venta", "precio_interno",
-    "ultimo_costo_base", "proveedor", "cuit_proveedor",
+    "ultimo_costo_base", "proveedor", "cuit_proveedor", "stock_critico",
 )
 
 
@@ -158,6 +171,7 @@ def _extraer_variantes_producto(datos):
     return {
         marca_ant: {
             "stock": int(datos.get("stock", 0)),
+            "stock_critico": int(datos.get("stock_critico", STOCK_CRITICO_DEFAULT)),
             "ultimo_costo_base": float(datos.get("ultimo_costo_base", 0.0)),
             "precio_interno": float(datos.get("precio_interno", 0.0)),
             "precio_venta": float(datos.get("precio_venta", 0.0)),
@@ -215,6 +229,7 @@ def exportar_inventario_csv():
             row["piso"] = ubi.get("piso", 0)
             row["modulo"] = ubi.get("modulo", 0)
             row["fila"] = ubi.get("fila", 0)
+            row["fondo"] = ubi.get("fondo", 0)
         filas.append(row)
 
     df = pd.DataFrame(filas)
@@ -251,6 +266,7 @@ def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
                     "piso": int(ubi.get("piso", 0)),
                     "modulo": int(ubi.get("modulo", 0)),
                     "fila": int(ubi.get("fila", 0)),
+                    "fondo": int(ubi.get("fondo", 0)),
                 },
                 "ultima_actualizacion": ahora,
                 "variantes": {}
@@ -258,6 +274,7 @@ def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
         
         maestros[id_m]["variantes"][marca] = {
             "stock": _entero_fila(row, "stock"),
+            "stock_critico": _entero_fila(row, "stock_critico") or STOCK_CRITICO_DEFAULT,
             "precio_venta": _float_fila(row, "precio_venta"),
             "precio_interno": _float_fila(row, "precio_interno"),
             "ultimo_costo_base": _float_fila(row, "ultimo_costo_base"),
@@ -988,11 +1005,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         snap_existente = ref_prod.get()
         datos_existentes = snap_existente.to_dict() if snap_existente.exists else None
 
-        payload = {
-            "codigo": codigo_base,
-            "ultima_actualizacion": ahora,
-            "variantes": {
-                marca_rep: {
+        variant_data = {
                     "stock": firestore.Increment(cantidad), # type: ignore
                     "ultimo_costo_base": precio_unitario,
                     "precio_interno": calculos['precio_interno'],
@@ -1000,6 +1013,14 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                     "proveedor": proveedor,
                     "cuit_proveedor": cuit_proveedor
                 }
+        if not datos_existentes or marca_rep not in (datos_existentes.get("variantes") or {}):
+            variant_data["stock_critico"] = STOCK_CRITICO_DEFAULT
+
+        payload = {
+            "codigo": codigo_base,
+            "ultima_actualizacion": ahora,
+            "variantes": {
+                marca_rep: variant_data
             }
         }
         if datos_existentes:
@@ -1036,7 +1057,10 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
         partes.append(f"{nuevos} código(s) nuevos.")
     return True, " ".join(partes)
 
-def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock, pasillo, piso, modulo, fila):
+def alta_manual_producto(
+    codigo, condicion, vehiculo, descripcion, cuit_proveedor, precio_base, recargo, stock,
+    pasillo, piso, modulo, fila, fondo=0, stock_critico=STOCK_CRITICO_DEFAULT,
+):
     codigo_base = str(codigo).strip().upper().replace("/", "-")
     marca_limpia = sanitizar_clave_marca(condicion)
     vehiculos_limpios = normalizar_lista_vehiculos(vehiculo)
@@ -1067,12 +1091,14 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
             "pasillo": int(pasillo),
             "piso": int(piso),
             "modulo": int(modulo),
-            "fila": int(fila)
+            "fila": int(fila),
+            "fondo": int(fondo),
         },
         "ultima_actualizacion": ahora,
         "variantes": {
             marca_limpia: {
                 "stock": int(stock),
+                "stock_critico": max(0, int(stock_critico)),
                 "ultimo_costo_base": float(precio_base),
                 "precio_interno": calculos['precio_interno'],
                 "precio_venta": calculos['precio_venta'],
@@ -1086,7 +1112,7 @@ def alta_manual_producto(codigo, condicion, vehiculo, descripcion, cuit_proveedo
     return True, f"Repuesto {codigo_base} guardado bajo la variante {marca_limpia}."
 
 
-def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modulo=None, fila=None):
+def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modulo=None, fila=None, fondo=None):
     id_limpio = str(id_producto).strip().upper().replace("/", "-").split("_")[0] # Toma el maestro
     ref_prod = get_db().collection("productos").document(id_limpio)
     
@@ -1102,6 +1128,7 @@ def actualizar_ubicacion_relevamiento(id_producto, pasillo=None, piso=None, modu
     if piso is not None: updates["ubicacion.piso"] = int(piso)
     if modulo is not None: updates["ubicacion.modulo"] = int(modulo)
     if fila is not None: updates["ubicacion.fila"] = int(fila)
+    if fondo is not None: updates["ubicacion.fondo"] = int(fondo)
     updates["ultima_actualizacion"] = datetime.now(timezone.utc)
     
     if updates:
@@ -1556,7 +1583,9 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
         "Piso": "ubicacion.piso",
         "Módulo": "ubicacion.modulo",
         "Fila": "ubicacion.fila",
+        "Fondo": "ubicacion.fondo",
         "Stock": f"variantes.{marca_key}.stock",
+        "Stock crítico": f"variantes.{marca_key}.stock_critico",
         "Precio Final": f"variantes.{marca_key}.precio_venta",
     }
 
@@ -1564,12 +1593,14 @@ def actualizar_producto_desde_grilla(id_producto, campo, nuevo_valor, id_maestro
     if not campo_db:
         return False, "Campo no editable."
 
-    if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Precio Final"]:
+    if campo in ["Stock", "Pasillo", "Piso", "Módulo", "Fila", "Fondo", "Stock crítico", "Precio Final"]:
         nuevo_valor = int(nuevo_valor)
     else:
         nuevo_valor = str(nuevo_valor)
 
     if campo in ("Stock", "Precio Final") and variantes and marca_key not in variantes:
+        return False, f"La variante '{marca_key}' no existe en este artículo."
+    if campo == "Stock crítico" and variantes and marca_key not in variantes:
         return False, f"La variante '{marca_key}' no existe en este artículo."
 
     updates = {campo_db: nuevo_valor, "ultima_actualizacion": ahora}
@@ -1704,12 +1735,13 @@ def obtener_inventario_completo() -> list:
                 "vehiculos_busqueda": veh_busqueda,
                 "marca": marca_ant,
                 "stock": master.get("stock", 0),
+                "stock_critico": int(master.get("stock_critico", STOCK_CRITICO_DEFAULT)),
                 "precio_venta": master.get("precio_venta", 0.0),
                 "precio_interno": master.get("precio_interno", 0.0),
                 "ultimo_costo_base": master.get("ultimo_costo_base", 0.0),
                 "proveedor": master.get("proveedor", "DESCONOCIDO"),
                 "cuit_proveedor": master.get("cuit_proveedor", "0"),
-                "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}),
+                "ubicacion": master.get("ubicacion", ubicacion_default()),
                 "usa_variantes_fs": False,
             }
             inventario.append(item)
@@ -1726,12 +1758,13 @@ def obtener_inventario_completo() -> list:
                     "vehiculos_busqueda": veh_busqueda,
                     "marca": marca,
                     "stock": v_data.get("stock", 0),
+                    "stock_critico": int(v_data.get("stock_critico", STOCK_CRITICO_DEFAULT)),
                     "precio_venta": v_data.get("precio_venta", 0.0),
                     "precio_interno": v_data.get("precio_interno", 0.0),
                     "ultimo_costo_base": v_data.get("ultimo_costo_base", 0.0),
                     "proveedor": v_data.get("proveedor", ""),
                     "cuit_proveedor": v_data.get("cuit_proveedor", ""),
-                    "ubicacion": master.get("ubicacion", {"pasillo": 0, "piso": 0, "modulo": 0, "fila": 0}),
+                    "ubicacion": master.get("ubicacion", ubicacion_default()),
                     "usa_variantes_fs": True,
                 }
                 inventario.append(item)
