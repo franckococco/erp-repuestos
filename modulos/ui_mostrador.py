@@ -1,5 +1,6 @@
 """UI del mostrador: cliente, búsqueda de productos y facturación ARCA."""
 import math
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
@@ -1131,9 +1132,23 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
                     st.error("No se pudo agregar ningún artículo.")
 
 
-def _cart_editor_session_key(vendedor):
-    rev = st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)
-    return f"cart_editor_{vendedor}_{rev}"
+def _filas_carrito_desde_inputs(vendedor, carrito):
+    """Lee cantidad/precio editados en la grilla por filas."""
+    rev = int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0))
+    vid = str(vendedor)
+    items = [i for i in (carrito or []) if isinstance(i, dict)]
+    filas = []
+    for idx, item in enumerate(items):
+        iid = str(item.get("id", ""))
+        if not iid:
+            continue
+        safe = re.sub(r"[^\w]", "_", iid)[:36]
+        qkey = f"cart_q_{vid}_{rev}_{idx}_{safe}"
+        pkey = f"cart_p_{vid}_{rev}_{idx}_{safe}"
+        cant = st.session_state.get(qkey, item.get("cantidad", 1))
+        precio = st.session_state.get(pkey, item.get("precio_unitario", 0))
+        filas.append((iid, cant, precio))
+    return filas
 
 
 def _float_celda(val, default=0.0):
@@ -1153,38 +1168,19 @@ def _int_celda(val, default=1):
         return default
 
 
-def _dataframe_desde_editor(vendedor):
-    raw = st.session_state.get(_cart_editor_session_key(vendedor))
-    if raw is None:
-        return None
-    if isinstance(raw, pd.DataFrame):
-        return raw if not raw.empty else None
-    if isinstance(raw, dict):
-        try:
-            df = pd.DataFrame(raw)
-            return df if not df.empty else None
-        except (TypeError, ValueError):
-            return None
-    return None
-
-
 def carrito_efectivo_mostrador(vendedor, carrito_base):
     """Carrito con cantidad/precio de la grilla aún no guardados en Firebase."""
     carrito = [dict(i) for i in (carrito_base or []) if isinstance(i, dict)]
     if not carrito:
         return carrito
-    df_live = _dataframe_desde_editor(vendedor)
-    if df_live is None:
-        return carrito
 
     id_map = {str(i.get("id", "")): i for i in carrito}
-    for _, row in df_live.iterrows():
-        iid = str(row.get("_id", ""))
+    for iid, cant, precio in _filas_carrito_desde_inputs(vendedor, carrito):
         if not iid or iid not in id_map:
             continue
         item = id_map[iid]
-        cant = _int_celda(row.get("Cant."), int(item.get("cantidad", 1)))
-        precio = _float_celda(row.get("Precio unit."), float(item.get("precio_unitario", 0)))
+        cant = _int_celda(cant, int(item.get("cantidad", 1)))
+        precio = _float_celda(precio, float(item.get("precio_unitario", 0)))
         item["cantidad"] = cant
         item["precio_unitario"] = precio
         item["subtotal"] = cant * precio
@@ -1200,10 +1196,10 @@ def calcular_totales_carrito(carrito, desc_porc=0.0):
 def sincronizar_grilla_carrito_firebase(vendedor, carrito_base=None):
     """Persiste en Firebase los cambios pendientes del editor de la grilla."""
     carrito = carrito_base if carrito_base is not None else (obtener_carrito(str(vendedor)) or [])
-    df_live = _dataframe_desde_editor(vendedor)
-    if df_live is None:
+    filas = _filas_carrito_desde_inputs(vendedor, carrito)
+    if not filas:
         return 0, []
-    return _aplicar_cambios_carrito(vendedor, carrito, df_live)
+    return _aplicar_cambios_carrito_filas(vendedor, carrito, filas)
 
 
 def obtener_carrito_listo_facturacion(vendedor, desc_porc=0.0):
@@ -2051,37 +2047,19 @@ def render_ia_mostrador(
     render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
 
-def _carrito_a_dataframe(carrito):
-    filas = []
-    for item in carrito:
-        if not isinstance(item, dict):
-            continue
-        cant = int(item.get("cantidad", 1))
-        precio = float(item.get("precio_unitario", 0))
-        filas.append({
-            "_id": str(item.get("id", "")),
-            "Código": str(item.get("id", "")),
-            "Descripción": str(item.get("descripcion", "")),
-            "Cant.": cant,
-            "Precio unit.": precio,
-        })
-    return pd.DataFrame(filas)
-
-
-def _aplicar_cambios_carrito(vendedor, carrito, df_editado):
-    """Sincroniza cantidad/precio editados en la grilla con Firebase."""
+def _aplicar_cambios_carrito_filas(vendedor, carrito, filas_editadas):
+    """Sincroniza cantidad/precio editados en filas del carrito con Firebase."""
     orig_map = {str(i.get("id", "")): i for i in carrito if isinstance(i, dict)}
     errores = []
     cambios = 0
 
-    for _, row in df_editado.iterrows():
-        iid = str(row.get("_id", ""))
+    for iid, cant_n, precio_n in filas_editadas:
         if not iid or iid not in orig_map:
             continue
         orig = orig_map[iid]
-        cant_n = _int_celda(row.get("Cant."), int(orig.get("cantidad", 1)))
+        cant_n = max(1, int(cant_n))
+        precio_n = max(0.0, float(precio_n))
         cant_o = int(orig.get("cantidad", 1))
-        precio_n = _float_celda(row.get("Precio unit."), float(orig.get("precio_unitario", 0)))
         precio_o = float(orig.get("precio_unitario", 0))
 
         if cant_n != cant_o:
@@ -2101,65 +2079,83 @@ def _aplicar_cambios_carrito(vendedor, carrito, df_editado):
 
 
 def render_carrito_grilla(vendedor, carrito):
-    """Grilla ancha editable (cantidad y precio) — PC y móvil."""
+    """Grilla editable con tachito por fila para quitar ítems."""
     st.markdown("**Ítems del presupuesto**")
-    st.caption("Editá **Cant.** y **Precio unit.** en la tabla y pulsá «Aplicar cambios».")
+    st.caption("Editá **Cant.** y **Precio unit.**; usá **🗑️** en cada fila para quitar.")
 
-    df = _carrito_a_dataframe(carrito)
-    if df.empty:
+    items = [i for i in carrito if isinstance(i, dict)]
+    if not items:
         return
 
-    df_edit = st.data_editor(
-        df,
-        column_config={
-            "_id": None,
-            "Código": st.column_config.TextColumn("Código", disabled=True, width="medium"),
-            "Descripción": st.column_config.TextColumn("Descripción", disabled=True, width="large"),
-            "Cant.": st.column_config.NumberColumn(
-                "Cant.", min_value=1, max_value=9999, step=1, format="%d"
-            ),
-            "Precio unit.": st.column_config.NumberColumn(
-                "Precio unit.", min_value=0.0, step=0.01, format="$ %.2f"
-            ),
-        },
-        use_container_width=True,
-        hide_index=True,
-        key=_cart_editor_session_key(vendedor),
-    )
+    rev = int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0))
+    vid = str(vendedor)
 
-    act1, act2, act3 = st.columns([2, 2, 3])
-    if act1.button("✅ Aplicar cambios", type="primary", use_container_width=True, key=f"cart_apply_{vendedor}"):
-        cambios, errores = _aplicar_cambios_carrito(vendedor, carrito, df_edit)
+    hc, hd, hq, hp, hx = st.columns([2.1, 3.6, 0.75, 1.05, 0.45])
+    hc.markdown("**Código**")
+    hd.markdown("**Descripción**")
+    hq.markdown("**Cant.**")
+    hp.markdown("**Precio unit.**")
+    hx.markdown("**🗑️**")
+
+    filas_editadas = []
+    for idx, item in enumerate(items):
+        iid = str(item.get("id", ""))
+        if not iid:
+            continue
+        safe = re.sub(r"[^\w]", "_", iid)[:36]
+
+        c1, c2, c3, c4, c5 = st.columns([2.1, 3.6, 0.75, 1.05, 0.45])
+        cod_txt = iid if len(iid) <= 34 else f"{iid[:31]}…"
+        c1.markdown(f"<span style='font-size:0.82rem'>{cod_txt}</span>", unsafe_allow_html=True)
+        desc = str(item.get("descripcion", ""))
+        if len(desc) > 52:
+            desc = desc[:49] + "…"
+        c2.markdown(f"<span style='font-size:0.82rem;color:#475569'>{desc}</span>", unsafe_allow_html=True)
+        cant = c3.number_input(
+            "Cant.",
+            min_value=1,
+            max_value=9999,
+            value=int(item.get("cantidad", 1)),
+            step=1,
+            key=f"cart_q_{vid}_{rev}_{idx}_{safe}",
+            label_visibility="collapsed",
+        )
+        precio = c4.number_input(
+            "Precio",
+            min_value=0.0,
+            value=float(item.get("precio_unitario", 0)),
+            step=0.01,
+            format="%.2f",
+            key=f"cart_p_{vid}_{rev}_{idx}_{safe}",
+            label_visibility="collapsed",
+        )
+        if c5.button(
+            "🗑️",
+            key=f"cart_x_{vid}_{rev}_{idx}_{safe}",
+            help=f"Quitar {iid}",
+            use_container_width=True,
+        ):
+            ok, msj = eliminar_item_carrito(vid, iid)
+            if ok:
+                _al_modificar_carrito_mostrador(vendedor)
+                st.rerun()
+            else:
+                st.error(msj)
+        filas_editadas.append((iid, cant, precio))
+
+    if st.button(
+        "✅ Aplicar cambios",
+        type="primary",
+        use_container_width=True,
+        key=f"cart_apply_{vendedor}",
+    ):
+        cambios, errores = _aplicar_cambios_carrito_filas(vendedor, carrito, filas_editadas)
         if errores:
             st.error("\n".join(errores))
         elif cambios:
             st.rerun()
         else:
             st.toast("Sin cambios.")
-
-    ids = [str(i.get("id", "")) for i in carrito if isinstance(i, dict)]
-    labels = {
-        iid: f"{iid[:28]}…" if len(iid) > 28 else iid for iid in ids
-    }
-    with act2:
-        st.caption("Quitar ítem")
-        quitar = st.selectbox(
-            "Quitar ítem",
-            options=[""] + ids,
-            format_func=lambda x: "— Elegir —" if not x else labels.get(x, x),
-            key=f"cart_del_sel_{vendedor}",
-            label_visibility="collapsed",
-        )
-    if act3.button("🗑️ Quitar seleccionado", use_container_width=True, key=f"cart_del_btn_{vendedor}"):
-        if quitar:
-            ok, msj = eliminar_item_carrito(str(vendedor), quitar)
-            if ok:
-                _al_modificar_carrito_mostrador(vendedor)
-                st.rerun()
-            else:
-                st.error(msj)
-        else:
-            st.warning("Elegí un ítem para quitar.")
 
 
 def render_panel_cobro_mostrador(
