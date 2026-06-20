@@ -194,35 +194,57 @@ def extraer_items_orden_voz(texto):
                 agregar(m.group(1), 1, es_descripcion=False)
 
         resto = _limpiar_texto_para_items_descripcion(fragmento)
-        if len(acumulado) == n_antes:
-            patrones_desc = [
-                r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
-                r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
-                r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
-            ]
-            for patron in patrones_desc:
-                for m in re.finditer(patron, resto):
-                    agregar(m.group(1), m.group(2), es_descripcion=True)
+        for item in acumulado[n_antes:]:
+            term = str(item.get("termino", "")).lower()
+            cant = int(item.get("cantidad", 1))
+            if not term:
+                continue
+            resto = re.sub(
+                rf"(?:codigo|código)\s+{re.escape(term)}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+                " ",
+                resto,
+                flags=re.I,
+            )
+            resto = re.sub(
+                rf"\b{re.escape(term)}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+                " ",
+                resto,
+                flags=re.I,
+            )
+        resto = re.sub(r"\s+", " ", resto).strip()
+
+        patrones_desc = [
+            r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+            r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+            r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
+        ]
+        for patron in patrones_desc:
+            for m in re.finditer(patron, resto):
+                agregar(m.group(1), m.group(2), es_descripcion=True)
 
     items = []
     vistos = set()
     raw = str(texto).strip()
     _extraer_de_fragmento(raw, items, vistos)
 
-    if len(items) <= 1 and re.search(
-        r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+",
-        normalizar_texto_basico(raw).lower(),
-    ):
+    if len(items) <= 1:
         t_full = normalizar_texto_basico(raw).lower()
-        segmentos = re.split(
-            r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+|\s+más\s+|\s+mas\s+|\s+después\s+|\s+despues\s+",
-            t_full,
+        prod_pat = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
+        separadores = (
+            r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+|\s+más\s+|\s+mas\s+"
+            r"|\s+después\s+|\s+despues\s+"
+            rf"|\bunidad(?:es)?\s+(?=(?:{prod_pat})\b)"
+            r"|\b(?:codigo|código)\s+"
         )
-        if len(segmentos) > 1:
-            items.clear()
-            vistos.clear()
-            for seg in segmentos:
-                _extraer_de_fragmento(seg, items, vistos)
+        if re.search(separadores, t_full):
+            segmentos = re.split(separadores, t_full)
+            if len(segmentos) > 1:
+                items.clear()
+                vistos.clear()
+                for seg in segmentos:
+                    seg = seg.strip()
+                    if seg:
+                        _extraer_de_fragmento(seg, items, vistos)
 
     return items
 
