@@ -47,6 +47,7 @@ from modulos.mostrador_voz_flujo import (
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
     marcar_verificacion_mostrador,
+    descartar_panels_operacion_anterior,
 )
 
 
@@ -404,6 +405,13 @@ def _cerrar_presupuesto_cargado(estado: str):
         st.session_state.presupuesto_cargado_id = None
 
 
+def agregar_al_carrito_mostrador(vendedor, id_producto, cantidad=1):
+    """Agrega al carrito y descarta carteles de la operación anterior."""
+    descartar_panels_operacion_anterior()
+    from modulos.db_firebase import agregar_al_carrito
+    return agregar_al_carrito(str(vendedor), id_producto, cantidad)
+
+
 def _limpiar_inputs_mostrador(vendedor):
     """Resetea campos de búsqueda y orden rápida en la UI."""
     vid = str(vendedor)
@@ -430,6 +438,7 @@ def _limpiar_inputs_mostrador(vendedor):
 
 def limpiar_venta_mostrador(vendedor, reset_cliente=True, conservar_pdf_presupuesto=False):
     """Vacía carrito y flags de sesión tras cerrar una venta."""
+    descartar_panels_operacion_anterior()
     vaciar_carrito(str(vendedor))
     reset_estado_orden_mostrador(
         vendedor,
@@ -696,6 +705,7 @@ def render_presupuestos_guardados(vendedor):
         if col_r.button("↩️ Reabrir en carrito", use_container_width=True, key="pres_reabrir"):
             ok, msj, cliente = reabrir_presupuesto_en_carrito(str(vendedor), sel_id, reemplazar=True)
             if ok:
+                descartar_panels_operacion_anterior()
                 st.session_state.cliente_activo = normalizar_cliente_activo(cliente)
                 st.session_state.presupuesto_cargado_id = sel_id
                 if "advertencias" in msj.lower() or "stock" in msj.lower():
@@ -770,10 +780,12 @@ def render_seccion_cliente_mostrador():
         )
     with col_cf:
         if st.button("Consumidor final", use_container_width=True):
+            descartar_panels_operacion_anterior()
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
     with col_lim:
         if st.button("Limpiar cliente", use_container_width=True):
+            descartar_panels_operacion_anterior()
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
 
@@ -804,6 +816,7 @@ def render_seccion_cliente_mostrador():
                     )
                     if st.button("Usar cliente seleccionado", key="mostrador_usar_cliente", type="primary"):
                         if sel_id:
+                            descartar_panels_operacion_anterior()
                             st.session_state.cliente_activo = cliente_db_a_activo(
                                 clientes_db.get(sel_id, {})
                             )
@@ -893,6 +906,7 @@ def render_seccion_cliente_mostrador():
                     )
                     if ok:
                         id_cli = "".join(filter(str.isdigit, str(cuit_nuevo)))
+                        descartar_panels_operacion_anterior()
                         st.session_state.cliente_activo = normalizar_cliente_activo({
                             "nombre": nombre_nuevo.upper(),
                             "cuit": id_cli,
@@ -1724,6 +1738,7 @@ def render_ia_mostrador(
         submit_ia = True
 
     if submit_ia and orden:
+        descartar_panels_operacion_anterior()
         fb_tipo = None
         fb_msg = None
         do_rerun = False

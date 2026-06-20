@@ -685,6 +685,7 @@ elif pagina == "mostrador":
         render_descarga_presupuesto_prominente,
         render_factura_arca_exitosa,
         render_historial_facturas_arca,
+        agregar_al_carrito_mostrador,
         VENDEDOR_MOSTRADOR,
     )
 
@@ -749,7 +750,7 @@ elif pagina == "mostrador":
                 obtener_inventario_completo,
                 buscar_en_inventario,
                 agrupar_por_maestro,
-                agregar_al_carrito,
+                agregar_al_carrito_mostrador,
             )
             st.divider()
             render_presupuestos_guardados(vendedor)
@@ -760,7 +761,7 @@ elif pagina == "mostrador":
 
             with t_buscar:
                 if inv_mostrador:
-                    render_buscador_productos(vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario)
+                    render_buscador_productos(vendedor, inv_mostrador, agregar_al_carrito_mostrador, filtrar_inventario)
                 else:
                     st.info("El inventario está vacío. Agregue productos primero.")
 
@@ -774,7 +775,7 @@ elif pagina == "mostrador":
                     submit_btn = col_scan2.form_submit_button("➕ Agregar", use_container_width=True)
 
                     if submit_btn and codigo_manual_scan:
-                        exito, msj = agregar_al_carrito(str(vendedor), codigo_manual_scan)
+                        exito, msj = agregar_al_carrito_mostrador(vendedor, codigo_manual_scan)
                         if exito:
                             st.success(msj)
                             st.rerun()
@@ -787,7 +788,7 @@ elif pagina == "mostrador":
                     cod_detectado = decodificar_qr_desde_imagen(Image.open(foto_qr))
                     if cod_detectado:
                         id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
-                        exito, msj = agregar_al_carrito(str(vendedor), id_limpio)
+                        exito, msj = agregar_al_carrito_mostrador(vendedor, id_limpio)
                         if exito:
                             st.success(f"Añadido: {id_limpio}")
                             st.rerun()

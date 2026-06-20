@@ -16,6 +16,13 @@ from modulos.db_firebase import (
 from modulos.ia_asistente import normalizar_texto_basico
 
 
+def descartar_panels_operacion_anterior():
+    """Quita carteles de factura/presupuesto de la operación anterior."""
+    st.session_state.pop("factura_arca_reciente", None)
+    st.session_state.pop("mostrador_voz_solo_ticket", None)
+    st.session_state.pop("hist_arca_preview", None)
+
+
 def preprocesar_texto_mostrador(texto):
     """Alias del preprocesador compartido (código + cantidad separados)."""
     from modulos.ia_asistente import preprocesar_texto_usuario
@@ -344,6 +351,7 @@ def agregar_termino_voz(
 
 
 def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_comprobante=None):
+    descartar_panels_operacion_anterior()
     if consumidor_final:
         cli = cliente_consumidor_final()
     elif nombre_cliente:
@@ -391,6 +399,7 @@ def ejecutar_flujo_factura_voz(
     Ejecuta en un solo paso: cliente, ítems, pago e impresión ticket.
     emitir_factura_fn(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket)
     """
+    descartar_panels_operacion_anterior()
     pasos_ok = []
     errores = []
 
