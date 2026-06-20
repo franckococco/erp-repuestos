@@ -406,9 +406,18 @@ def _cerrar_presupuesto_cargado(estado: str):
         st.session_state.presupuesto_cargado_id = None
 
 
+def _invalidar_pdf_presupuesto_mostrador():
+    """Quita PDF en caché cuando el carrito o el cliente ya no coinciden."""
+    st.session_state.mostrador_listo_para_ticket = False
+    st.session_state.pop("presupuesto_pdf_descarga", None)
+    st.session_state.pop("presupuesto_pdf_nombre", None)
+    st.session_state.pop("presupuesto_pdf_fingerprint", None)
+
+
 def agregar_al_carrito_mostrador(vendedor, id_producto, cantidad=1):
     """Agrega al carrito y descarta carteles de la operación anterior."""
     descartar_panels_operacion_anterior()
+    _invalidar_pdf_presupuesto_mostrador()
     from modulos.db_firebase import agregar_al_carrito
     return agregar_al_carrito(str(vendedor), id_producto, cantidad)
 
@@ -461,17 +470,14 @@ def reset_estado_orden_mostrador(vendedor, reset_cliente=False, conservar_pdf_pr
     st.session_state.resultados_ia_mostrador = None
     st.session_state.pop("msg_ia_mostrador", None)
     if not conservar_pdf_presupuesto:
-        st.session_state.pop("presupuesto_pdf_descarga", None)
-        st.session_state.pop("presupuesto_pdf_nombre", None)
+        _invalidar_pdf_presupuesto_mostrador()
     if reset_cliente:
         st.session_state.cliente_activo = cliente_consumidor_final()
 
 
 def _al_modificar_carrito_mostrador(vendedor):
     """Tras quitar ítems: invalidar PDF y verificación."""
-    st.session_state.mostrador_listo_para_ticket = False
-    st.session_state.pop("presupuesto_pdf_descarga", None)
-    st.session_state.pop("presupuesto_pdf_nombre", None)
+    _invalidar_pdf_presupuesto_mostrador()
     if not (obtener_carrito(str(vendedor)) or []):
         reset_estado_orden_mostrador(vendedor, reset_cliente=False)
 
@@ -493,6 +499,33 @@ def _nombre_archivo_presupuesto(numero, cliente_nombre):
     return f"Presupuesto_{nro}_{safe}.pdf"
 
 
+def _fingerprint_presupuesto(vendedor, carrito=None):
+    """Huella del carrito + cliente para detectar PDF desactualizado."""
+    cli = normalizar_cliente_activo(st.session_state.get("cliente_activo"))
+    if carrito is None:
+        carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
+    parts = [
+        str(cli.get("nombre", "")),
+        str(cli.get("cuit", cli.get("cuit_dni", ""))),
+        f"{float(cli.get('descuento', 0)):.4f}",
+    ]
+    for item in sorted(carrito, key=lambda x: str(x.get("id", ""))):
+        parts.append(
+            f"{item.get('id')}|{int(item.get('cantidad', 1))}|"
+            f"{float(item.get('precio_unitario', 0)):.4f}"
+        )
+    return "|".join(parts)
+
+
+def _carrito_para_presupuesto(vendedor):
+    """Sincroniza la grilla con Firebase y devuelve ítems efectivos para el PDF."""
+    carrito_base = obtener_carrito(str(vendedor)) or []
+    if carrito_base:
+        sincronizar_grilla_carrito_firebase(vendedor, carrito_base)
+        carrito_base = obtener_carrito(str(vendedor)) or []
+    return carrito_efectivo_mostrador(vendedor, carrito_base)
+
+
 def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto):
     """Genera PDF borrador para descargar. No vacía la grilla: el usuario revisa ítems arriba."""
     cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
@@ -502,6 +535,7 @@ def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto):
     )
     st.session_state.presupuesto_pdf_descarga = pdf
     st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(None, cli_nom)
+    st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(vendedor, carrito)
     return pdf
 
 
@@ -516,6 +550,15 @@ def render_descarga_presupuesto_prominente(vendedor):
     """Botón de descarga del PDF (la revisión de ítems es la grilla de arriba)."""
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
     if not pdf_ready:
+        return
+    fp_actual = _fingerprint_presupuesto(vendedor)
+    fp_guardado = st.session_state.get("presupuesto_pdf_fingerprint")
+    if fp_guardado and fp_actual != fp_guardado:
+        st.warning(
+            "⚠️ **Los ítems o el cliente cambiaron** desde que generaste el PDF. "
+            "Regeneralo con **Generar PDF e imprimir presupuesto** (panel derecho) "
+            "antes de descargar."
+        )
         return
     st.info(
         "PDF generado. **Revisá los ítems en la grilla** (editá o eliminá con 🗑️). "
@@ -781,11 +824,13 @@ def render_seccion_cliente_mostrador():
     with col_cf:
         if st.button("Consumidor final", use_container_width=True):
             descartar_panels_operacion_anterior()
+            _invalidar_pdf_presupuesto_mostrador()
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
     with col_lim:
         if st.button("Limpiar cliente", use_container_width=True):
             descartar_panels_operacion_anterior()
+            _invalidar_pdf_presupuesto_mostrador()
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
 
@@ -817,6 +862,7 @@ def render_seccion_cliente_mostrador():
                     if st.button("Usar cliente seleccionado", key="mostrador_usar_cliente", type="primary"):
                         if sel_id:
                             descartar_panels_operacion_anterior()
+                            _invalidar_pdf_presupuesto_mostrador()
                             st.session_state.cliente_activo = cliente_db_a_activo(
                                 clientes_db.get(sel_id, {})
                             )
@@ -907,6 +953,7 @@ def render_seccion_cliente_mostrador():
                     if ok:
                         id_cli = "".join(filter(str.isdigit, str(cuit_nuevo)))
                         descartar_panels_operacion_anterior()
+                        _invalidar_pdf_presupuesto_mostrador()
                         st.session_state.cliente_activo = normalizar_cliente_activo({
                             "nombre": nombre_nuevo.upper(),
                             "cuit": id_cli,
@@ -1764,11 +1811,9 @@ def render_ia_mostrador(
                     fb_tipo, fb_msg, do_rerun = "ok", msj, True
                     st.session_state.resultados_ia_mostrador = None
                     if resp.get("intent_sugerido") == "presupuesto" and resp.get("ir_verificacion"):
-                        carrito_n = obtener_carrito(str(vendedor)) or []
+                        carrito_n = _carrito_para_presupuesto(vendedor)
                         if carrito_n:
-                            _, tb = calcular_totales_carrito(
-                                carrito_efectivo_mostrador(vendedor, carrito_n), desc_porc
-                            )
+                            _, tb = calcular_totales_carrito(carrito_n, desc_porc)
                             _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
                             fb_msg = (
                                 f"{msj} Revisá la grilla de ítems arriba. "
@@ -1843,8 +1888,7 @@ def render_ia_mostrador(
                     st.error(msj)
 
             elif accion == "presupuesto_pdf":
-                sincronizar_grilla_carrito_firebase(vendedor, carrito_ui)
-                carrito_n = obtener_carrito(str(vendedor)) or []
+                carrito_n = _carrito_para_presupuesto(vendedor)
                 if not carrito_n:
                     st.error("El carrito está vacío.")
                 else:
@@ -1858,9 +1902,7 @@ def render_ia_mostrador(
                     st.rerun()
 
             elif accion == "listo_armado":
-                carrito_n = carrito_efectivo_mostrador(
-                    vendedor, obtener_carrito(str(vendedor)) or []
-                )
+                carrito_n = _carrito_para_presupuesto(vendedor)
                 if not carrito_n:
                     fb_tipo, fb_msg = "error", "Carrito vacío."
                 else:
@@ -1911,6 +1953,7 @@ def render_ia_mostrador(
                     tipo_comprobante=tipo,
                 )
                 if cli:
+                    _invalidar_pdf_presupuesto_mostrador()
                     st.success(f"✅ Cliente {cli.get('nombre', nombre_det)} activado.")
                     st.session_state.resultados_ia_mostrador = None
                     st.rerun()
@@ -2152,6 +2195,7 @@ def render_carrito_grilla(vendedor, carrito):
         if errores:
             st.error("\n".join(errores))
         elif cambios:
+            _invalidar_pdf_presupuesto_mostrador()
             st.rerun()
         else:
             st.toast("Sin cambios.")
@@ -2188,27 +2232,21 @@ def render_panel_cobro_mostrador(
                     type="primary",
                     key=f"btn_pdf_pres_{vendedor}",
                 ):
-                    _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
-                    if err_sync:
-                        st.error("\n".join(err_sync))
+                    carrito_sync = _carrito_para_presupuesto(vendedor)
+                    if not carrito_sync:
+                        st.error("El carrito está vacío.")
                     else:
-                        carrito_sync = carrito_efectivo_mostrador(
-                            vendedor, obtener_carrito(str(vendedor)) or []
-                        )
-                        if not carrito_sync:
-                            st.error("El carrito está vacío.")
-                        else:
-                            _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
-                            _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
-                            st.rerun()
+                        _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+                        _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
+                        st.rerun()
                 if st.button(
                     "💾 Guardar presupuesto numerado",
                     use_container_width=True,
                     key=f"btn_guardar_pres_{vendedor}",
                 ):
-                    _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
-                    if err_sync:
-                        st.error("\n".join(err_sync))
+                    carrito_sync = _carrito_para_presupuesto(vendedor)
+                    if not carrito_sync:
+                        st.error("El carrito está vacío.")
                     else:
                         ok, msj, nuevo_id = guardar_presupuesto(
                             str(vendedor), st.session_state.cliente_activo, ""
@@ -2216,13 +2254,17 @@ def render_panel_cobro_mostrador(
                         if ok:
                             pres = obtener_presupuesto_guardado(nuevo_id) or {}
                             nro = pres.get("numero_presupuesto")
+                            _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
                             pdf = generar_pdf_presupuesto_mostrador(
-                                vendedor, carrito, total_bruto, desc_porc, numero=nro,
+                                vendedor, carrito_sync, tb, desc_porc, numero=nro,
                             )
                             cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
                             st.session_state.presupuesto_pdf_descarga = pdf
                             st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
                                 nro, cli_nom,
+                            )
+                            st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(
+                                vendedor, carrito_sync
                             )
                             st.session_state.presupuesto_cargado_id = nuevo_id
                             st.success(msj)
