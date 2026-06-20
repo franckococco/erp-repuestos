@@ -133,72 +133,96 @@ def _normalizar_termino_descripcion(termino: str) -> str:
         p for p in t.split()
         if p not in _STOPWORDS_ITEM and p not in ("UN", "UNA", "EL", "LA", "DE", "DEL")
     ]
+    while palabras and palabras[0] in ("Y", "E", "TAMBIEN", "TAMBIÉN", "MAS", "MÁS"):
+        palabras.pop(0)
     return " ".join(palabras).strip()
 
 
 def extraer_items_orden_voz(texto):
-    """Extrae código o descripción + cantidad desde la orden hablada/escrita."""
+    """Extrae uno o varios códigos/descripciones + cantidad desde la orden hablada/escrita."""
     if not texto:
         return []
-    t = normalizar_texto_basico(texto).lower()
-    t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
-    t = re.sub(r"\s+", " ", t).strip()
+
+    def _extraer_de_fragmento(fragmento, acumulado, vistos):
+        t = normalizar_texto_basico(fragmento).lower()
+        t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        if not t:
+            return
+        cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
+
+        def agregar(termino, cantidad, es_descripcion=False):
+            if es_descripcion:
+                term = _normalizar_termino_descripcion(termino)
+            else:
+                term = _limpiar_termino_item(termino)
+            try:
+                cant = max(1, int(cantidad))
+            except (TypeError, ValueError):
+                return
+            if es_descripcion:
+                if not _termino_descripcion_valido(term):
+                    return
+            elif not term or not re.search(r"[A-Z0-9]", term):
+                return
+            if not es_descripcion and term in _STOPWORDS_ITEM:
+                return
+            if not es_descripcion and not re.search(r"\d", term) and len(term) < 4:
+                return
+            clave = (term, cant)
+            if clave in vistos:
+                return
+            vistos.add(clave)
+            acumulado.append({"termino": term, "cantidad": cant})
+
+        patrones_codigo = [
+            (rf"(?:codigo|código)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
+            (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
+            (rf"(?:codigo|código)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
+            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
+            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\b", False),
+            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", True),
+            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
+        ]
+        n_antes = len(acumulado)
+        for patron, es_desc in patrones_codigo:
+            for m in re.finditer(patron, t):
+                agregar(m.group(1), m.group(2), es_descripcion=es_desc)
+
+        if len(acumulado) == n_antes:
+            for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
+                agregar(m.group(1), 1, es_descripcion=False)
+
+        resto = _limpiar_texto_para_items_descripcion(fragmento)
+        if len(acumulado) == n_antes:
+            patrones_desc = [
+                r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+                r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+                r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
+            ]
+            for patron in patrones_desc:
+                for m in re.finditer(patron, resto):
+                    agregar(m.group(1), m.group(2), es_descripcion=True)
+
     items = []
     vistos = set()
-    cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
+    raw = str(texto).strip()
+    _extraer_de_fragmento(raw, items, vistos)
 
-    def agregar(termino, cantidad, es_descripcion=False):
-        if es_descripcion:
-            term = _normalizar_termino_descripcion(termino)
-        else:
-            term = _limpiar_termino_item(termino)
-        try:
-            cant = max(1, int(cantidad))
-        except (TypeError, ValueError):
-            return
-        if not _termino_descripcion_valido(term) if es_descripcion else (
-            not term or not re.search(r"[A-Z0-9]", term)
-        ):
-            return
-        if not es_descripcion and term in _STOPWORDS_ITEM:
-            return
-        if not es_descripcion and not re.search(r"\d", term) and len(term) < 4:
-            return
-        clave = (term, cant)
-        if clave in vistos:
-            return
-        vistos.add(clave)
-        items.append({"termino": term, "cantidad": cant})
-
-    patrones_codigo = [
-        (rf"(?:codigo|código)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
-        (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
-        (rf"(?:codigo|código)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
-        (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
-        (rf"(?:descripcion|descripción|desc)\s+(.+?)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", True),
-        (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
-    ]
-    for patron, es_desc in patrones_codigo:
-        for m in re.finditer(patron, t):
-            agregar(m.group(1), m.group(2), es_descripcion=es_desc)
-
-    if not items:
-        for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
-            agregar(m.group(1), 1, es_descripcion=False)
-
-    if items:
-        return items
-
-    resto = _limpiar_texto_para_items_descripcion(texto)
-    patrones_desc = [
-        r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
-        r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
-    ]
-    for patron in patrones_desc:
-        m = re.search(patron, resto)
-        if m:
-            agregar(m.group(1), m.group(2), es_descripcion=True)
-            break
+    if len(items) <= 1 and re.search(
+        r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+",
+        normalizar_texto_basico(raw).lower(),
+    ):
+        t_full = normalizar_texto_basico(raw).lower()
+        segmentos = re.split(
+            r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+|\s+más\s+|\s+mas\s+|\s+después\s+|\s+despues\s+",
+            t_full,
+        )
+        if len(segmentos) > 1:
+            items.clear()
+            vistos.clear()
+            for seg in segmentos:
+                _extraer_de_fragmento(seg, items, vistos)
 
     return items
 

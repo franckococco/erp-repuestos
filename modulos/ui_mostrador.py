@@ -517,11 +517,22 @@ def _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True):
 
 
 def render_descarga_presupuesto_prominente(vendedor):
-    """Botón grande de descarga si hay PDF listo."""
+    """Vista previa del PDF y botones de descarga / nueva venta."""
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
     if not pdf_ready:
         return
-    st.success("Presupuesto listo. Descargá/imprimí el PDF y empezá una venta nueva.")
+    st.success("Presupuesto listo. Revisalo abajo, descargalo o empezá una venta nueva.")
+    st.markdown("**Vista previa del presupuesto**")
+    try:
+        st.pdf(pdf_ready, height=520)
+    except Exception:
+        import base64
+        b64 = base64.b64encode(pdf_ready).decode()
+        st.markdown(
+            f'<iframe src="data:application/pdf;base64,{b64}" '
+            f'width="100%" height="520" style="border:1px solid #cbd5e1;border-radius:8px;"></iframe>',
+            unsafe_allow_html=True,
+        )
     col_dl, col_nueva = st.columns([3, 1])
     with col_dl:
         st.download_button(
@@ -1711,7 +1722,8 @@ def render_ia_mostrador(
     st.markdown('<div class="mostrador-orden-rapida">', unsafe_allow_html=True)
     st.markdown("### 🎤 Orden rápida (voz o texto)")
     st.markdown(
-        "<p>Presupuesto: «presupuesto a Juan, buje directa 3 unidades» · "
+        "<p>Varios ítems: «presupuesto código 111 2 y código 222 3» · "
+        "«descripción buje 2, descripción filtro 1» · "
         "Factura: «factura B al nombre de Juan, código 111 3 unidades». "
         "El cliente no tiene que estar dado de alta. Decí <strong>listo</strong> al cerrar.</p>",
         unsafe_allow_html=True,
@@ -1726,7 +1738,7 @@ def render_ia_mostrador(
         "Dictá o escribí la orden completa:",
         key=f"ia_most_{vendedor}",
         label_visibility="collapsed",
-        placeholder="Ej: presupuesto código 111 2 unidades, descripción buje 3 unidades…",
+        placeholder="Ej: código 111 2 y 222 3 unidades · descripción buje 2, filtro 1…",
     )
     submit_ia = col_ia2.button("▶ Ejecutar", use_container_width=True, type="primary")
     st.markdown("</div>", unsafe_allow_html=True)
