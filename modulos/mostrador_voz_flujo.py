@@ -79,8 +79,26 @@ _INICIO_DESCRIPCION_VOZ = (
     "homocinetica", "homocinética", "semieje", "palier", "terminal", "barra",
     "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
     "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
-    "embrague", "crapodina", "crápodina", "cazoleta", "soporte", "silent",
+    "embrague", "crapodina", "crápodina", "cazoleta", "cazoletas", "soporte", "silent",
 )
+
+
+def _strip_termino_cant_de_resto(resto: str, termino: str, cantidad: int) -> str:
+    """Quita del texto un ítem ya capturado (código o descripción)."""
+    term = str(termino or "").lower().strip()
+    if not term:
+        return resto
+    cant = int(cantidad)
+    term_sp = r"\s+".join(re.escape(p) for p in term.split())
+    patrones = (
+        rf"(?:codigo|código)\s+{term_sp}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+        rf"(?:un|una)\s+{term_sp}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+        rf"\b{term_sp}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+        rf"\b{term_sp}\s+{cant}\b",
+    )
+    for patron in patrones:
+        resto = re.sub(patron, " ", resto, flags=re.I)
+    return re.sub(r"\s+", " ", resto).strip()
 
 
 def _patron_fin_cliente_voz() -> str:
@@ -195,32 +213,41 @@ def extraer_items_orden_voz(texto):
 
         resto = _limpiar_texto_para_items_descripcion(fragmento)
         for item in acumulado[n_antes:]:
-            term = str(item.get("termino", "")).lower()
-            cant = int(item.get("cantidad", 1))
-            if not term:
-                continue
-            resto = re.sub(
-                rf"(?:codigo|código)\s+{re.escape(term)}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
-                " ",
+            resto = _strip_termino_cant_de_resto(
                 resto,
-                flags=re.I,
+                str(item.get("termino", "")),
+                int(item.get("cantidad", 1)),
             )
-            resto = re.sub(
-                rf"\b{re.escape(term)}\s+{cant}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
-                " ",
-                resto,
-                flags=re.I,
-            )
-        resto = re.sub(r"\s+", " ", resto).strip()
 
         patrones_desc = [
             r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
             r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
             r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
         ]
-        for patron in patrones_desc:
-            for m in re.finditer(patron, resto):
+        while resto:
+            encontrado = False
+            for patron in patrones_desc:
+                m = re.search(patron, resto)
+                if not m:
+                    continue
+                n_desc = len(acumulado)
                 agregar(m.group(1), m.group(2), es_descripcion=True)
+                if len(acumulado) <= n_desc:
+                    continue
+                item = acumulado[-1]
+                resto_nuevo = _strip_termino_cant_de_resto(
+                    resto,
+                    str(item.get("termino", "")),
+                    int(item.get("cantidad", 1)),
+                )
+                if resto_nuevo == resto:
+                    resto = (resto[: m.start()] + " " + resto[m.end() :]).strip()
+                else:
+                    resto = resto_nuevo
+                encontrado = True
+                break
+            if not encontrado:
+                break
 
     items = []
     vistos = set()
@@ -245,6 +272,21 @@ def extraer_items_orden_voz(texto):
                     seg = seg.strip()
                     if seg:
                         _extraer_de_fragmento(seg, items, vistos)
+    elif len(re.findall(r"\b\d{1,4}\s+unidades?\b", normalizar_texto_basico(raw).lower())) > len(items):
+        t_full = normalizar_texto_basico(raw).lower()
+        prod_pat = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
+        separadores = (
+            r"\s+y\s+|\s*,\s*|\s+también\s+|\s+tambien\s+"
+            rf"|\bunidad(?:es)?\s+(?=(?:{prod_pat})\b)"
+            r"|\b(?:codigo|código)\s+"
+        )
+        if re.search(separadores, t_full):
+            items.clear()
+            vistos.clear()
+            for seg in re.split(separadores, t_full):
+                seg = seg.strip()
+                if seg:
+                    _extraer_de_fragmento(seg, items, vistos)
 
     return items
 
@@ -396,6 +438,66 @@ def agregar_termino_voz(
     return False, f"No encontré '{termino}'. Probá con código o otra descripción.", None
 
 
+def limpiar_cola_voz_mostrador():
+    st.session_state.pop("mostrador_voz_cola_ambiguos", None)
+    st.session_state.pop("mostrador_voz_cant_coincidencia", None)
+    st.session_state.pop("mostrador_voz_intent_pendiente", None)
+
+
+def continuar_cola_voz_mostrador(
+    vendedor,
+    inventario,
+    buscar_en_inventario,
+    agregar_al_carrito,
+):
+    """
+    Tras elegir una coincidencia, agrega automáticamente el resto de ítems pendientes.
+    Devuelve (terminado, coincidencias_siguientes, mensaje).
+    """
+    cola = list(st.session_state.get("mostrador_voz_cola_ambiguos") or [])
+    if not cola:
+        limpiar_cola_voz_mostrador()
+        return True, None, None
+
+    agregados = []
+    errores = []
+    while cola:
+        item = cola[0]
+        termino = item.get("termino", "")
+        cant = int(item.get("cantidad", 1))
+        ok, msj, ambiguos = agregar_termino_voz(
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+        )
+        if ok:
+            agregados.append(msj)
+            cola.pop(0)
+            continue
+        if ambiguos:
+            st.session_state.mostrador_voz_cola_ambiguos = cola
+            st.session_state.mostrador_voz_cant_coincidencia = cant
+            msg = str(item.get("msj") or msj)
+            if agregados:
+                msg = f"Agregados {len(agregados)} ítem(s) más. {msg}"
+            if len(cola) > 1:
+                msg += f" (quedan {len(cola)} por elegir)"
+            return False, ambiguos, msg
+        errores.append(msj or f"No se pudo agregar '{termino}'.")
+        cola.pop(0)
+
+    limpiar_cola_voz_mostrador()
+    intent = st.session_state.pop("mostrador_voz_intent_pendiente", None)
+    if intent and (obtener_carrito(str(vendedor)) or []):
+        marcar_verificacion_mostrador(intent)
+
+    if errores and agregados:
+        return True, None, " · ".join(agregados) + " · " + " · ".join(errores)
+    if errores:
+        return True, None, "\n".join(errores)
+    if agregados:
+        return True, None, " · ".join(agregados)
+    return True, None, None
+
+
 def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_comprobante=None):
     descartar_panels_operacion_anterior()
     if consumidor_final:
@@ -484,6 +586,7 @@ def ejecutar_flujo_factura_voz(
 
     errores_items = []
     items_agregados = 0
+    cola_ambiguos = []
     for raw in items:
         if not isinstance(raw, dict):
             continue
@@ -496,10 +599,33 @@ def ejecutar_flujo_factura_voz(
             pasos_ok.append(msj)
             items_agregados += 1
         elif ambiguos:
-            return False, msj, ambiguos
+            cola_ambiguos.append({
+                "termino": termino,
+                "cantidad": cant,
+                "coincidencias": ambiguos,
+                "msj": msj,
+            })
+            errores.append(msj)
         else:
             errores.append(msj)
             errores_items.append(msj)
+
+    if cola_ambiguos:
+        intent = flujo.get("intent_sugerido")
+        if intent:
+            st.session_state.mostrador_voz_intent_pendiente = intent
+        st.session_state.mostrador_voz_cola_ambiguos = cola_ambiguos
+        first = cola_ambiguos[0]
+        st.session_state.mostrador_voz_cant_coincidencia = int(first.get("cantidad", 1))
+        msg = str(first.get("msj", "Elegí el producto exacto."))
+        if items_agregados:
+            msg = (
+                f"Agregados {items_agregados} ítem(s). {msg} "
+                f"(faltan {len(cola_ambiguos)} por elegir)"
+            )
+        elif len(cola_ambiguos) > 1:
+            msg += f" (faltan {len(cola_ambiguos)} por elegir)"
+        return False, msg, first.get("coincidencias")
 
     if items and items_agregados == 0 and errores_items:
         if len(errores_items) == 1:
@@ -537,6 +663,7 @@ def ejecutar_flujo_factura_voz(
                     None,
                 )
             return False, "No hay ítems en el carrito. Revisá el código.", None
+        limpiar_cola_voz_mostrador()
         marcar_verificacion_mostrador(intent)
         pasos_ok.append(
             "Listo para verificar. Revisá la grilla arriba y elegí "

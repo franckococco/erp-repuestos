@@ -49,6 +49,8 @@ from modulos.mostrador_voz_flujo import (
     extraer_items_orden_voz,
     marcar_verificacion_mostrador,
     descartar_panels_operacion_anterior,
+    continuar_cola_voz_mostrador,
+    limpiar_cola_voz_mostrador,
 )
 
 
@@ -608,7 +610,7 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
     ok_count = 0
     mensajes = []
     errores = []
-    ambiguos_finales = None
+    cola_ambiguos = []
 
     for raw in items or []:
         if not isinstance(raw, dict):
@@ -622,10 +624,24 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
             ok_count += 1
             mensajes.append(msj)
         elif ambiguos:
-            ambiguos_finales = ambiguos
-            return ok_count, f"Varias opciones para '{termino}'. Elegí en la lista.", ambiguos
+            cola_ambiguos.append({
+                "termino": termino,
+                "cantidad": cant,
+                "coincidencias": ambiguos,
+                "msj": msj,
+            })
+            errores.append(msj)
         else:
             errores.append(msj)
+
+    if cola_ambiguos:
+        st.session_state.mostrador_voz_cola_ambiguos = cola_ambiguos
+        first = cola_ambiguos[0]
+        st.session_state.mostrador_voz_cant_coincidencia = int(first.get("cantidad", 1))
+        msg = str(first.get("msj", f"Varias opciones para '{first.get('termino', '')}'."))
+        if ok_count:
+            msg = f"Agregados {ok_count} ítem(s). {msg} (faltan {len(cola_ambiguos)} por elegir)"
+        return ok_count, msg, first.get("coincidencias")
 
     if ok_count and errores:
         return ok_count, "\n".join(mensajes + errores), None
@@ -634,6 +650,26 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
     if errores:
         return 0, "\n".join(errores), None
     return 0, "No se detectaron productos.", None
+
+
+def _tras_agregar_coincidencia_voz(vendedor, buscar_en_inventario, obtener_inventario, agregar_al_carrito):
+    """Tras elegir una variante, sigue con el resto de ítems pendientes de la orden."""
+    cola = st.session_state.get("mostrador_voz_cola_ambiguos")
+    if cola:
+        cola.pop(0)
+        st.session_state.mostrador_voz_cola_ambiguos = cola
+    inv = inventario_cache_mostrador(obtener_inventario)
+    _, ambiguos, msg = continuar_cola_voz_mostrador(
+        vendedor, inv, buscar_en_inventario, agregar_al_carrito
+    )
+    if ambiguos:
+        st.session_state.resultados_ia_mostrador = ambiguos
+        st.session_state.msg_ia_mostrador = msg or "Elegí el producto exacto:"
+        return
+    st.session_state.resultados_ia_mostrador = None
+    st.session_state.msg_ia_mostrador = None
+    if msg:
+        _set_ia_feedback(vendedor, "ok", msg)
 
 
 def _set_ia_feedback(vendedor, tipo, mensaje):
@@ -971,7 +1007,13 @@ def render_seccion_cliente_mostrador():
                     st.error("Nombre y CUIT/DNI son obligatorios.")
 
 
-def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito):
+def render_panel_coincidencias_mostrador(
+    vendedor,
+    agrupar_por_maestro,
+    agregar_al_carrito,
+    buscar_en_inventario=None,
+    obtener_inventario=None,
+):
     """Variantes encontradas (IA o búsqueda): elegir una o varias."""
     resultados = st.session_state.get("resultados_ia_mostrador")
     if not resultados:
@@ -987,6 +1029,7 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
         if st.button("✕", key=f"cerrar_coinc_most_{vid}", help="Cerrar coincidencias"):
             st.session_state.resultados_ia_mostrador = None
             st.session_state.msg_ia_mostrador = None
+            limpiar_cola_voz_mostrador()
             st.rerun()
 
     flat = []
@@ -1018,11 +1061,14 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
         horizontal=True,
         key=f"coinc_modo_{vid}",
     )
+    cant_pend = int(st.session_state.get("mostrador_voz_cant_coincidencia") or 0)
+    if cant_pend > 0 and f"coinc_cant_{vid}" not in st.session_state:
+        st.session_state[f"coinc_cant_{vid}"] = cant_pend
     cant = st.number_input(
         "Cant. por ítem",
         min_value=1,
         step=1,
-        value=1,
+        value=int(st.session_state.get(f"coinc_cant_{vid}", cant_pend or 1)),
         key=f"coinc_cant_{vid}",
     )
 
@@ -1042,8 +1088,13 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
         ):
             exito, msj_db = agregar_al_carrito(vid, sel_id, int(cant))
             if exito:
-                st.session_state.resultados_ia_mostrador = None
-                st.session_state.msg_ia_mostrador = None
+                if buscar_en_inventario and obtener_inventario:
+                    _tras_agregar_coincidencia_voz(
+                        vendedor, buscar_en_inventario, obtener_inventario, agregar_al_carrito
+                    )
+                else:
+                    st.session_state.resultados_ia_mostrador = None
+                    st.session_state.msg_ia_mostrador = None
                 st.rerun()
             else:
                 st.error(msj_db)
@@ -1072,8 +1123,13 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
                     else:
                         errores.append(msj_db)
                 if ok_n:
-                    st.session_state.resultados_ia_mostrador = None
-                    st.session_state.msg_ia_mostrador = None
+                    if buscar_en_inventario and obtener_inventario:
+                        _tras_agregar_coincidencia_voz(
+                            vendedor, buscar_en_inventario, obtener_inventario, agregar_al_carrito
+                        )
+                    else:
+                        st.session_state.resultados_ia_mostrador = None
+                        st.session_state.msg_ia_mostrador = None
                     if errores:
                         st.warning(f"Agregados {ok_n}. Algunos fallaron:\n" + "\n".join(errores))
                     st.rerun()
@@ -2086,7 +2142,13 @@ def render_ia_mostrador(
             else:
                 st.info(fb_msg)
 
-    render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
+    render_panel_coincidencias_mostrador(
+        vendedor,
+        agrupar_por_maestro,
+        agregar_al_carrito,
+        buscar_en_inventario=buscar_en_inventario,
+        obtener_inventario=obtener_inventario_completo,
+    )
 
 
 def _aplicar_cambios_carrito_filas(vendedor, carrito, filas_editadas):
