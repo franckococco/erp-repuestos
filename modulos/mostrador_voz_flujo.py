@@ -339,6 +339,22 @@ def marcar_verificacion_mostrador(intent_sugerido=None):
         st.session_state.mostrador_intent_sugerido = intent_sugerido
 
 
+def _guardar_intent_voz_pendiente(intent):
+    if intent:
+        st.session_state.mostrador_voz_intent_pendiente = intent
+        st.session_state.mostrador_intent_sugerido = intent
+
+
+def _finalizar_cola_voz_mostrador(vendedor):
+    """Cierra la cola de ambiguos y aplica presupuesto/factura pendiente."""
+    intent = st.session_state.pop("mostrador_voz_intent_pendiente", None)
+    st.session_state.pop("mostrador_voz_cola_ambiguos", None)
+    st.session_state.pop("mostrador_voz_cant_coincidencia", None)
+    if intent and (obtener_carrito(str(vendedor)) or []):
+        marcar_verificacion_mostrador(intent)
+    return intent
+
+
 def inventario_cache_mostrador(obtener_inventario_fn, ttl_seg=120):
     ahora = time.time()
     if (
@@ -439,6 +455,7 @@ def agregar_termino_voz(
 
 
 def limpiar_cola_voz_mostrador():
+    """Cancela cola de ambiguos sin marcar listo para cerrar."""
     st.session_state.pop("mostrador_voz_cola_ambiguos", None)
     st.session_state.pop("mostrador_voz_cant_coincidencia", None)
     st.session_state.pop("mostrador_voz_intent_pendiente", None)
@@ -456,7 +473,7 @@ def continuar_cola_voz_mostrador(
     """
     cola = list(st.session_state.get("mostrador_voz_cola_ambiguos") or [])
     if not cola:
-        limpiar_cola_voz_mostrador()
+        _finalizar_cola_voz_mostrador(vendedor)
         return True, None, None
 
     agregados = []
@@ -484,10 +501,7 @@ def continuar_cola_voz_mostrador(
         errores.append(msj or f"No se pudo agregar '{termino}'.")
         cola.pop(0)
 
-    limpiar_cola_voz_mostrador()
-    intent = st.session_state.pop("mostrador_voz_intent_pendiente", None)
-    if intent and (obtener_carrito(str(vendedor)) or []):
-        marcar_verificacion_mostrador(intent)
+    intent = _finalizar_cola_voz_mostrador(vendedor)
 
     if errores and agregados:
         return True, None, " · ".join(agregados) + " · " + " · ".join(errores)
@@ -612,8 +626,7 @@ def ejecutar_flujo_factura_voz(
 
     if cola_ambiguos:
         intent = flujo.get("intent_sugerido")
-        if intent:
-            st.session_state.mostrador_voz_intent_pendiente = intent
+        _guardar_intent_voz_pendiente(intent)
         st.session_state.mostrador_voz_cola_ambiguos = cola_ambiguos
         first = cola_ambiguos[0]
         st.session_state.mostrador_voz_cant_coincidencia = int(first.get("cantidad", 1))
@@ -650,6 +663,8 @@ def ejecutar_flujo_factura_voz(
         st.session_state.mostrador_intent_sugerido = intent
 
     if errores:
+        if ir_verificacion and (obtener_carrito(str(vendedor)) or []):
+            marcar_verificacion_mostrador(intent)
         return False, "Flujo parcial:\n" + "\n".join(errores), None
 
     if ir_verificacion:
@@ -663,8 +678,10 @@ def ejecutar_flujo_factura_voz(
                     None,
                 )
             return False, "No hay ítems en el carrito. Revisá el código.", None
-        limpiar_cola_voz_mostrador()
-        marcar_verificacion_mostrador(intent)
+        pending = st.session_state.pop("mostrador_voz_intent_pendiente", None)
+        st.session_state.pop("mostrador_voz_cola_ambiguos", None)
+        st.session_state.pop("mostrador_voz_cant_coincidencia", None)
+        marcar_verificacion_mostrador(intent or pending)
         pasos_ok.append(
             "Listo para verificar. Revisá la grilla arriba y elegí "
             "Facturar ARCA o Presupuesto en el panel derecho."

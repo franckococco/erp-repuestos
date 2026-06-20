@@ -51,6 +51,7 @@ from modulos.mostrador_voz_flujo import (
     descartar_panels_operacion_anterior,
     continuar_cola_voz_mostrador,
     limpiar_cola_voz_mostrador,
+    _guardar_intent_voz_pendiente,
 )
 
 
@@ -636,6 +637,12 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
 
     if cola_ambiguos:
         st.session_state.mostrador_voz_cola_ambiguos = cola_ambiguos
+        intent_pend = (
+            st.session_state.get("mostrador_voz_intent_pendiente")
+            or st.session_state.get("mostrador_intent_sugerido")
+        )
+        if intent_pend:
+            _guardar_intent_voz_pendiente(intent_pend)
         first = cola_ambiguos[0]
         st.session_state.mostrador_voz_cant_coincidencia = int(first.get("cantidad", 1))
         msg = str(first.get("msj", f"Varias opciones para '{first.get('termino', '')}'."))
