@@ -97,7 +97,7 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     t = re.sub(r"\bfactura\s+[ab]\b", " ", t)
     t = re.sub(r"\bpresupuesto\b", " ", t)
     t = re.sub(r"\bcliente\b", " ", t)
-    t = re.sub(r"\bcodigo\b", " ", t)
+    t = re.sub(r"\b(codigo|código|descripcion|descripción|desc)\b", " ", t)
     cliente_info = extraer_cliente_orden_voz(texto)
     if cliente_info.get("nombre_cliente"):
         nom = re.escape(str(cliente_info["nombre_cliente"]).lower())
@@ -109,10 +109,8 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
 
 
 def _termino_descripcion_valido(termino: str) -> bool:
-    term = _limpiar_termino_item(termino)
-    if not term or len(term) < 3:
-        return False
-    if not re.search(r"[A-Z]", term):
+    term = _normalizar_termino_descripcion(termino)
+    if not term or len(term) < 2:
         return False
     palabras = [p for p in term.split() if p not in _STOPWORDS_ITEM]
     if not palabras:
@@ -166,14 +164,20 @@ def extraer_items_orden_voz(texto):
         items.append({"termino": term, "cantidad": cant})
 
     patrones_codigo = [
-        (rf"(?:codigo)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
-        (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
-        (rf"(?:codigo)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
+        (rf"(?:codigo|código)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
+        (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
+        (rf"(?:codigo|código)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
         (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
+        (rf"(?:descripcion|descripción|desc)\s+(.+?)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", True),
+        (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
     ]
-    for patron, _ in patrones_codigo:
+    for patron, es_desc in patrones_codigo:
         for m in re.finditer(patron, t):
-            agregar(m.group(1), m.group(2), es_descripcion=False)
+            agregar(m.group(1), m.group(2), es_descripcion=es_desc)
+
+    if not items:
+        for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
+            agregar(m.group(1), 1, es_descripcion=False)
 
     if items:
         return items
@@ -276,6 +280,11 @@ def agregar_termino_voz(
 ):
     cant = max(1, int(cantidad or 1))
     termino = str(termino or "").strip()
+    if not termino:
+        return False, "Sin término de búsqueda.", None
+
+    from modulos.util_busqueda import _limpiar_prefijo_busqueda
+    termino = _limpiar_prefijo_busqueda(termino)
     if not termino:
         return False, "Sin término de búsqueda.", None
 

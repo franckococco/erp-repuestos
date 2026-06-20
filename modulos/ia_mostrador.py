@@ -56,14 +56,19 @@ def parece_orden_voz_mostrador(texto):
     from modulos.mostrador_voz_flujo import extraer_items_orden_voz
 
     t = str(texto or "").strip()
-    if len(t) < 10:
+    if len(t) < 5:
         return False
     if parse_flujo_rapido_voz(t):
         return True
+    if extraer_items_orden_voz(t):
+        return True
     tl = t.lower()
-    if re.search(r"\b(factura|carg\w+|presupuesto|cliente|unidad|codigo)\b", tl):
-        if extraer_items_orden_voz(t) or re.search(r"\bpara\b", tl):
-            return True
+    if re.search(
+        r"\b(factura|presupuesto|cliente|codigo|código|descripcion|descripción|desc|"
+        r"agreg\w*|sum\w*|listo|consumidor)\b",
+        tl,
+    ):
+        return True
     return False
 
 
@@ -110,7 +115,14 @@ def parse_flujo_rapido_voz(texto_usuario):
 
     if not items and not nombre_cliente and not consumidor_final:
         return None
-    if not (es_armado or es_presupuesto or tiene_factura or (items and (nombre_cliente or consumidor_final))):
+
+    es_flujo = bool(
+        es_armado or es_presupuesto or tiene_factura
+        or (items and (nombre_cliente or consumidor_final))
+        or (es_presupuesto and items)
+        or (tiene_factura and items)
+    )
+    if not es_flujo:
         return None
 
     flujo = {
@@ -163,12 +175,29 @@ def parse_armado_rapido_voz(texto_usuario):
     if parse_flujo_rapido_voz(raw):
         return None
 
+    items = extraer_items_orden_voz(raw)
+
     if re.match(r"^(presupuesto|imprimir presupuesto|pdf presupuesto)\.?$", t):
         return {"accion": "listo_armado", "intent_sugerido": "presupuesto"}
+    if re.search(r"\bpresupuesto\b", t):
+        if items:
+            flujo = parse_flujo_rapido_voz(raw)
+            if flujo:
+                return flujo
+            return {
+                "accion": "flujo_factura",
+                "intent_sugerido": "presupuesto",
+                "items": items,
+                "vaciar_antes": False,
+                "ir_verificacion": bool(re.search(r"\b(listo|termine|terminé|fin)\b", t)),
+            }
+    if re.search(r"\bfactura\b", t) and items:
+        flujo = parse_flujo_rapido_voz(raw)
+        if flujo:
+            return flujo
     if t in ("listo", "termine", "terminé", "fin"):
         return {"accion": "listo_armado"}
 
-    items = extraer_items_orden_voz(raw)
     if items:
         return {"accion": "agregar_items", "items": items}
 
@@ -187,6 +216,15 @@ def parse_armado_rapido_voz(texto_usuario):
         if resto:
             return {"accion": "agregar_carrito", "termino": resto, "cantidad": 1}
 
+    resto_busq = re.sub(
+        r"^(buscar|busca|codigo|código|descripcion|descripción|desc)\s+",
+        "",
+        raw.strip(),
+        flags=re.I,
+    ).strip()
+    if resto_busq and len(resto_busq) >= 2 and not _orden_es_flujo_complejo(raw):
+        return {"accion": "buscar", "termino": resto_busq}
+
     return None
 
 
@@ -201,6 +239,42 @@ def parse_rapido_voz(texto_usuario):
         return None
     if t in ("consumidor final", "particular"):
         return {"accion": "consumidor_final"}
+    return None
+
+
+def _fallback_orden_local(texto_usuario):
+    """Último intento local antes de Groq o error."""
+    from modulos.mostrador_voz_flujo import extraer_items_orden_voz
+
+    raw = str(texto_usuario or "").strip()
+    if not raw:
+        return None
+
+    items = extraer_items_orden_voz(raw)
+    tl = raw.lower()
+    if items:
+        if re.search(r"\bpresupuesto\b", tl):
+            return {
+                "accion": "flujo_factura",
+                "intent_sugerido": "presupuesto",
+                "items": items,
+                "vaciar_antes": False,
+                "ir_verificacion": True,
+            }
+        if re.search(r"\bfactura\b", tl):
+            flujo = parse_flujo_rapido_voz(raw)
+            if flujo:
+                return flujo
+        return {"accion": "agregar_items", "items": items}
+
+    termino = re.sub(
+        r"^(buscar|busca|codigo|código|descripcion|descripción|desc|producto)\s+",
+        "",
+        raw,
+        flags=re.I,
+    ).strip()
+    if len(termino) >= 2:
+        return {"accion": "agregar_carrito", "termino": termino, "cantidad": 1}
     return None
 
 
@@ -225,6 +299,10 @@ def procesar_orden_mostrador(texto_usuario):
     if rapido:
         return rapido
 
+    fallback = _fallback_orden_local(texto_usuario)
+    if fallback:
+        return fallback
+
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         try:
@@ -233,9 +311,12 @@ def procesar_orden_mostrador(texto_usuario):
             api_key = None
 
     if not api_key:
+        fb = _fallback_orden_local(texto_usuario)
+        if fb:
+            return fb
         return {
             "accion": "error",
-            "respuesta": "Orden no reconocida. Ejemplo: «cargame factura B para cliente Juan, código 111 3 unidades, listo».",
+            "respuesta": "Orden no reconocida. Ejemplo: «presupuesto buje directa 3 unidades» o «código 111 2 unidades».",
         }
 
     client = Groq(api_key=api_key)

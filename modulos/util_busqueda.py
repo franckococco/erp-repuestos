@@ -85,13 +85,13 @@ def filtrar_por_busqueda(items, termino_busqueda, extraer_texto):
     if not termino_busqueda:
         return items
 
-    term_limpio = str(termino_busqueda).strip()
+    term_limpio = _limpiar_prefijo_busqueda(str(termino_busqueda).strip())
     if parece_codigo_producto(term_limpio):
         exactos = buscar_codigo_exacto_inventario(items, term_limpio)
         if exactos:
             return exactos
 
-    terminos = [t for t in normalizar_para_busqueda(termino_busqueda).split() if len(t) >= 2]
+    terminos = [t for t in normalizar_para_busqueda(term_limpio).split() if len(t) >= 2]
     if not terminos:
         return items
     resultado = []
@@ -102,3 +102,58 @@ def filtrar_por_busqueda(items, termino_busqueda, extraer_texto):
         if all(termino_en_texto(t, texto_norm) for t in terminos):
             resultado.append(item)
     return resultado
+
+
+def _limpiar_prefijo_busqueda(termino):
+    t = str(termino or "").strip()
+    tl = t.lower()
+    for pref in (
+        "codigo ", "código ", "descripcion ", "descripción ", "desc ",
+        "buscar ", "busca ", "producto ", "articulo ", "artículo ",
+    ):
+        if tl.startswith(pref):
+            return t[len(pref):].strip()
+    return t
+
+
+def filtrar_por_busqueda_flexible(items, termino_busqueda, extraer_texto, limite=25):
+    """
+    Búsqueda en capas: estricta → coincidencia parcial por palabras → código parcial.
+    """
+    term_limpio = _limpiar_prefijo_busqueda(str(termino_busqueda or "").strip())
+    if not term_limpio:
+        return []
+
+    estrictos = filtrar_por_busqueda(items, term_limpio, extraer_texto)
+    if estrictos:
+        return estrictos[:limite]
+
+    terminos = [t for t in normalizar_para_busqueda(term_limpio).split() if len(t) >= 2]
+    if not terminos:
+        return []
+
+    scored = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        texto_norm = normalizar_para_busqueda(extraer_texto(item))
+        hits = sum(1 for t in terminos if termino_en_texto(t, texto_norm))
+        if hits:
+            scored.append((hits, len(terminos), item))
+    if scored:
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [it for _, _, it in scored[:limite]]
+
+    cod = _normalizar_codigo_busqueda(term_limpio)
+    if cod and len(cod) >= 2:
+        parciales = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            ic = _normalizar_codigo_busqueda(item.get("codigo", ""))
+            iid = _normalizar_codigo_busqueda(item.get("id", ""))
+            if cod in ic or cod in iid or ic.startswith(cod) or iid.startswith(f"{cod}_"):
+                parciales.append(item)
+        if parciales:
+            return parciales[:limite]
+    return []

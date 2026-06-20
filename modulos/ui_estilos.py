@@ -67,6 +67,39 @@ def aplicar_estilos_mostrador():
             white-space: normal !important;
             line-height: 1.35;
         }
+        .mostrador-orden-rapida {
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border: 2px solid #2563eb;
+            border-radius: 0.65rem;
+            padding: 0.85rem 1rem 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .mostrador-orden-rapida h3 {
+            color: #1e3a8a !important;
+            font-weight: 700 !important;
+            font-size: 1.05rem !important;
+            margin: 0 0 0.35rem 0 !important;
+        }
+        .mostrador-orden-rapida p {
+            color: #1e40af;
+            font-size: 0.82rem;
+            margin: 0 0 0.5rem 0;
+        }
+        .mostrador-buscador-box {
+            background: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 0.5rem;
+            padding: 0.65rem 0.85rem 0.35rem;
+            margin-bottom: 0.5rem;
+        }
+        .mostrador-buscador-box strong {
+            color: #0f172a;
+            font-size: 0.95rem;
+        }
+        div[data-testid="stRadio"] label p {
+            font-size: 0.88rem !important;
+            line-height: 1.3 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,

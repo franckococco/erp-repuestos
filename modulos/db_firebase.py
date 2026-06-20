@@ -984,6 +984,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
     for art in articulos:
         if not isinstance(art, dict):
             continue
+        if art.get("descripcion"):
+            art["descripcion"] = str(art["descripcion"]).strip().upper()
         codigo_prov = normalizar_codigo_proveedor(art.get('codigo', ''))
         codigo_base = codigo_prov
         if not codigo_base:
@@ -1027,7 +1029,7 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
             actualizados += 1
         else:
             nuevos += 1
-            payload["descripcion"] = str(art.get('descripcion', 'Repuesto'))
+            payload["descripcion"] = str(art.get('descripcion', 'Repuesto')).strip().upper()
             payload["vehiculos"] = vehiculos_rep
             payload["vehiculo"] = vehiculo_rep
 

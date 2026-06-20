@@ -72,6 +72,8 @@ def _articulos_desde_grilla(df_editado):
         if not isinstance(row, dict):
             continue
         art = dict(row)
+        art["descripcion"] = str(art.get("descripcion", "")).strip().upper()
+        art["codigo"] = str(art.get("codigo", "")).strip().upper().replace("/", "-")
         vehs = normalizar_lista_vehiculos(art.get("vehiculos") or art.get("vehiculo"))
         art["vehiculos"] = vehs
         art["vehiculo"] = vehiculos_a_texto(vehs)
@@ -265,7 +267,7 @@ def render_carga_factura():
         art["vehiculo"] = vehiculos_a_texto(vehs)
 
     st.caption(
-        f"**{len(articulos)}** artículos — editá todo en la grilla. "
+        f"**{len(articulos)}** artículos — editá costos, descripción, cantidad y marca antes de confirmar. "
         "Columna *Vehículos*: elegí varios por fila. **Ctrl+G** guarda borrador."
     )
 
@@ -279,18 +281,32 @@ def render_carga_factura():
     df_articulos["vehiculos"] = df_articulos["vehiculos"].apply(normalizar_lista_vehiculos)
 
     cols_editor = [
-        c for c in ("codigo", "descripcion", "cantidad", "precio_unitario", "marca", "vehiculos")
+        c for c in (
+            "codigo", "codigo_proveedor", "descripcion", "cantidad",
+            "precio_unitario", "marca", "vehiculos",
+        )
         if c in df_articulos.columns
     ]
+    if "codigo_proveedor" not in df_articulos.columns:
+        df_articulos["codigo_proveedor"] = (
+            df_articulos["codigo"] if "codigo" in df_articulos.columns else ""
+        )
+        if "codigo_proveedor" not in cols_editor:
+            cols_editor.insert(1, "codigo_proveedor")
     df_editor = df_articulos[cols_editor]
 
     df_editado = st.data_editor(
         df_editor,
         column_config={
             "codigo": st.column_config.TextColumn("Código", width="small", required=True),
+            "codigo_proveedor": st.column_config.TextColumn(
+                "Cód. proveedor", width="small", help="Código impreso en la factura del proveedor."
+            ),
             "descripcion": st.column_config.TextColumn("Descripción", width="medium", required=True),
             "cantidad": st.column_config.NumberColumn("Cant.", min_value=1, step=1, required=True),
-            "precio_unitario": st.column_config.NumberColumn("Precio Base", min_value=0.0, format="$ %.2f", required=True),
+            "precio_unitario": st.column_config.NumberColumn(
+                "Costo / Precio base", min_value=0.0, format="$ %.2f", required=True
+            ),
             "marca": st.column_config.TextColumn("Marca (variante)", width="small", required=True),
             "vehiculos": st.column_config.MultiselectColumn(
                 "Vehículos",
@@ -313,6 +329,9 @@ def render_carga_factura():
             _tabla_precios_calculados(df_editado, datos_prov_fact, condicion_pago),
             use_container_width=True,
             hide_index=True,
+        )
+        st.caption(
+            "Al confirmar ingreso, las descripciones nuevas se guardan en **MAYÚSCULAS**."
         )
 
     col_btn1, col_btn2, col_btn3 = st.columns(3)

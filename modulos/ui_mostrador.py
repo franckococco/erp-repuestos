@@ -403,25 +403,46 @@ def _cerrar_presupuesto_cargado(estado: str):
         st.session_state.presupuesto_cargado_id = None
 
 
-def limpiar_venta_mostrador(vendedor, reset_cliente=True):
+def _limpiar_inputs_mostrador(vendedor):
+    """Resetea campos de búsqueda y orden rápida en la UI."""
+    vid = str(vendedor)
+    for key in (
+        f"ia_most_{vid}",
+        f"busq_most_{vid}",
+        f"busq_voz_proc_{vid}",
+        f"auto_run_ia_{vid}",
+        f"coinc_radio_{vid}",
+        f"coinc_cant_{vid}",
+        f"busq_radio_{vid}",
+    ):
+        st.session_state.pop(key, None)
+
+
+def limpiar_venta_mostrador(vendedor, reset_cliente=True, conservar_pdf_presupuesto=False):
     """Vacía carrito y flags de sesión tras cerrar una venta."""
     vaciar_carrito(str(vendedor))
-    reset_estado_orden_mostrador(vendedor, reset_cliente=reset_cliente)
+    reset_estado_orden_mostrador(
+        vendedor,
+        reset_cliente=reset_cliente,
+        conservar_pdf_presupuesto=conservar_pdf_presupuesto,
+    )
+    _limpiar_inputs_mostrador(vendedor)
     st.session_state[f"mostrador_cart_rev_{vendedor}"] = (
         int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)) + 1
     )
 
 
-def reset_estado_orden_mostrador(vendedor, reset_cliente=False):
+def reset_estado_orden_mostrador(vendedor, reset_cliente=False, conservar_pdf_presupuesto=False):
     """Limpia verificación, PDF pendiente y mensajes de voz."""
     st.session_state.mostrador_listo_para_ticket = False
     st.session_state.mostrador_accion_pendiente = None
     st.session_state.pop("mostrador_intent_sugerido", None)
-    st.session_state.factura_arca_reciente = None
-    st.session_state.pop("presupuesto_pdf_descarga", None)
-    st.session_state.pop("presupuesto_pdf_nombre", None)
     st.session_state.pop(f"ia_feedback_{vendedor}", None)
     st.session_state.resultados_ia_mostrador = None
+    st.session_state.pop("msg_ia_mostrador", None)
+    if not conservar_pdf_presupuesto:
+        st.session_state.pop("presupuesto_pdf_descarga", None)
+        st.session_state.pop("presupuesto_pdf_nombre", None)
     if reset_cliente:
         st.session_state.cliente_activo = cliente_consumidor_final()
 
@@ -857,60 +878,88 @@ def render_seccion_cliente_mostrador():
 
 
 def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito):
-    """Lista compacta de variantes encontradas (IA o búsqueda)."""
+    """Lista compacta de variantes encontradas (IA o búsqueda) con radio rápido."""
     resultados = st.session_state.get("resultados_ia_mostrador")
     if not resultados:
         return
 
     col_msg, col_x = st.columns([11, 1])
     with col_msg:
-        st.caption(st.session_state.get("msg_ia_mostrador", "Coincidencias"))
+        st.markdown(
+            f"**{st.session_state.get('msg_ia_mostrador', 'Coincidencias')}**"
+        )
     with col_x:
         if st.button("✕", key="cerrar_coinc_most", help="Cerrar coincidencias"):
             st.session_state.resultados_ia_mostrador = None
             st.session_state.msg_ia_mostrador = None
             st.rerun()
 
+    flat = []
+    labels = {}
     grupos_most = agrupar_por_maestro(resultados)
     for gkey in sorted(grupos_most.keys(), key=lambda k: grupos_most[k]["descripcion"]):
         g = grupos_most[gkey]
-        titulo = f"{g['descripcion'][:45]} · {g['codigo']}"
-        if g.get("vehiculo"):
-            titulo += f" · {str(g['vehiculo'])[:20]}"
-        st.markdown(f"<p style='margin:0.2rem 0;font-size:0.85rem;font-weight:600'>{titulo}</p>", unsafe_allow_html=True)
         for res in g["variantes"]:
+            rid = str(res.get("id", ""))
+            if not rid:
+                continue
             marca_res = res.get("marca", res.get("condicion", ""))
             precio_f = float(res.get("precio_venta", 0))
             stock = res.get("stock", 0)
-            rid = res.get("id", "N")
-            c_txt, c_btn = st.columns([6, 1])
-            with c_txt:
-                st.markdown(
-                    f"<span style='font-size:0.8rem;color:#555'>"
-                    f"{marca_res} · {stock} u. · ${precio_f:,.0f}</span>",
-                    unsafe_allow_html=True,
-                )
-            with c_btn:
-                if st.button("➕", key=f"btn_add_most_{rid}", help="Agregar al carrito"):
-                    exito, msj_db = agregar_al_carrito(str(vendedor), rid, 1)
-                    if exito:
-                        st.session_state.resultados_ia_mostrador = None
-                        st.session_state.msg_ia_mostrador = None
-                        st.rerun()
-                    else:
-                        st.error(msj_db)
+            labels[rid] = (
+                f"{g.get('descripcion', '')[:40]} · {g.get('codigo', '')} · "
+                f"{marca_res} · {stock} u. · ${precio_f:,.0f}"
+            )
+            flat.append(rid)
+
+    if not flat:
+        st.warning("Sin variantes para elegir.")
+        return
+
+    sel_id = st.radio(
+        "Elegí la variante correcta:",
+        options=flat,
+        format_func=lambda rid: labels.get(rid, rid),
+        key=f"coinc_radio_{vendedor}",
+        index=0,
+    )
+    col_c1, col_c2 = st.columns([1, 2])
+    cant = col_c1.number_input(
+        "Cant.",
+        min_value=1,
+        step=1,
+        value=1,
+        key=f"coinc_cant_{vendedor}",
+    )
+    if col_c2.button(
+        "➕ Agregar seleccionado",
+        type="primary",
+        use_container_width=True,
+        key=f"coinc_add_{vendedor}",
+    ):
+        exito, msj_db = agregar_al_carrito(str(vendedor), sel_id, int(cant))
+        if exito:
+            st.session_state.resultados_ia_mostrador = None
+            st.session_state.msg_ia_mostrador = None
+            st.rerun()
+        else:
+            st.error(msj_db)
 
 
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
     from modulos.ia_mostrador import parece_orden_voz_mostrador
 
+    st.markdown(
+        '<div class="mostrador-buscador-box"><strong>🔍 Búsqueda manual</strong></div>',
+        unsafe_allow_html=True,
+    )
     busqueda = st.text_input(
         "Buscar por código, descripción, vehículo o marca",
         key=f"busq_most_{vendedor}",
-        placeholder="Ej: 111, filtro aceite… (órdenes de voz → pestaña Asistente IA)",
+        placeholder="Ej: 111, filtro aceite, descripción buje…",
     )
     if not busqueda or len(busqueda.strip()) < 2:
-        st.info("Escribí en el buscador para ver productos (no se lista todo el inventario).")
+        st.info("Escribí al menos 2 caracteres para buscar.")
         return
 
     busq = busqueda.strip()
@@ -923,37 +972,41 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
             st.rerun()
         return
 
-    encontrados = filtrar_inventario(inv_completo, busq)[:40]
+    encontrados = filtrar_inventario(inv_completo, busq)[:25]
     if not encontrados:
-        st.warning("Sin coincidencias.")
+        st.warning("Sin coincidencias. Probá con código, descripción u otra palabra.")
         return
 
-    opciones_desc = {}
+    opciones = {}
     for item in encontrados:
         if isinstance(item, dict):
             marca_item = item.get("marca", item.get("condicion", ""))
+            iid = str(item.get("id", ""))
             desc = (
                 f"{item.get('codigo', '')} | {item.get('vehiculo', '')} - "
                 f"{marca_item} | {item.get('descripcion', '')} - "
                 f"${item.get('precio_venta', 0)} (stock {item.get('stock', 0)})"
             )
-            opciones_desc[desc] = item.get("id")
+            opciones[iid] = desc
 
-    sel_prod = st.selectbox("Resultados:", options=[""] + list(opciones_desc.keys()))
+    ids = list(opciones.keys())
+    sel_id = st.radio(
+        "Resultados (elegí uno):",
+        options=ids,
+        format_func=lambda x: opciones.get(x, x),
+        key=f"busq_radio_{vendedor}",
+        index=0,
+    )
     col_b1, col_b2 = st.columns([1, 3])
     cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
 
-    if col_b2.button("➕ Agregar al Presupuesto", use_container_width=True, type="primary"):
-        if sel_prod:
-            id_real = opciones_desc[sel_prod]
-            exito, msj = agregar_al_carrito(str(vendedor), id_real, int(cant_b))
-            if exito:
-                st.success(msj)
-                st.rerun()
-            else:
-                st.error(msj)
+    if col_b2.button("➕ Agregar al carrito", use_container_width=True, type="primary"):
+        exito, msj = agregar_al_carrito(str(vendedor), sel_id, int(cant_b))
+        if exito:
+            st.success(msj)
+            st.rerun()
         else:
-            st.warning("Seleccioná un producto de la lista.")
+            st.error(msj)
 
 
 def _cart_editor_session_key(vendedor):
@@ -1477,6 +1530,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         )
         if ok:
             st.session_state.presupuesto_cargado_id = nuevo_id
+            limpiar_venta_mostrador(vendedor, reset_cliente=False, conservar_pdf_presupuesto=True)
         _audit_mostrador(
             "guardar_presupuesto",
             f"Presupuesto guardado · ${total_final:,.2f}",
@@ -1536,9 +1590,13 @@ def render_ia_mostrador(
 ):
     _render_ia_feedback(vendedor)
 
-    st.caption(
-        "Orden: «presupuesto para Juan, buje de directa 3 unidades» · "
-        "«factura B para Juan, código 111 3 unidades». Opcional: **listo** al final."
+    st.markdown('<div class="mostrador-orden-rapida">', unsafe_allow_html=True)
+    st.markdown("### 🎤 Orden rápida (voz o texto)")
+    st.markdown(
+        "<p>Presupuesto: «presupuesto buje directa 3 unidades» · "
+        "Factura: «factura B para Juan, código 111 3 unidades». "
+        "También: «descripción filtro aceite 2 unidades». Decí <strong>listo</strong> al cerrar.</p>",
+        unsafe_allow_html=True,
     )
 
     carrito_voz = obtener_carrito(str(vendedor)) or []
@@ -1546,8 +1604,14 @@ def render_ia_mostrador(
         _render_banner_armado_voz(vendedor)
 
     col_ia1, col_ia2 = st.columns([4, 1])
-    orden = col_ia1.text_input("Orden rápida (voz o texto):", key=f"ia_most_{vendedor}")
+    orden = col_ia1.text_input(
+        "Dictá o escribí la orden completa:",
+        key=f"ia_most_{vendedor}",
+        label_visibility="collapsed",
+        placeholder="Ej: presupuesto código 111 2 unidades, descripción buje 3 unidades…",
+    )
     submit_ia = col_ia2.button("▶ Ejecutar", use_container_width=True, type="primary")
+    st.markdown("</div>", unsafe_allow_html=True)
     if st.session_state.pop(f"auto_run_ia_{vendedor}", False) and orden:
         submit_ia = True
 
@@ -1676,9 +1740,12 @@ def render_ia_mostrador(
                         None, cli_nom
                     )
                     _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+                    limpiar_venta_mostrador(
+                        vendedor, reset_cliente=False, conservar_pdf_presupuesto=True
+                    )
                     st.success(
                         f"Presupuesto BORRADOR (${tf:,.2f}). "
-                        f"Validez {VALIDEZ_PRESUPUESTO_DIAS} días. Descargalo abajo."
+                        f"Validez {VALIDEZ_PRESUPUESTO_DIAS} días. Descargalo arriba."
                     )
                     st.rerun()
 
@@ -2036,6 +2103,9 @@ def render_panel_cobro_mostrador(
                                 nro, cli_nom,
                             )
                             st.session_state.presupuesto_cargado_id = nuevo_id
+                            limpiar_venta_mostrador(
+                                vendedor, reset_cliente=False, conservar_pdf_presupuesto=True
+                            )
                             st.success(msj)
                             st.rerun()
                         else:
@@ -2072,7 +2142,11 @@ def render_panel_cobro_mostrador(
                 )
                 if ok:
                     st.session_state.presupuesto_cargado_id = nuevo_id
+                    limpiar_venta_mostrador(
+                        vendedor, reset_cliente=False, conservar_pdf_presupuesto=True
+                    )
                     st.success(msj)
+                    st.rerun()
                 else:
                     st.error(msj)
             if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):

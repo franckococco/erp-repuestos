@@ -115,6 +115,7 @@ try:
     from modulos.util_busqueda import (
         normalizar_para_busqueda,
         filtrar_por_busqueda,
+        filtrar_por_busqueda_flexible,
         texto_item_inventario,
     )
 
@@ -258,7 +259,10 @@ def agrupar_por_maestro(items):
 
 
 def buscar_en_inventario(items, termino):
-    return filtrar_por_busqueda(items, termino, texto_item_inventario)
+    estrictos = filtrar_por_busqueda(items, termino, texto_item_inventario)
+    if estrictos:
+        return estrictos
+    return filtrar_por_busqueda_flexible(items, termino, texto_item_inventario)
 
 
 def filtrar_inventario(items, termino_busqueda):
