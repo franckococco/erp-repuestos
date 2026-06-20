@@ -755,7 +755,6 @@ elif pagina == "mostrador":
             with t_buscar:
                 if inv_mostrador:
                     render_buscador_productos(vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario)
-                    render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito)
                 else:
                     st.info("El inventario está vacío. Agregue productos primero.")
 

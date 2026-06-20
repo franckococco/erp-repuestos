@@ -196,6 +196,21 @@ def extraer_items_orden_voz(texto):
     return items
 
 
+def _limpiar_nombre_cliente_voz(nombre: str) -> str:
+    nombre = re.sub(r"^(nombre\s+de|el|la)\s+", "", str(nombre or "").strip(), flags=re.I)
+    nombre = re.sub(r"\s+(el|la|del|de|una|un)$", "", nombre.strip(" ,."), flags=re.I)
+    nombre = re.sub(r"^(el|la)\s+", "", nombre, flags=re.I)
+    nombre = re.sub(r"\s+", " ", nombre).strip()
+    if len(nombre) < 2:
+        return ""
+    if nombre.lower() in ("factura", "presupuesto", "consumidor final", "particular"):
+        return ""
+    primera = nombre.split()[0].lower()
+    if primera in _INICIO_DESCRIPCION_VOZ:
+        return ""
+    return nombre.upper()
+
+
 def extraer_cliente_orden_voz(texto):
     """Extrae nombre de cliente o consumidor final desde la orden."""
     if not texto:
@@ -206,6 +221,9 @@ def extraer_cliente_orden_voz(texto):
 
     fin = _patron_fin_cliente_voz()
     patrones = (
+        rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
+        rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
+        rf"presupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
         rf"para\s+(.+?){fin}",
@@ -214,11 +232,9 @@ def extraer_cliente_orden_voz(texto):
         m = re.search(patron, t)
         if not m:
             continue
-        nombre = re.sub(r"\s+(el|la|del|de|una|un)$", "", m.group(1).strip(" ,."), flags=re.I)
-        nombre = re.sub(r"^(el|la)\s+", "", nombre, flags=re.I)
-        nombre = re.sub(r"\s+", " ", nombre).strip()
-        if len(nombre) >= 3 and nombre not in ("factura", "presupuesto", "consumidor final"):
-            return {"nombre_cliente": nombre.upper()}
+        nombre = _limpiar_nombre_cliente_voz(m.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
     return {}
 
 

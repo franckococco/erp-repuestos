@@ -121,6 +121,8 @@ def parse_flujo_rapido_voz(texto_usuario):
         or (items and (nombre_cliente or consumidor_final))
         or (es_presupuesto and items)
         or (tiene_factura and items)
+        or (es_presupuesto and nombre_cliente)
+        or (tiene_factura and nombre_cliente)
     )
     if not es_flujo:
         return None

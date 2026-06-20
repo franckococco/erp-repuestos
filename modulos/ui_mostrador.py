@@ -43,6 +43,7 @@ from modulos.ia_mostrador import (
 from modulos.mostrador_voz_flujo import (
     inventario_cache_mostrador,
     agregar_termino_voz,
+    activar_cliente_voz,
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
     marcar_verificacion_mostrador,
@@ -413,7 +414,16 @@ def _limpiar_inputs_mostrador(vendedor):
         f"auto_run_ia_{vid}",
         f"coinc_radio_{vid}",
         f"coinc_cant_{vid}",
+        f"coinc_multi_{vid}",
+        f"coinc_modo_{vid}",
+        f"coinc_add_{vid}",
+        f"coinc_add_multi_{vid}",
+        f"cerrar_coinc_most_{vid}",
         f"busq_radio_{vid}",
+        f"busq_multi_{vid}",
+        f"busq_modo_{vid}",
+        f"busq_add_multi_{vid}",
+        f"busq_add_{vid}",
     ):
         st.session_state.pop(key, None)
 
@@ -878,18 +888,19 @@ def render_seccion_cliente_mostrador():
 
 
 def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_al_carrito):
-    """Lista compacta de variantes encontradas (IA o búsqueda) con radio rápido."""
+    """Variantes encontradas (IA o búsqueda): elegir una o varias."""
     resultados = st.session_state.get("resultados_ia_mostrador")
     if not resultados:
         return
 
+    vid = str(vendedor)
     col_msg, col_x = st.columns([11, 1])
     with col_msg:
         st.markdown(
             f"**{st.session_state.get('msg_ia_mostrador', 'Coincidencias')}**"
         )
     with col_x:
-        if st.button("✕", key="cerrar_coinc_most", help="Cerrar coincidencias"):
+        if st.button("✕", key=f"cerrar_coinc_most_{vid}", help="Cerrar coincidencias"):
             st.session_state.resultados_ia_mostrador = None
             st.session_state.msg_ia_mostrador = None
             st.rerun()
@@ -916,34 +927,74 @@ def render_panel_coincidencias_mostrador(vendedor, agrupar_por_maestro, agregar_
         st.warning("Sin variantes para elegir.")
         return
 
-    sel_id = st.radio(
-        "Elegí la variante correcta:",
-        options=flat,
-        format_func=lambda rid: labels.get(rid, rid),
-        key=f"coinc_radio_{vendedor}",
-        index=0,
+    modo = st.radio(
+        "Modo de selección",
+        options=["uno", "varios"],
+        format_func=lambda x: "Un artículo" if x == "uno" else "Varios artículos",
+        horizontal=True,
+        key=f"coinc_modo_{vid}",
     )
-    col_c1, col_c2 = st.columns([1, 2])
-    cant = col_c1.number_input(
-        "Cant.",
+    cant = st.number_input(
+        "Cant. por ítem",
         min_value=1,
         step=1,
         value=1,
-        key=f"coinc_cant_{vendedor}",
+        key=f"coinc_cant_{vid}",
     )
-    if col_c2.button(
-        "➕ Agregar seleccionado",
-        type="primary",
-        use_container_width=True,
-        key=f"coinc_add_{vendedor}",
-    ):
-        exito, msj_db = agregar_al_carrito(str(vendedor), sel_id, int(cant))
-        if exito:
-            st.session_state.resultados_ia_mostrador = None
-            st.session_state.msg_ia_mostrador = None
-            st.rerun()
-        else:
-            st.error(msj_db)
+
+    if modo == "uno":
+        sel_id = st.radio(
+            "Elegí la variante:",
+            options=flat,
+            format_func=lambda rid: labels.get(rid, rid),
+            key=f"coinc_radio_{vid}",
+            index=0,
+        )
+        if st.button(
+            "➕ Agregar seleccionado",
+            type="primary",
+            use_container_width=True,
+            key=f"coinc_add_{vid}",
+        ):
+            exito, msj_db = agregar_al_carrito(vid, sel_id, int(cant))
+            if exito:
+                st.session_state.resultados_ia_mostrador = None
+                st.session_state.msg_ia_mostrador = None
+                st.rerun()
+            else:
+                st.error(msj_db)
+    else:
+        sel_ids = st.multiselect(
+            "Elegí una o más variantes:",
+            options=flat,
+            format_func=lambda rid: labels.get(rid, rid),
+            key=f"coinc_multi_{vid}",
+        )
+        if st.button(
+            "➕ Agregar seleccionados",
+            type="primary",
+            use_container_width=True,
+            key=f"coinc_add_multi_{vid}",
+        ):
+            if not sel_ids:
+                st.warning("Seleccioná al menos un artículo.")
+            else:
+                ok_n = 0
+                errores = []
+                for rid in sel_ids:
+                    exito, msj_db = agregar_al_carrito(vid, rid, int(cant))
+                    if exito:
+                        ok_n += 1
+                    else:
+                        errores.append(msj_db)
+                if ok_n:
+                    st.session_state.resultados_ia_mostrador = None
+                    st.session_state.msg_ia_mostrador = None
+                    if errores:
+                        st.warning(f"Agregados {ok_n}. Algunos fallaron:\n" + "\n".join(errores))
+                    st.rerun()
+                elif errores:
+                    st.error("\n".join(errores))
 
 
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
@@ -990,23 +1041,57 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
             opciones[iid] = desc
 
     ids = list(opciones.keys())
-    sel_id = st.radio(
-        "Resultados (elegí uno):",
-        options=ids,
-        format_func=lambda x: opciones.get(x, x),
-        key=f"busq_radio_{vendedor}",
-        index=0,
+    vid = str(vendedor)
+    modo_busq = st.radio(
+        "Modo",
+        options=["uno", "varios"],
+        format_func=lambda x: "Un artículo" if x == "uno" else "Varios artículos",
+        horizontal=True,
+        key=f"busq_modo_{vid}",
     )
-    col_b1, col_b2 = st.columns([1, 3])
-    cant_b = col_b1.number_input("Cantidad", min_value=1, step=1, key=f"cant_b_{vendedor}")
+    cant_b = st.number_input("Cant. por ítem", min_value=1, step=1, key=f"cant_b_{vid}")
 
-    if col_b2.button("➕ Agregar al carrito", use_container_width=True, type="primary"):
-        exito, msj = agregar_al_carrito(str(vendedor), sel_id, int(cant_b))
-        if exito:
-            st.success(msj)
-            st.rerun()
-        else:
-            st.error(msj)
+    if modo_busq == "uno":
+        sel_id = st.radio(
+            "Resultados:",
+            options=ids,
+            format_func=lambda x: opciones.get(x, x),
+            key=f"busq_radio_{vid}",
+            index=0,
+        )
+        if st.button("➕ Agregar al carrito", use_container_width=True, type="primary", key=f"busq_add_{vid}"):
+            exito, msj = agregar_al_carrito(vid, sel_id, int(cant_b))
+            if exito:
+                st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
+    else:
+        sel_ids = st.multiselect(
+            "Resultados (elegí uno o más):",
+            options=ids,
+            format_func=lambda x: opciones.get(x, x),
+            key=f"busq_multi_{vid}",
+        )
+        if st.button(
+            "➕ Agregar seleccionados",
+            use_container_width=True,
+            type="primary",
+            key=f"busq_add_multi_{vid}",
+        ):
+            if not sel_ids:
+                st.warning("Seleccioná al menos un artículo.")
+            else:
+                ok_n = 0
+                for iid in sel_ids:
+                    exito, _ = agregar_al_carrito(vid, iid, int(cant_b))
+                    if exito:
+                        ok_n += 1
+                if ok_n:
+                    st.success(f"Agregados {ok_n} artículo(s).")
+                    st.rerun()
+                else:
+                    st.error("No se pudo agregar ningún artículo.")
 
 
 def _cart_editor_session_key(vendedor):
@@ -1593,9 +1678,9 @@ def render_ia_mostrador(
     st.markdown('<div class="mostrador-orden-rapida">', unsafe_allow_html=True)
     st.markdown("### 🎤 Orden rápida (voz o texto)")
     st.markdown(
-        "<p>Presupuesto: «presupuesto buje directa 3 unidades» · "
-        "Factura: «factura B para Juan, código 111 3 unidades». "
-        "También: «descripción filtro aceite 2 unidades». Decí <strong>listo</strong> al cerrar.</p>",
+        "<p>Presupuesto: «presupuesto a Juan, buje directa 3 unidades» · "
+        "Factura: «factura B al nombre de Juan, código 111 3 unidades». "
+        "El cliente no tiene que estar dado de alta. Decí <strong>listo</strong> al cerrar.</p>",
         unsafe_allow_html=True,
     )
 
@@ -1797,25 +1882,17 @@ def render_ia_mostrador(
 
             elif accion == "set_cliente":
                 nombre_det = str(resp.get("nombre_cliente", "")).upper()
-                clientes_db = obtener_clientes() or {}
-                cliente_encontrado = next(
-                    (c for c in clientes_db.values()
-                     if nombre_det in str(c.get("nombre", "")).upper()),
-                    None,
+                tipo = resp.get("tipo_comprobante")
+                cli = activar_cliente_voz(
+                    nombre_cliente=nombre_det,
+                    tipo_comprobante=tipo,
                 )
-                if cliente_encontrado:
-                    st.session_state.cliente_activo = cliente_db_a_activo(cliente_encontrado)
-                    tipo = resp.get("tipo_comprobante")
-                    if tipo in ("1", "6", "A", "B", "a", "b"):
-                        t = str(tipo).upper()
-                        st.session_state.cliente_activo["tipo_comprobante"] = (
-                            "1" if t in ("1", "A") else "6"
-                        )
-                    st.success(f"✅ Cliente {cliente_encontrado['nombre']} activado.")
+                if cli:
+                    st.success(f"✅ Cliente {cli.get('nombre', nombre_det)} activado.")
                     st.session_state.resultados_ia_mostrador = None
                     st.rerun()
                 else:
-                    st.warning(f"⚠️ '{nombre_det}' no está en la base de datos.")
+                    st.warning("No se pudo activar el cliente.")
 
             elif accion == "set_tipo_factura":
                 tipo = resp.get("tipo_comprobante", "6")
