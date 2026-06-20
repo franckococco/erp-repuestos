@@ -493,8 +493,8 @@ def _nombre_archivo_presupuesto(numero, cliente_nombre):
     return f"Presupuesto_{nro}_{safe}.pdf"
 
 
-def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto, limpiar_pantalla=True):
-    """Genera PDF borrador listo para descargar y opcionalmente vacía el carrito."""
+def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto):
+    """Genera PDF borrador para descargar. No vacía la grilla: el usuario revisa ítems arriba."""
     cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
     desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
     pdf = generar_pdf_presupuesto_mostrador(
@@ -502,10 +502,6 @@ def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto, limpiar_p
     )
     st.session_state.presupuesto_pdf_descarga = pdf
     st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(None, cli_nom)
-    if limpiar_pantalla:
-        limpiar_venta_mostrador(
-            str(vendedor), reset_cliente=False, conservar_pdf_presupuesto=True
-        )
     return pdf
 
 
@@ -517,22 +513,14 @@ def _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True):
 
 
 def render_descarga_presupuesto_prominente(vendedor):
-    """Vista previa del PDF y botones de descarga / nueva venta."""
+    """Botón de descarga del PDF (la revisión de ítems es la grilla de arriba)."""
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
     if not pdf_ready:
         return
-    st.success("Presupuesto listo. Revisalo abajo, descargalo o empezá una venta nueva.")
-    st.markdown("**Vista previa del presupuesto**")
-    try:
-        st.pdf(pdf_ready, height=520)
-    except Exception:
-        import base64
-        b64 = base64.b64encode(pdf_ready).decode()
-        st.markdown(
-            f'<iframe src="data:application/pdf;base64,{b64}" '
-            f'width="100%" height="520" style="border:1px solid #cbd5e1;border-radius:8px;"></iframe>',
-            unsafe_allow_html=True,
-        )
+    st.info(
+        "PDF generado. **Revisá los ítems en la grilla** (editá o eliminá con 🗑️). "
+        "Regenerá el PDF si cambiás algo. Descargá cuando esté conforme."
+    )
     col_dl, col_nueva = st.columns([3, 1])
     with col_dl:
         st.download_button(
@@ -1659,7 +1647,6 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
         )
         if ok:
             st.session_state.presupuesto_cargado_id = nuevo_id
-            limpiar_venta_mostrador(vendedor, reset_cliente=False, conservar_pdf_presupuesto=True)
         _audit_mostrador(
             "guardar_presupuesto",
             f"Presupuesto guardado · ${total_final:,.2f}",
@@ -1784,8 +1771,8 @@ def render_ia_mostrador(
                             )
                             _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
                             fb_msg = (
-                                f"{msj} PDF listo — usá el botón "
-                                "**DESCARGAR / IMPRIMIR PRESUPUESTO**."
+                                f"{msj} Revisá la grilla de ítems arriba. "
+                                "Cuando esté OK, usá **DESCARGAR / IMPRIMIR PRESUPUESTO**."
                             )
                     elif resp.get("intent_sugerido") in ("factura_b", "factura_a") and resp.get("ir_verificacion"):
                         fb_msg = (
@@ -1863,10 +1850,10 @@ def render_ia_mostrador(
                 else:
                     _, tb = calcular_totales_carrito(carrito_n, desc_porc)
                     _, tf = calcular_totales_carrito(carrito_n, desc_porc)
-                    _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb, limpiar_pantalla=True)
+                    _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
                     st.success(
                         f"Presupuesto BORRADOR (${tf:,.2f}). "
-                        f"Validez {VALIDEZ_PRESUPUESTO_DIAS} días. Descargalo arriba."
+                        f"Revisá los ítems en la grilla. Validez {VALIDEZ_PRESUPUESTO_DIAS} días."
                     )
                     st.rerun()
 
@@ -1885,7 +1872,7 @@ def render_ia_mostrador(
                         _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
                         fb_msg = (
                             f"PDF listo (${tf:,.2f}). "
-                            "Usá **DESCARGAR / IMPRIMIR PRESUPUESTO**."
+                            "Revisá la grilla de ítems arriba y descargá cuando esté conforme."
                         )
                     fb_tipo, do_rerun = "ok", True
                     st.session_state.resultados_ia_mostrador = None
@@ -2191,7 +2178,10 @@ def render_panel_cobro_mostrador(
         if listo_para_cerrar:
             intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
             if intent == "presupuesto":
-                st.caption("Generá el PDF abajo; al hacerlo se vacía el carrito automáticamente.")
+                st.caption(
+                    "Revisá y editá los ítems en la grilla de arriba (🗑️ para quitar). "
+                    "Generá el PDF cuando esté conforme."
+                )
                 if st.button(
                     "⬇️ Generar PDF e imprimir presupuesto",
                     use_container_width=True,
@@ -2235,9 +2225,6 @@ def render_panel_cobro_mostrador(
                                 nro, cli_nom,
                             )
                             st.session_state.presupuesto_cargado_id = nuevo_id
-                            limpiar_venta_mostrador(
-                                vendedor, reset_cliente=False, conservar_pdf_presupuesto=True
-                            )
                             st.success(msj)
                             st.rerun()
                         else:
@@ -2274,9 +2261,6 @@ def render_panel_cobro_mostrador(
                 )
                 if ok:
                     st.session_state.presupuesto_cargado_id = nuevo_id
-                    limpiar_venta_mostrador(
-                        vendedor, reset_cliente=False, conservar_pdf_presupuesto=True
-                    )
                     st.success(msj)
                     st.rerun()
                 else:
