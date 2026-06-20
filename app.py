@@ -729,9 +729,15 @@ elif pagina == "mostrador":
             st.divider()
 
         carrito_full = obtener_carrito(str(vendedor)) or []
+        tiene_pdf_pres = bool(st.session_state.get("presupuesto_pdf_descarga"))
+
         if carrito_full:
             render_carrito_grilla(vendedor, carrito_full)
+
+        if tiene_pdf_pres:
             render_descarga_presupuesto_prominente(vendedor)
+
+        if carrito_full or tiene_pdf_pres:
             st.divider()
 
         col_izq, col_der = st.columns([3, 2], gap="large")
