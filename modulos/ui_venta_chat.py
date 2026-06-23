@@ -20,7 +20,7 @@ from modulos.mostrador_voz_flujo import (
     marcar_verificacion_mostrador,
 )
 from modulos.ia_mostrador import procesar_orden_mostrador
-from modulos.ui_mostrador import render_mostrador_accion_pendiente
+from modulos.ui_mostrador import render_mostrador_accion_pendiente, render_presupuesto_pdf_pendiente
 
 
 def _procesar_orden_chat(
@@ -146,7 +146,7 @@ def _procesar_orden_chat(
         marcar_verificacion_mostrador("presupuesto")
         guardar_mensaje_chat(
             orden,
-            f"Presupuesto BORRADOR (${tf:,.2f}). Validez {VALIDEZ_PRESUPUESTO_DIAS} días.",
+            f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.",
             "ok",
         )
         return True
@@ -163,7 +163,7 @@ def _procesar_orden_chat(
             _, tb = calcular_totales_carrito(carrito_n, desc_porc)
             _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
             guardar_mensaje_chat(
-                orden, f"PDF listo (${tf:,.2f}). Revisá e imprimí.", "ok"
+                orden, f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.", "ok"
             )
         else:
             guardar_mensaje_chat(orden, f"Listo (${tf:,.2f}). Revisá el comprobante.", "ok")
@@ -388,6 +388,7 @@ def render_venta_chat(
     estado = obtener_estado_venta(vendedor)
     _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
     render_mostrador_accion_pendiente(vendedor)
+    render_presupuesto_pdf_pendiente(vendedor)
 
     if estado == EstadoVenta.LISTO:
         render_factura_arca_exitosa("top")

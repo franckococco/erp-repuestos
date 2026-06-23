@@ -411,6 +411,8 @@ def _invalidar_pdf_presupuesto_mostrador():
     st.session_state.pop("presupuesto_pdf_descarga", None)
     st.session_state.pop("presupuesto_pdf_nombre", None)
     st.session_state.pop("presupuesto_pdf_fingerprint", None)
+    st.session_state.pop("presupuesto_emitido_ok", None)
+    st.session_state.pop("presupuesto_cerrado_resumen", None)
 
 
 def agregar_al_carrito_mostrador(vendedor, id_producto, cantidad=1):
@@ -526,16 +528,49 @@ def _carrito_para_presupuesto(vendedor):
 
 
 def _preparar_pdf_presupuesto_borrador(vendedor, carrito, total_bruto):
-    """Genera PDF borrador para descargar. No vacía la grilla: el usuario revisa ítems arriba."""
-    cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
-    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+    """Genera PDF y vacía el carrito en Firebase (queda solo la descarga pendiente)."""
+    cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+    cli_nom = cli.get("nombre", "CLIENTE")
+    desc_porc = float(cli.get("descuento", 0))
+    _, total_final = calcular_totales_carrito(carrito, desc_porc)
     pdf = generar_pdf_presupuesto_mostrador(
         vendedor, carrito, float(total_bruto), desc_porc, numero=None
     )
     st.session_state.presupuesto_pdf_descarga = pdf
     st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(None, cli_nom)
     st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(vendedor, carrito)
+    st.session_state.presupuesto_emitido_ok = True
+    st.session_state.presupuesto_cerrado_resumen = {
+        "cliente": cli_nom,
+        "n_items": len(carrito),
+        "total": float(total_final),
+    }
+    _vaciar_carrito_tras_presupuesto_emitido(vendedor, reset_cliente=True)
     return pdf
+
+
+def _vaciar_carrito_tras_presupuesto_emitido(vendedor, reset_cliente=True):
+    """Vacía carrito en Firebase tras emitir presupuesto; conserva PDF en sesión."""
+    from modulos.mostrador_estado import limpiar_mensaje_chat
+
+    descartar_panels_operacion_anterior()
+    vaciar_carrito(str(vendedor))
+    st.session_state.mostrador_listo_para_ticket = False
+    st.session_state.mostrador_accion_pendiente = None
+    st.session_state.pop("mostrador_intent_sugerido", None)
+    st.session_state.pop(f"ia_feedback_{vendedor}", None)
+    st.session_state.resultados_ia_mostrador = None
+    st.session_state.pop("msg_ia_mostrador", None)
+    st.session_state.pop("mostrador_voz_cola_ambiguos", None)
+    st.session_state.pop("mostrador_voz_cant_coincidencia", None)
+    st.session_state.pop("mostrador_voz_intent_pendiente", None)
+    _limpiar_inputs_mostrador(vendedor)
+    limpiar_mensaje_chat()
+    if reset_cliente:
+        st.session_state.cliente_activo = cliente_consumidor_final()
+    st.session_state[f"mostrador_cart_rev_{vendedor}"] = (
+        int(st.session_state.get(f"mostrador_cart_rev_{vendedor}", 0)) + 1
+    )
 
 
 def _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True):
@@ -546,21 +581,32 @@ def _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True):
 
 
 def _finalizar_presupuesto_impreso(vendedor):
-    """Tras descargar/imprimir: vacía carrito y deja el mostrador listo para otra venta."""
-    from modulos.mostrador_estado import limpiar_mensaje_chat
-
-    limpiar_mensaje_chat()
-    _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True)
+    """Tras descargar/imprimir: limpia PDF pendiente y deja el mostrador en blanco."""
+    _invalidar_pdf_presupuesto_mostrador()
+    _limpiar_inputs_mostrador(vendedor)
 
 
-def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
-    """Generar o descargar PDF en un solo lugar (sin duplicar botones)."""
+def render_presupuesto_pdf_pendiente(vendedor):
+    """Banner de descarga cuando el presupuesto ya se emitió y el carrito está vacío."""
+    if not st.session_state.get("presupuesto_emitido_ok"):
+        return
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
-    fp_actual = _fingerprint_presupuesto(vendedor, carrito)
-    fp_guardado = st.session_state.get("presupuesto_pdf_fingerprint")
-    pdf_valido = bool(pdf_ready and fp_guardado and fp_actual == fp_guardado)
+    if not pdf_ready:
+        return
 
-    if pdf_valido:
+    resumen = st.session_state.get("presupuesto_cerrado_resumen") or {}
+    cliente = resumen.get("cliente", "CLIENTE")
+    total = resumen.get("total")
+    n_items = resumen.get("n_items", "")
+    detalle = f" · {n_items} ítem(s)" if n_items else ""
+    total_txt = f" · ${total:,.2f}" if total is not None else ""
+
+    st.success(
+        f"**Presupuesto listo** — {cliente}{detalle}{total_txt}. "
+        "Descargá el PDF para imprimir."
+    )
+    col_dl, col_ok = st.columns([3, 1])
+    with col_dl:
         st.download_button(
             "⬇️ Descargar / imprimir presupuesto",
             pdf_ready,
@@ -568,49 +614,39 @@ def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
             "application/pdf",
             type="primary",
             use_container_width=True,
-            key=f"dl_pres_{vendedor}",
+            key=f"dl_pres_pend_{vendedor}",
             on_click=_finalizar_presupuesto_impreso,
             args=(vendedor,),
         )
-        st.caption("Al descargar se vacía el carrito para la próxima venta.")
-        col_regen, col_nueva = st.columns(2)
-        with col_regen:
-            if st.button(
-                "🔄 Regenerar PDF",
-                use_container_width=True,
-                key=f"regen_pres_{vendedor}",
-            ):
-                carrito_sync = _carrito_para_presupuesto(vendedor)
-                if not carrito_sync:
-                    st.error("El carrito está vacío.")
-                else:
-                    _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
-                    _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
-                    st.rerun()
-        with col_nueva:
-            if st.button(
-                "✅ Nueva venta",
-                use_container_width=True,
-                key=f"nueva_pres_{vendedor}",
-            ):
-                _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True)
-                st.rerun()
-    else:
-        if pdf_ready and fp_guardado and fp_actual != fp_guardado:
-            st.caption("Los ítems cambiaron. Regenerá el PDF antes de descargar.")
+    with col_ok:
         if st.button(
-            "⬇️ Generar presupuesto PDF",
+            "✅ Listo",
             use_container_width=True,
-            type="primary",
-            key=f"btn_pdf_pres_{vendedor}",
+            key=f"cerrar_pres_pend_{vendedor}",
+            help="Cerrar sin volver a descargar.",
         ):
-            carrito_sync = _carrito_para_presupuesto(vendedor)
-            if not carrito_sync:
-                st.error("El carrito está vacío.")
-            else:
-                _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
-                _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
-                st.rerun()
+            _finalizar_presupuesto_impreso(vendedor)
+            st.rerun()
+
+
+def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
+    """Acciones de cierre mientras aún hay ítems en la grilla (antes de emitir)."""
+    if not carrito:
+        return
+
+    if st.button(
+        "⬇️ Generar presupuesto PDF",
+        use_container_width=True,
+        type="primary",
+        key=f"btn_pdf_pres_{vendedor}",
+    ):
+        carrito_sync = _carrito_para_presupuesto(vendedor)
+        if not carrito_sync:
+            st.error("El carrito está vacío.")
+        else:
+            _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+            _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
+            st.rerun()
 
     if st.button(
         "💾 Guardar presupuesto numerado",
@@ -628,10 +664,12 @@ def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
                 pres = obtener_presupuesto_guardado(nuevo_id) or {}
                 nro = pres.get("numero_presupuesto")
                 _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+                cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+                cli_nom = cli.get("nombre", "CLIENTE")
+                _, tf = calcular_totales_carrito(carrito_sync, desc_porc)
                 pdf = generar_pdf_presupuesto_mostrador(
                     vendedor, carrito_sync, tb, desc_porc, numero=nro,
                 )
-                cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
                 st.session_state.presupuesto_pdf_descarga = pdf
                 st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
                     nro, cli_nom,
@@ -639,8 +677,15 @@ def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
                 st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(
                     vendedor, carrito_sync
                 )
+                st.session_state.presupuesto_emitido_ok = True
+                st.session_state.presupuesto_cerrado_resumen = {
+                    "cliente": cli_nom,
+                    "n_items": len(carrito_sync),
+                    "total": float(tf),
+                }
                 st.session_state.presupuesto_cargado_id = nuevo_id
-                st.success(f"{msj} Descargá el PDF; el carrito se vaciará al imprimir.")
+                _vaciar_carrito_tras_presupuesto_emitido(vendedor, reset_cliente=True)
+                st.success(msj)
                 st.rerun()
             else:
                 st.error(msj)
