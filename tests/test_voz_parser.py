@@ -36,6 +36,15 @@ class TestVozParser(unittest.TestCase):
         r = extraer_cliente_orden_voz("bielete 2 codigo 111 1 para julio")
         self.assertEqual(r.get("nombre_cliente"), "JULIO")
 
+    def test_presupuesto_para_pedro_bieleta_207(self):
+        t = "haceme un presupuesto para pedro de una bieleta para el 207 2 unidades"
+        self.assertEqual(extraer_cliente_orden_voz(t).get("nombre_cliente"), "PEDRO")
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "BIELETA")
+        self.assertEqual(items[0].get("vehiculo"), "207")
+        self.assertNotIn("PEDRO", items[0]["termino"])
+
     def test_bielete_con_codigo_y_vehiculo(self):
         items = extraer_items_orden_voz(
             "presupuesto pablo bielete para el 207 2 codigo 111 1"

@@ -113,6 +113,7 @@ def _patron_fin_cliente_voz() -> str:
 
 def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     """Quita cliente, factura y prefijos de armado para buscar por descripción."""
+    cliente_info = extraer_cliente_orden_voz(texto)
     t = normalizar_texto_basico(texto).lower()
     t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
     t = re.sub(
@@ -124,15 +125,14 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     t = re.sub(r"\bpresupuesto\b", " ", t)
     t = re.sub(r"\bcliente\b", " ", t)
     t = re.sub(r"\b(codigo|código|descripcion|descripción|desc)\b", " ", t)
-    cliente_info = extraer_cliente_orden_voz(texto)
     if cliente_info.get("nombre_cliente"):
         nom = re.escape(str(cliente_info["nombre_cliente"]).lower())
         t = re.sub(rf"\bpara\s+(?:el\s+)?(?:cliente\s+)?{nom}\b", " ", t, flags=re.I)
+        t = re.sub(rf"\b{nom}\b", " ", t, flags=re.I)
     elif cliente_info.get("consumidor_final"):
         t = re.sub(r"\b(consumidor\s+final|particular)\b", " ", t)
-    if cliente_info.get("nombre_cliente"):
-        nom = re.escape(str(cliente_info["nombre_cliente"]).lower())
-        t = re.sub(rf"\b{nom}\b", " ", t, flags=re.I)
+    t = re.sub(r"\bun\s+", " ", t)
+    t = re.sub(r"\bde\s+una?\s+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -350,6 +350,8 @@ def _palabra_parece_nombre_cliente(palabra: str) -> bool:
     if p in (
         "factura", "presupuesto", "cliente", "codigo", "código", "listo",
         "consumidor", "particular", "contado", "transferencia",
+        "para", "por", "de", "del", "una", "uno", "un", "el", "la", "los", "las",
+        "hacer", "haceme", "haceme", "cargame", "armame",
     ):
         return False
     if es_referencia_vehiculo(p):
@@ -369,18 +371,28 @@ def extraer_cliente_orden_voz(texto):
 
     fin = _patron_fin_cliente_voz()
     m_directo = re.search(
-        r"\bpresupuesto\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s+(?:codigo|código|\d|[a-z]{4,})",
+        r"\bpresupuesto\s+para\s+([a-záéíóúñ]{3,20})\s+(?:de\s+)?(?:una?\s+)?"
+        r"(?:codigo|código|\d|[a-záéíóúñ]{4,})",
         t,
     )
     if m_directo:
         nombre = _limpiar_nombre_cliente_voz(m_directo.group(1))
-        if nombre:
+        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
+            return {"nombre_cliente": nombre}
+
+    m_directo2 = re.search(
+        r"\bpresupuesto\s+(?!para\b)([a-záéíóúñ]{3,20})\s+(?:codigo|código|\d|[a-záéíóúñ]{4,})",
+        t,
+    )
+    if m_directo2:
+        nombre = _limpiar_nombre_cliente_voz(m_directo2.group(1))
+        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
             return {"nombre_cliente": nombre}
 
     m_final = re.search(r"\bpresupuesto\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s*$", t)
     if m_final:
         nombre = _limpiar_nombre_cliente_voz(m_final.group(1))
-        if nombre:
+        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
             return {"nombre_cliente": nombre}
 
     m_factura = re.search(
@@ -397,19 +409,22 @@ def extraer_cliente_orden_voz(texto):
         if nombre:
             return {"nombre_cliente": nombre}
 
-    m_para = re.search(r"\bpara\s+([a-záéíóúñ]{3,20})\s*$", t)
-    if m_para and _palabra_parece_nombre_cliente(m_para.group(1)):
-        nombre = _limpiar_nombre_cliente_voz(m_para.group(1))
+    m_para_nombre = re.search(
+        r"\bpara\s+(?!el\s+\d{3,4}\b)(?!el\s+cliente\b)"
+        r"([a-záéíóúñ]{3,20})\s+(?:de\s+)?(?:una?\s+)?",
+        t,
+    )
+    if m_para_nombre and _palabra_parece_nombre_cliente(m_para_nombre.group(1)):
+        nombre = _limpiar_nombre_cliente_voz(m_para_nombre.group(1))
         if nombre:
             return {"nombre_cliente": nombre}
 
     patrones = (
-        rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
-        rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
-        rf"presupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
+        rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
+        rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
+        rf"presupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
-        rf"para\s+(?!el\s+\d{{3,4}}\b)(?!el\s+cliente\b)(.+?){fin}",
     )
     for patron in patrones:
         m = re.search(patron, t)
@@ -419,7 +434,7 @@ def extraer_cliente_orden_voz(texto):
         if nombre:
             primera = nombre.split()[0]
             if _palabra_parece_nombre_cliente(primera):
-                return {"nombre_cliente": nombre}
+                return {"nombre_cliente": primera}
     return {}
 
 
