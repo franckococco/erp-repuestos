@@ -172,7 +172,7 @@ def extraer_items_orden_voz(texto):
         if not t:
             return
         cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
-        from modulos.voz_repuestos import extraer_vehiculos_de_texto
+        from modulos.voz_repuestos import extraer_vehiculos_de_texto, patron_repuesto_para_vehiculo
         from modulos.util_busqueda import normalizar_para_busqueda as _norm_busq
 
         vehs_frag = extraer_vehiculos_de_texto(fragmento)
@@ -216,11 +216,7 @@ def extraer_items_orden_voz(texto):
         n_antes = len(acumulado)
 
         resto = _limpiar_texto_para_items_descripcion(fragmento)
-        pat_repuesto_veh = re.compile(
-            r"\b([a-záéíóúñ][a-záéíóúñ\-]{2,24})\s+para\s+(?:el|la)\s+"
-            r"(\d{3,4})\s+(\d{1,2})\s*(?:unidades?|u\.?|uds?)?\b",
-            re.I,
-        )
+        pat_repuesto_veh = patron_repuesto_para_vehiculo()
         patrones_desc = [
             pat_repuesto_veh,
             r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
@@ -333,6 +329,7 @@ def _limpiar_nombre_cliente_voz(nombre: str) -> str:
     nombre = re.sub(r"^(nombre\s+de|el|la)\s+", "", str(nombre or "").strip(), flags=re.I)
     nombre = re.sub(r"\s+(el|la|del|de|una|un)$", "", nombre.strip(" ,."), flags=re.I)
     nombre = re.sub(r"^(el|la)\s+", "", nombre, flags=re.I)
+    nombre = re.sub(r"\s+\d{1,2}\s+unidades?\s*$", "", nombre, flags=re.I)
     nombre = re.sub(r"\s+", " ", nombre).strip()
     if len(nombre) < 2:
         return ""
@@ -342,6 +339,24 @@ def _limpiar_nombre_cliente_voz(nombre: str) -> str:
     if primera in _INICIO_DESCRIPCION_VOZ:
         return ""
     return nombre.upper()
+
+
+def _palabra_parece_nombre_cliente(palabra: str) -> bool:
+    from modulos.voz_repuestos import es_referencia_vehiculo
+
+    p = str(palabra or "").strip().lower()
+    if len(p) < 3 or len(p) > 20:
+        return False
+    if p in (
+        "factura", "presupuesto", "cliente", "codigo", "código", "listo",
+        "consumidor", "particular", "contado", "transferencia",
+    ):
+        return False
+    if es_referencia_vehiculo(p):
+        return False
+    if p in _INICIO_DESCRIPCION_VOZ:
+        return False
+    return True
 
 
 def extraer_cliente_orden_voz(texto):
@@ -376,6 +391,18 @@ def extraer_cliente_orden_voz(texto):
         if nombre:
             return {"nombre_cliente": nombre}
 
+    m_cli = re.search(r"\bcliente\s+([a-záéíóúñ]{3,20})\s*$", t)
+    if m_cli and _palabra_parece_nombre_cliente(m_cli.group(1)):
+        nombre = _limpiar_nombre_cliente_voz(m_cli.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
+    m_para = re.search(r"\bpara\s+([a-záéíóúñ]{3,20})\s*$", t)
+    if m_para and _palabra_parece_nombre_cliente(m_para.group(1)):
+        nombre = _limpiar_nombre_cliente_voz(m_para.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
     patrones = (
         rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
@@ -390,7 +417,9 @@ def extraer_cliente_orden_voz(texto):
             continue
         nombre = _limpiar_nombre_cliente_voz(m.group(1))
         if nombre:
-            return {"nombre_cliente": nombre}
+            primera = nombre.split()[0]
+            if _palabra_parece_nombre_cliente(primera):
+                return {"nombre_cliente": nombre}
     return {}
 
 

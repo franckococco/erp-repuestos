@@ -8,6 +8,7 @@ from modulos.mostrador_estado import (
     guardar_mensaje_chat,
     obtener_estado_venta,
     obtener_intent_venta,
+    obtener_historial_chat,
     obtener_mensaje_chat,
 )
 from modulos.mostrador_voz_flujo import (
@@ -267,7 +268,7 @@ def _procesar_orden_chat(
         if not ok_val:
             guardar_mensaje_chat(orden, msg_val, "error")
             return False
-        _marcar_listo_para_ticket(vendedor, total_final, "factura_b")
+        _marcar_listo_para_ticket(vendedor, total_final, obtener_intent_venta())
         guardar_mensaje_chat(
             orden, f"Listo para facturar · ${total_final:,.2f}", "ok"
         )
@@ -337,25 +338,29 @@ def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_
 
 
 def _render_chat_historial():
-    orden, respuesta, tipo = obtener_mensaje_chat()
-    if not orden:
+    historial = obtener_historial_chat()
+    if not historial:
         st.caption(
             "Dictá o escribí la orden completa. Ej: "
             "*presupuesto para Pablo, código 111 1, bielete para el 207 2 unidades* · "
             "Decí **listo** para revisar."
         )
         return
-    with st.chat_message("user"):
-        st.markdown(orden)
-    with st.chat_message("assistant"):
-        if tipo == "ok":
-            st.success(respuesta)
-        elif tipo == "error":
-            st.error(respuesta)
-        elif tipo == "warning":
-            st.warning(respuesta)
-        else:
-            st.markdown(respuesta)
+    for entrada in historial:
+        orden = entrada.get("orden", "")
+        respuesta = entrada.get("respuesta", "")
+        tipo = entrada.get("tipo", "info")
+        with st.chat_message("user"):
+            st.markdown(orden)
+        with st.chat_message("assistant"):
+            if tipo == "ok":
+                st.success(respuesta)
+            elif tipo == "error":
+                st.error(respuesta)
+            elif tipo == "warning":
+                st.warning(respuesta)
+            else:
+                st.markdown(respuesta)
 
 
 def render_venta_chat(

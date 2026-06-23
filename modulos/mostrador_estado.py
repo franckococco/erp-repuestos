@@ -46,9 +46,16 @@ def etiqueta_intent(intent: Optional[str] = None) -> str:
 
 
 def guardar_mensaje_chat(orden: str, respuesta: str, tipo: str = "info"):
+    historial = list(st.session_state.get("venta_chat_historial") or [])
+    historial.append({"orden": orden, "respuesta": respuesta, "tipo": tipo})
+    st.session_state.venta_chat_historial = historial[-10:]
     st.session_state.venta_chat_orden = orden
     st.session_state.venta_chat_respuesta = respuesta
     st.session_state.venta_chat_tipo = tipo
+
+
+def obtener_historial_chat():
+    return list(st.session_state.get("venta_chat_historial") or [])
 
 
 def obtener_mensaje_chat():
@@ -60,6 +67,7 @@ def obtener_mensaje_chat():
 
 
 def limpiar_mensaje_chat():
+    st.session_state.pop("venta_chat_historial", None)
     st.session_state.pop("venta_chat_orden", None)
     st.session_state.pop("venta_chat_respuesta", None)
     st.session_state.pop("venta_chat_tipo", None)

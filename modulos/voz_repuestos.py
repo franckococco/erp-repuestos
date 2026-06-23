@@ -47,6 +47,27 @@ _SINONIMOS_DICTADO = {
     "radiadores": "radiadores",
     "embrague": "embrague",
     "homocineticas": "homocinéticas",
+    "espiral": "espiral",
+    "espirales": "espirales",
+    "silentblock": "silentblock",
+    "silentblocks": "silentblocks",
+    "cruceta": "cruceta",
+    "crucetas": "crucetas",
+    "semieje": "semieje",
+    "semiejes": "semiejes",
+    "palier": "palier",
+    "paliers": "paliers",
+    "bobina": "bobina",
+    "bobinas": "bobinas",
+    "escobilla": "escobilla",
+    "escobillas": "escobillas",
+    "junta": "junta",
+    "juntas": "juntas",
+    "crapodina": "crapodina",
+    "crapodinas": "crapodinas",
+    "amortiguadores": "amortiguadores",
+    "opticas": "ópticas",
+    "lamparas": "lámparas",
 }
 
 # Modelos / referencias frecuentes en descripción (orden largo → corto)
@@ -72,6 +93,34 @@ _PAT_PARA_VEHICULO = re.compile(
 _PAT_MODELO_SUELTO = re.compile(
     r"\b(207|208|206|307|308|147|408|2008|3008)\b"
 )
+
+_PAT_REPUESTO_PARA_VEH = None
+
+
+def es_referencia_vehiculo(palabra: str) -> bool:
+    """True si la palabra es un modelo de auto (207, gol, partner…)."""
+    p = normalizar_para_busqueda(str(palabra or ""))
+    if not p:
+        return False
+    if re.match(r"^\d{3,4}$", p):
+        return True
+    vehs = {normalizar_para_busqueda(v) for v in _MODELOS_VEHICULO}
+    return p in vehs
+
+
+def patron_repuesto_para_vehiculo():
+    """Patrón «repuesto para el VEHICULO cantidad» (207, Gol, Partner…)."""
+    global _PAT_REPUESTO_PARA_VEH
+    if _PAT_REPUESTO_PARA_VEH is None:
+        modelos = "|".join(
+            re.escape(m) for m in sorted(set(_MODELOS_VEHICULO), key=len, reverse=True)
+        )
+        _PAT_REPUESTO_PARA_VEH = re.compile(
+            rf"\b([a-záéíóúñ][a-záéíóúñ\-]{{2,24}})\s+para\s+(?:el|la)\s+"
+            rf"(\d{{3,4}}|{modelos})\s+(\d{{1,2}})\s*(?:unidades?|u\.?|uds?)?\b",
+            re.I,
+        )
+    return _PAT_REPUESTO_PARA_VEH
 
 
 def corregir_palabra_dictada(palabra: str) -> str:

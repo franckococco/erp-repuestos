@@ -31,7 +31,26 @@ class TestVozParser(unittest.TestCase):
         self.assertIn("BUJE GUIA", terminos)
         self.assertIn("CAZOLETAS FORD", terminos)
 
+    def test_cliente_para_al_final(self):
+        r = extraer_cliente_orden_voz("bielete 2 codigo 111 1 para julio")
+        self.assertEqual(r.get("nombre_cliente"), "JULIO")
+
     def test_bielete_con_codigo_y_vehiculo(self):
+        items = extraer_items_orden_voz(
+            "presupuesto pablo bielete para el 207 2 codigo 111 1"
+        )
+        self.assertEqual(len(items), 2)
+        por_term = {i["termino"]: i for i in items}
+        self.assertEqual(por_term["BIELETA"]["cantidad"], 2)
+        self.assertEqual(por_term["BIELETA"].get("vehiculo"), "207")
+        self.assertEqual(por_term["111"]["cantidad"], 1)
+        self.assertNotIn("vehiculo", por_term["111"])
+
+    def test_bielete_para_gol(self):
+        items = extraer_items_orden_voz("amortiguador para el gol 2 unidades")
+        self.assertEqual(len(items), 1)
+        self.assertIn("vehiculo", items[0])
+        self.assertIn("gol", str(items[0].get("vehiculo", "")).lower())
         items = extraer_items_orden_voz(
             "presupuesto pablo bielete para el 207 2 codigo 111 1"
         )
