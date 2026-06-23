@@ -157,3 +157,53 @@ def filtrar_por_busqueda_flexible(items, termino_busqueda, extraer_texto, limite
         if parciales:
             return parciales[:limite]
     return []
+
+
+def item_coincide_vehiculo(item, vehiculo: str) -> bool:
+    """True si el ítem menciona el modelo/marca en descripción o vehículo."""
+    if not vehiculo:
+        return True
+    texto = normalizar_para_busqueda(texto_item_inventario(item))
+    v_norm = normalizar_para_busqueda(str(vehiculo))
+    tokens = [t for t in v_norm.split() if len(t) >= 2]
+    if not tokens:
+        tokens = [v_norm] if v_norm else []
+    return all(termino_en_texto(t, texto) for t in tokens)
+
+
+def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_texto=None):
+    """
+    Búsqueda por repuesto + filtro opcional de vehículo (ej. bieleta + 207).
+    """
+    from modulos.voz_repuestos import corregir_termino_repuesto
+
+    ext = extraer_texto or texto_item_inventario
+    term = corregir_termino_repuesto(str(termino or "").strip())
+    if not term:
+        return []
+
+    base = filtrar_por_busqueda(items, term, ext)
+    if not base:
+        base = filtrar_por_busqueda_flexible(items, term, ext, limite=25)
+
+    if not vehiculo:
+        return base
+
+    con_veh = [i for i in base if item_coincide_vehiculo(i, vehiculo)]
+    if con_veh:
+        return con_veh
+
+    palabras = [p for p in normalizar_para_busqueda(term).split() if len(p) >= 3]
+    solo_veh = [i for i in (items or []) if item_coincide_vehiculo(i, vehiculo)]
+    if palabras and solo_veh:
+        scored = []
+        for item in solo_veh:
+            texto = normalizar_para_busqueda(ext(item))
+            hits = sum(1 for p in palabras if termino_en_texto(p, texto))
+            if hits:
+                scored.append((hits, item))
+        if scored:
+            scored.sort(key=lambda x: -x[0])
+            return [it for _, it in scored[:25]]
+
+    return base

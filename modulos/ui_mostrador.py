@@ -619,7 +619,8 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
         termino = raw.get("termino") or raw.get("codigo") or raw.get("descripcion")
         cant = raw.get("cantidad", 1)
         ok, msj, ambiguos = agregar_termino_voz(
-            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
+            vehiculo=raw.get("vehiculo"),
         )
         if ok:
             ok_count += 1
@@ -628,6 +629,7 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
             cola_ambiguos.append({
                 "termino": termino,
                 "cantidad": cant,
+                "vehiculo": raw.get("vehiculo"),
                 "coincidencias": ambiguos,
                 "msj": msj,
             })

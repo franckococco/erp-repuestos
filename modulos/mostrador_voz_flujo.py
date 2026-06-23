@@ -80,6 +80,7 @@ _INICIO_DESCRIPCION_VOZ = (
     "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
     "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
     "embrague", "crapodina", "crápodina", "cazoleta", "cazoletas", "soporte", "silent",
+    "bieleta", "bieletas",
 )
 
 
@@ -168,6 +169,11 @@ def extraer_items_orden_voz(texto):
         if not t:
             return
         cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
+        from modulos.voz_repuestos import extraer_vehiculos_de_texto
+        from modulos.util_busqueda import normalizar_para_busqueda as _norm_busq
+
+        vehs_frag = extraer_vehiculos_de_texto(fragmento)
+        veh_set = {_norm_busq(v) for v in vehs_frag}
 
         def agregar(termino, cantidad, es_descripcion=False):
             if es_descripcion:
@@ -177,6 +183,8 @@ def extraer_items_orden_voz(texto):
             try:
                 cant = max(1, int(cantidad))
             except (TypeError, ValueError):
+                return
+            if not es_descripcion and _norm_busq(term) in veh_set and re.match(r"^\d{3,4}$", _norm_busq(term)):
                 return
             if es_descripcion:
                 if not _termino_descripcion_valido(term):
@@ -203,22 +211,8 @@ def extraer_items_orden_voz(texto):
             (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
         ]
         n_antes = len(acumulado)
-        for patron, es_desc in patrones_codigo:
-            for m in re.finditer(patron, t):
-                agregar(m.group(1), m.group(2), es_descripcion=es_desc)
-
-        if len(acumulado) == n_antes:
-            for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
-                agregar(m.group(1), 1, es_descripcion=False)
 
         resto = _limpiar_texto_para_items_descripcion(fragmento)
-        for item in acumulado[n_antes:]:
-            resto = _strip_termino_cant_de_resto(
-                resto,
-                str(item.get("termino", "")),
-                int(item.get("cantidad", 1)),
-            )
-
         patrones_desc = [
             r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
             r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
@@ -248,6 +242,31 @@ def extraer_items_orden_voz(texto):
                 break
             if not encontrado:
                 break
+
+        for patron, es_desc in patrones_codigo:
+            for m in re.finditer(patron, t):
+                agregar(m.group(1), m.group(2), es_descripcion=es_desc)
+
+        if len(acumulado) == n_antes:
+            for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
+                agregar(m.group(1), 1, es_descripcion=False)
+
+        resto = _limpiar_texto_para_items_descripcion(fragmento)
+        for item in acumulado[n_antes:]:
+            resto = _strip_termino_cant_de_resto(
+                resto,
+                str(item.get("termino", "")),
+                int(item.get("cantidad", 1)),
+            )
+
+        patrones_desc_extra = [
+            r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+            r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
+            r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
+        ]
+        for patron in patrones_desc_extra:
+            for m in re.finditer(patron, resto):
+                agregar(m.group(1), m.group(2), es_descripcion=True)
 
     items = []
     vistos = set()
@@ -288,7 +307,9 @@ def extraer_items_orden_voz(texto):
                 if seg:
                     _extraer_de_fragmento(seg, items, vistos)
 
-    return items
+    from modulos.voz_repuestos import enriquecer_items_con_vehiculo
+
+    return enriquecer_items_con_vehiculo(items, raw)
 
 
 def _limpiar_nombre_cliente_voz(nombre: str) -> str:
@@ -298,7 +319,7 @@ def _limpiar_nombre_cliente_voz(nombre: str) -> str:
     nombre = re.sub(r"\s+", " ", nombre).strip()
     if len(nombre) < 2:
         return ""
-    if nombre.lower() in ("factura", "presupuesto", "consumidor final", "particular"):
+    if nombre.lower() in ("factura", "presupuesto", "consumidor final", "particular", "el", "la"):
         return ""
     primera = nombre.split()[0].lower()
     if primera in _INICIO_DESCRIPCION_VOZ:
@@ -315,13 +336,22 @@ def extraer_cliente_orden_voz(texto):
         return {"consumidor_final": True}
 
     fin = _patron_fin_cliente_voz()
+    m_directo = re.search(
+        r"\bpresupuesto\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s+(?:codigo|código|\d|[a-z]{4,})",
+        t,
+    )
+    if m_directo:
+        nombre = _limpiar_nombre_cliente_voz(m_directo.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
     patrones = (
         rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"presupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"para\s+el\s+cliente\s+(.+?){fin}",
         rf"cliente\s+(.+?){fin}",
-        rf"para\s+(.+?){fin}",
+        rf"para\s+(?!el\s+\d{{3,4}}\b)(?!el\s+cliente\b)(.+?){fin}",
     )
     for patron in patrones:
         m = re.search(patron, t)
@@ -404,17 +434,22 @@ def agregar_termino_voz(
     inventario,
     buscar_en_inventario,
     agregar_al_carrito,
+    vehiculo=None,
 ):
     cant = max(1, int(cantidad or 1))
     termino = str(termino or "").strip()
     if not termino:
         return False, "Sin término de búsqueda.", None
 
-    from modulos.util_busqueda import _limpiar_prefijo_busqueda
+    from modulos.util_busqueda import _limpiar_prefijo_busqueda, buscar_en_inventario_con_vehiculo
+    from modulos.voz_repuestos import corregir_termino_repuesto
+
     termino = _limpiar_prefijo_busqueda(termino)
+    termino = corregir_termino_repuesto(termino)
     if not termino:
         return False, "Sin término de búsqueda.", None
 
+    veh = str(vehiculo).strip() if vehiculo else None
     id_limpio = _normalizar_codigo_con_inventario(termino, inventario)
 
     if _parece_codigo(id_limpio):
@@ -445,13 +480,14 @@ def agregar_termino_voz(
             coincidencias_cod[:10],
         )
 
-    encontrados = buscar_en_inventario(inventario, termino)
+    encontrados = buscar_en_inventario_con_vehiculo(inventario, termino, veh)
     if len(encontrados) == 1:
         ok, msj = agregar_al_carrito(str(vendedor), encontrados[0]["id"], cant)
         return ok, msj, None
     if len(encontrados) > 1:
-        return False, f"Varias similitudes para '{termino}'. Elegí en la lista.", encontrados[:10]
-    return False, f"No encontré '{termino}'. Probá con código o otra descripción.", None
+        hint = f" ({veh})" if veh else ""
+        return False, f"Varias similitudes para '{termino}'{hint}. Elegí en la lista.", encontrados[:10]
+    return False, f"No encontré '{termino}'" + (f" para {veh}" if veh else "") + ". Probá con código.", None
 
 
 def limpiar_cola_voz_mostrador():
@@ -482,8 +518,10 @@ def continuar_cola_voz_mostrador(
         item = cola[0]
         termino = item.get("termino", "")
         cant = int(item.get("cantidad", 1))
+        veh = item.get("vehiculo")
         ok, msj, ambiguos = agregar_termino_voz(
-            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
+            vehiculo=veh,
         )
         if ok:
             agregados.append(msj)
@@ -606,8 +644,10 @@ def ejecutar_flujo_factura_voz(
             continue
         termino = raw.get("termino") or raw.get("codigo") or raw.get("descripcion")
         cant = raw.get("cantidad", 1)
+        veh = raw.get("vehiculo")
         ok, msj, ambiguos = agregar_termino_voz(
-            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
+            vehiculo=veh,
         )
         if ok:
             pasos_ok.append(msj)
@@ -616,6 +656,7 @@ def ejecutar_flujo_factura_voz(
             cola_ambiguos.append({
                 "termino": termino,
                 "cantidad": cant,
+                "vehiculo": veh,
                 "coincidencias": ambiguos,
                 "msj": msj,
             })
