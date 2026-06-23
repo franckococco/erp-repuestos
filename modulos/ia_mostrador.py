@@ -88,18 +88,26 @@ def _es_comando_corto(texto):
 
 def parse_flujo_rapido_voz(texto_usuario):
     """Detecta órdenes compuestas sin Groq (cliente + varios ítems + listo)."""
-    from modulos.mostrador_voz_flujo import extraer_items_orden_voz, extraer_cliente_orden_voz
+    from modulos.mostrador_voz_flujo import (
+        extraer_items_orden_voz,
+        extraer_cliente_orden_voz,
+        normalizar_orden_voz_mostrador,
+    )
 
     raw = str(texto_usuario or "").strip()
-    t = normalizar_texto_basico(raw).lower()
+    t = normalizar_orden_voz_mostrador(raw).strip().lower()
     items = extraer_items_orden_voz(raw)
     cliente_info = extraer_cliente_orden_voz(raw)
     nombre_cliente = cliente_info.get("nombre_cliente")
     consumidor_final = cliente_info.get("consumidor_final")
 
     es_armado = bool(
-        re.search(r"\b(carg\w*|hac\w*|arm\w*)\b", t)
-        or re.search(r"(?:^|\s)(rgame|cargame|haceme|armeme|armame)\b", t)
+        re.search(r"\b(carg\w*|hac\w*|arm\w*|met\w*|agreg\w*|busc\w*|anot\w*)\b", t)
+        or re.search(
+            r"(?:^|\s)(rgame|cargame|haceme|armeme|armame|meteme|agregame|"
+            r"buscame|anotame|fichame|mandame)\b",
+            t,
+        )
     )
     es_presupuesto = bool(re.search(r"\bpresupuesto\b", t))
     tiene_factura = bool(re.search(r"\bfactura\b", t))
@@ -109,7 +117,7 @@ def parse_flujo_rapido_voz(texto_usuario):
         and items
     )
     ir_verificacion = bool(
-        re.search(r"\b(listo|termine|terminé|fin)\b", t)
+        re.search(r"\b(listo|termine|terminé|fin|dale)\b", t)
         or orden_nueva
     )
 

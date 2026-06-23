@@ -1,102 +1,251 @@
 """Normalización de repuestos dictados: sinónimos, vehículo y búsqueda compuesta."""
 import re
-from typing import List, Optional
+from typing import FrozenSet, List, Optional, Tuple
 
 from modulos.ia_asistente import normalizar_texto_basico
 from modulos.util_busqueda import normalizar_para_busqueda
 
-# Errores frecuentes de voz / B corta vs larga
+# Raíces canónicas de repuestos (mostrador argentino)
+_REPUESTOS_BASE = (
+    "amortiguador", "pastilla", "disco", "filtro", "buje", "ruleman", "rotula",
+    "homocinetica", "fuelle", "tensor", "correa", "kit", "bomba", "radiador",
+    "termostato", "sensor", "bujia", "bobina", "escobilla", "optica", "faro",
+    "paragolpe", "tirante", "barra", "terminal", "extremo", "cremallera",
+    "trapecio", "puntal", "meseta", "cazoleta", "tope", "embrague", "crapodina",
+    "collarin", "semieje", "palier", "junta", "reten", "polea", "alternador",
+    "arranque", "liquido", "aceite", "refrigerante", "bieleta", "soporte",
+    "silentblock", "cruceta", "espiral", "resorte", "cadena", "distribucion",
+    "inyector", "carburador", "caño", "manguera", "abrazadera", "bulbo",
+    "interruptor", "rele", "fusible", "modulo", "valvula", "culata", "piston",
+    "camisa", "biela", "cigueñal", "cigüeñal", "empaque", "tapa", "carter",
+    "volante", "piñon", "piñón", "engranaje", "sincronizador", "horquilla",
+    "perno", "tuerca", "grapa", "clip", "fuelle", "guardapolvo", "capuchon",
+    "capuchón", "rodamiento", "cruceta", "cardan", "cardán", "flexible",
+    "maza", "roza", "pastilla", "zapata", "cilindro", "flexible", "latiguillo",
+    "deposito", "depósito", "tapón", "tapon", "bulon", "bulón", "esparrago",
+    "esparrago", "tornillo", "arandela", "resorte", "goma", "bandeja",
+    "parrilla", "radiador", "intercooler", "turbo", "egr", "pcv", "maf",
+    "pedal", "palanca", "selectora", "horquilla", "collarin", "actuador",
+    "bombita", "electro", "ventilador", "electroventilador", "compresor",
+    "evaporador", "condensador", "deshidratador", "polea", "tensores",
+)
+
+# Errores de voz, abreviaturas y jerga de mostrador → forma de búsqueda
 _SINONIMOS_DICTADO = {
-    "bielete": "bieleta",
-    "bieletes": "bieletas",
-    "bieletta": "bieleta",
-    "biela": "bieleta",
-    "bielas": "bieletas",
-    "bujete": "buje",
-    "bujetes": "bujes",
-    "rotula": "rótula",
-    "rotulas": "rótulas",
-    "amortiguador": "amortiguador",
-    "cazoleta": "cazoleta",
-    "cazoletas": "cazoletas",
-    "crápodina": "crapodina",
-    "crapodina": "crapodina",
-    "homocinetica": "homocinética",
-    "ruleman": "rulemán",
-    "bujia": "bujía",
-    "optica": "óptica",
-    "lampara": "lámpara",
-    "liquido": "líquido",
-    "reten": "retén",
-    "fuelle": "fuelle",
-    "fuelles": "fuelles",
-    "correa": "correa",
-    "correas": "correas",
-    "tensor": "tensor",
-    "tensors": "tensor",
-    "kit": "kit",
-    "kits": "kit",
-    "directa": "directa",
-    "pastilla": "pastilla",
-    "pastillas": "pastillas",
-    "disco": "disco",
-    "discos": "discos",
-    "filtro": "filtro",
-    "filtros": "filtros",
-    "bomba": "bomba",
-    "bombas": "bombas",
-    "radiador": "radiador",
-    "radiadores": "radiadores",
-    "embrague": "embrague",
-    "homocineticas": "homocinéticas",
-    "espiral": "espiral",
-    "espirales": "espirales",
-    "silentblock": "silentblock",
-    "silentblocks": "silentblocks",
-    "cruceta": "cruceta",
-    "crucetas": "crucetas",
-    "semieje": "semieje",
-    "semiejes": "semiejes",
-    "palier": "palier",
-    "paliers": "paliers",
-    "bobina": "bobina",
-    "bobinas": "bobinas",
-    "escobilla": "escobilla",
-    "escobillas": "escobillas",
-    "junta": "junta",
-    "juntas": "juntas",
-    "crapodina": "crapodina",
-    "crapodinas": "crapodinas",
-    "amortiguadores": "amortiguadores",
-    "opticas": "ópticas",
-    "lamparas": "lámparas",
+    # Bieletas / brazos
+    "bielete": "bieleta", "bieletes": "bieletas", "bieletta": "bieleta",
+    "biela": "bieleta", "bielas": "bieletas", "biella": "bieleta",
+    "tirante": "bieleta", "tirantes": "bieletas",
+    # Bujes
+    "bujete": "buje", "bujetes": "bujes", "bujes": "buje", "bush": "buje", "bushes": "bujes",
+    "silent": "silentblock", "silentbloc": "silentblock", "sylent": "silentblock",
+    # Rótulas / dirección
+    "rotula": "rotula", "rotulas": "rotulas", "rótula": "rotula", "rótulas": "rotulas",
+    "rotulita": "rotula", "terminal": "terminal", "extremo": "extremo",
+    "precap": "precap", "axial": "axial",
+    # Amortiguadores
+    "amorti": "amortiguador", "amortis": "amortiguadores", "shock": "amortiguador",
+    "shocks": "amortiguadores", "amortiguadores": "amortiguador",
+    # Frenos
+    "ferodo": "pastilla", "ferodos": "pastillas", "pastillas": "pastilla",
+    "pastilla": "pastilla", "disco": "disco", "discos": "discos",
+    "zapata": "zapata", "zapatas": "zapatas", "cilindro": "cilindro",
+    "latiguillo": "latiguillo", "flexible": "flexible",
+    # Filtros
+    "filtro": "filtro", "filtros": "filtros", "filtro de aceite": "filtro aceite",
+    "filtro de aire": "filtro aire", "filtro de nafta": "filtro nafta",
+    "filtro de combustible": "filtro combustible", "filtro de polen": "filtro polen",
+    "filtro habitaculo": "filtro habitaculo", "filtro habitáculo": "filtro habitaculo",
+    # Motor / distribución
+    "kit": "kit", "kits": "kit", "kit de distribucion": "kit distribucion",
+    "kit distribución": "kit distribucion", "distribucion": "distribucion",
+    "distribución": "distribucion", "distri": "distribucion",
+    "tensor": "tensor", "tensors": "tensor", "tensores": "tensor",
+    "correa": "correa", "correas": "correas", "polyv": "correa polyv",
+    "poly v": "correa polyv", "auxiliar": "correa auxiliar",
+    "polea": "polea", "poleas": "poleas",
+    # Homocinéticas
+    "homocinetica": "homocinetica", "homocinética": "homocinetica",
+    "homocineticas": "homocineticas", "homo": "homocinetica", "homos": "homocineticas",
+    "tripode": "homocinetica", "trípode": "homocinetica", "tripa": "homocinetica",
+    "junta homo": "junta homocinetica",
+    # Rulemanes
+    "ruleman": "ruleman", "rulemán": "ruleman", "ruliman": "ruleman",
+    "rulimán": "ruleman", "rodamiento": "ruleman", "rodamientos": "ruleman",
+    # Encendido
+    "bujia": "bujia", "bujía": "bujia", "bujias": "bujias", "bujías": "bujias",
+    "vela": "bujia", "velas": "bujias", "bobina": "bobina", "bobinas": "bobinas",
+    # Carrocería / ópticas
+    "optica": "optica", "óptica": "optica", "opticas": "opticas", "ópticas": "opticas",
+    "faro": "faro", "faros": "faros", "farito": "faro", "lampara": "lampara",
+    "lámpara": "lampara", "lamparas": "lamparas", "lámparas": "lamparas",
+    "paragolpe": "paragolpe", "paragolpes": "paragolpe", "parachoque": "paragolpe",
+    "guardabarro": "guardabarro", "capot": "capot", "espejo": "espejo",
+    # Líquidos
+    "liquido": "liquido", "líquido": "liquido", "lbf": "liquido frenos",
+    "refrigerante": "refrigerante", "coolant": "refrigerante", "anticongelante": "refrigerante",
+    "aceite": "aceite", "lubricante": "aceite",
+    # Embrague
+    "embrague": "embrague", "crapodina": "crapodina", "crápodina": "crapodina",
+    "crapodinas": "crapodinas", "collarin": "collarin", "collarín": "collarin",
+    "disco embrague": "disco embrague", "placa": "placa embrague",
+    # Suspensión
+    "cazoleta": "cazoleta", "cazoletas": "cazoletas", "meseta": "meseta",
+    "espiral": "espiral", "espirales": "espirales", "resorte": "resorte",
+    "resortes": "resortes", "tope": "tope", "topes": "topes",
+    # Retenes / juntas
+    "reten": "reten", "retén": "reten", "retenes": "retenes", "retén": "reten",
+    "junta": "junta", "juntas": "juntas", "empaque": "empaque", "empaquetadura": "empaque",
+    "culata": "culata", "tapa de cilindros": "tapa cilindros",
+    # Ejes / transmisión
+    "semieje": "semieje", "semiejes": "semiejes", "palier": "palier", "paliers": "paliers",
+    "cardan": "cardan", "cardán": "cardan", "cruceta": "cruceta", "crucetas": "crucetas",
+    "maza": "maza", "mazas": "mazas",
+    # Eléctrico
+    "alternador": "alternador", "arranque": "arranque", "motor de arranque": "arranque",
+    "bendix": "bendix", "sensor": "sensor", "sonda": "sensor", "lambda": "sonda lambda",
+    "rele": "rele", "relé": "rele", "modulo": "modulo", "módulo": "modulo",
+    # Climatización
+    "compresor": "compresor", "evaporador": "evaporador", "condensador": "condensador",
+    "electro": "electroventilador", "electroventilador": "electroventilador",
+    "ventilador": "ventilador",
+    # Bombas
+    "bomba": "bomba", "bombas": "bombas", "bomba de agua": "bomba agua",
+    "bomba de nafta": "bomba nafta", "bomba de combustible": "bomba combustible",
+    "bombita": "bomba", "bombita de nafta": "bomba nafta",
+    # Escobillas
+    "escobilla": "escobilla", "escobillas": "escobillas",
+    "limpia": "escobilla", "limpia parabrisas": "escobilla",
+    # Varios
+    "fuelle": "fuelle", "fuelles": "fuelles", "guardapolvo": "guardapolvo",
+    "guardapolvos": "guardapolvo", "capuchon": "capuchon", "capuchón": "capuchon",
+    "radiador": "radiador", "radiadores": "radiadores", "termostato": "termostato",
+    "soporte": "soporte", "soportes": "soporte", "soporte motor": "soporte motor",
+    "abrazadera": "abrazadera", "manguera": "manguera", "caño": "caño",
+    "cañito": "caño", "perno": "perno", "bulon": "bulon", "bulón": "bulon",
+    "trapecio": "trapecio", "puntal": "puntal", "bandeja": "bandeja",
+    "cremallera": "cremallera", "barra estabilizadora": "barra estabilizadora",
+    "directa": "direccion directa", "bomba direccion": "bomba direccion",
+    "bomba de direccion": "bomba direccion", "bomba de dirección": "bomba direccion",
+    "inyector": "inyector", "inyectores": "inyectores", "valvula": "valvula",
+    "válvula": "valvula", "valvulas": "valvulas",
 }
 
-# Modelos / referencias frecuentes en descripción (orden largo → corto)
+# Alias coloquiales de modelos
+_ALIAS_VEHICULO = {
+    "golcito": "gol", "golcitos": "gol", "golito": "gol",
+    "peu": "peugeot", "208": "208", "207": "207",
+    "chevy": "chevrolet", "chevrolet": "chevrolet",
+    "vw": "volkswagen", "volkswagen": "volkswagen",
+    "fiatito": "fiat", "renaultito": "renault",
+}
+
+# Modelos / referencias frecuentes (orden largo → corto en búsqueda)
 _MODELOS_VEHICULO = (
-    "gol trend", "gol power", "gol country", "gol 1.6", "gol 1.4",
-    "partner", "kangoo", "clio", "sandero", "logan", "corsa", "onix",
-    "prisma", "cruze", "focus", "fiesta", "ecosport", "ranger",
-    "amarok", "vento", "voyage", "suran", "polo", "gol",
-    "207", "208", "206", "307", "308", "147", "408", "2008", "3008",
-    "palio", "siena", "uno", "cronos", "argo", "toro", "strada",
-    "duster", "fluence", "megane", "symbol", "ka", "ka plus",
+  # VW
+    "gol trend", "gol power", "gol country", "gol 1.6", "gol 1.4", "gol",
+    "vento", "voyage", "suran", "polo", "amarok", "up", "bora", "t cross",
+    "t-cross", "taos", "nivus", "virtus",
+  # Peugeot / Citroën
+    "partner", "208", "207", "206", "307", "308", "301", "408", "2008", "3008",
+    "5008", "147", "berlingo", "c4", "c3", "c3 aircross", "xsara", "picasso",
+    "jumper", "boxer", "expert",
+  # Renault
+    "kangoo", "clio", "sandero", "logan", "duster", "fluence", "megane",
+    "symbol", "master", "trafic", "captur", "koleos", "alaskan",
+  # Chevrolet / GM
+    "corsa", "onix", "prisma", "cruze", "tracker", "spin", "agile", "celta",
+    "classic", "aveo", "s10", "montana",
+  # Ford
+    "focus", "fiesta", "ecosport", "ranger", "ka", "ka plus", "territory",
+    "mondeo", "maverick",
+  # Fiat
+    "palio", "siena", "uno", "cronos", "argo", "toro", "strada", "mobi",
+    "pulse", "fastback", "fiorino", "ducato", "doblo",
+  # Toyota / Nissan / Honda
+    "corolla", "hilux", "etios", "yaris", "sw4", "rav4",
+    "sentra", "tiida", "march", "note", "versa", "frontier",
+    "fit", "civic", "hr-v", "hrv", "city",
+  # Otros
+    "duster", "fluence", "megane", "symbol",
 )
 
-_PAT_PARA_VEHICULO = re.compile(
-    r"\b(?:para|del|de|en)\s+(?:el|la|los|las)?\s*"
-    r"(\d{3,4}|gol(?:\s+trend|\s+power|\s+country)?|partner|kangoo|clio|"
-    r"sandero|logan|corsa|onix|prisma|cruze|focus|fiesta|ecosport|ranger|"
-    r"amarok|vento|voyage|suran|polo|palio|siena|uno|cronos|argo|toro|"
-    r"strada|duster|fluence|megane|symbol|ka(?:\s+plus)?)\b",
-    re.I,
-)
-
-_PAT_MODELO_SUELTO = re.compile(
-    r"\b(207|208|206|307|308|147|408|2008|3008)\b"
-)
-
+_PAT_PARA_VEHICULO = None
+_PAT_MODELO_SUELTO = None
 _PAT_REPUESTO_PARA_VEH = None
+_VOCAB_REPUESTO: Optional[Tuple[str, ...]] = None
+_VOCAB_REPUESTO_SET: Optional[FrozenSet[str]] = None
+
+
+def _modelos_regex_ordenados() -> str:
+    return "|".join(
+        re.escape(m) for m in sorted(set(_MODELOS_VEHICULO), key=len, reverse=True)
+    )
+
+
+def _modelos_solo_digitos() -> List[str]:
+    return sorted({m for m in _MODELOS_VEHICULO if re.match(r"^\d{3,4}$", m)}, key=len, reverse=True)
+
+
+def _pat_para_vehiculo():
+    global _PAT_PARA_VEHICULO
+    if _PAT_PARA_VEHICULO is None:
+        m = _modelos_regex_ordenados()
+        _PAT_PARA_VEHICULO = re.compile(
+            rf"\b(?:para|del|de|en|modelo)\s+(?:el|la|los|las)?\s*"
+            rf"(\d{{3,4}}|{m})\b",
+            re.I,
+        )
+    return _PAT_PARA_VEHICULO
+
+
+def _pat_modelo_suelto():
+    global _PAT_MODELO_SUELTO
+    if _PAT_MODELO_SUELTO is None:
+        nums = "|".join(re.escape(n) for n in _modelos_solo_digitos())
+        if nums:
+            _PAT_MODELO_SUELTO = re.compile(rf"\b({nums})\b")
+        else:
+            _PAT_MODELO_SUELTO = re.compile(r"(?!x)x")
+    return _PAT_MODELO_SUELTO
+
+
+def palabras_cantidad_repuesto_voz() -> Tuple[str, ...]:
+    """Raíces de repuesto para «dos bujes» → «buje 2 unidades»."""
+    return tuple(
+        sorted(
+            {normalizar_para_busqueda(b) for b in _REPUESTOS_BASE if len(b) >= 3},
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def obtener_vocabulario_repuesto_voz() -> Tuple[str, ...]:
+    """Palabras que suelen iniciar descripción de repuesto (regex / corte cliente)."""
+    global _VOCAB_REPUESTO, _VOCAB_REPUESTO_SET
+    if _VOCAB_REPUESTO is not None:
+        return _VOCAB_REPUESTO
+    words = set()
+    for base in _REPUESTOS_BASE:
+        b = normalizar_para_busqueda(base)
+        if b:
+            words.add(b)
+    for k, v in _SINONIMOS_DICTADO.items():
+        for w in (k, v):
+            wn = normalizar_para_busqueda(str(w).split()[0])
+            if wn and len(wn) >= 3:
+                words.add(wn)
+    _VOCAB_REPUESTO = tuple(sorted(words, key=len, reverse=True))
+    _VOCAB_REPUESTO_SET = frozenset(words)
+    return _VOCAB_REPUESTO
+
+
+def es_palabra_repuesto(palabra: str) -> bool:
+    if _VOCAB_REPUESTO_SET is None:
+        obtener_vocabulario_repuesto_voz()
+    p = normalizar_para_busqueda(str(palabra or ""))
+    return bool(p and p in _VOCAB_REPUESTO_SET)
 
 
 def es_referencia_vehiculo(palabra: str) -> bool:
@@ -104,9 +253,12 @@ def es_referencia_vehiculo(palabra: str) -> bool:
     p = normalizar_para_busqueda(str(palabra or ""))
     if not p:
         return False
+    if p in _ALIAS_VEHICULO:
+        p = normalizar_para_busqueda(_ALIAS_VEHICULO[p])
     if re.match(r"^\d{3,4}$", p):
         return True
     vehs = {normalizar_para_busqueda(v) for v in _MODELOS_VEHICULO}
+    vehs.update(normalizar_para_busqueda(v) for v in _ALIAS_VEHICULO.values())
     return p in vehs
 
 
@@ -114,9 +266,7 @@ def patron_repuesto_para_vehiculo():
     """Patrón «repuesto para el VEHICULO cantidad» (207, Gol, Partner…)."""
     global _PAT_REPUESTO_PARA_VEH
     if _PAT_REPUESTO_PARA_VEH is None:
-        modelos = "|".join(
-            re.escape(m) for m in sorted(set(_MODELOS_VEHICULO), key=len, reverse=True)
-        )
+        modelos = _modelos_regex_ordenados()
         _PAT_REPUESTO_PARA_VEH = re.compile(
             rf"\b([a-záéíóúñ][a-záéíóúñ\-]{{2,24}})\s+para\s+(?:el|la)\s+"
             rf"(\d{{3,4}}|{modelos})\s+(\d{{1,2}})\s*(?:unidades?|u\.?|uds?)?\b",
@@ -129,13 +279,18 @@ def corregir_palabra_dictada(palabra: str) -> str:
     p = normalizar_para_busqueda(palabra)
     if not p:
         return palabra
-    return _SINONIMOS_DICTADO.get(p, palabra)
+    if p in _SINONIMOS_DICTADO:
+        return _SINONIMOS_DICTADO[p]
+    return palabra
 
 
 def corregir_termino_repuesto(termino: str) -> str:
     """Aplica sinónimos palabra a palabra (bielete → bieleta)."""
     if not termino:
         return termino
+    t_low = normalizar_texto_basico(str(termino)).lower().strip()
+    if t_low in _SINONIMOS_DICTADO:
+        return _SINONIMOS_DICTADO[t_low]
     partes = str(termino).strip().split()
     out = [corregir_palabra_dictada(p) for p in partes]
     return " ".join(out)
@@ -147,14 +302,20 @@ def extraer_vehiculos_de_texto(texto: str) -> List[str]:
         return []
     t = normalizar_texto_basico(texto).lower()
     found = []
-    for m in _PAT_PARA_VEHICULO.finditer(t):
+    for m in _pat_para_vehiculo().finditer(t):
         v = m.group(1).strip().lower()
+        if v in _ALIAS_VEHICULO:
+            v = _ALIAS_VEHICULO[v]
         if v and v not in found:
             found.append(v)
     for modelo in _MODELOS_VEHICULO:
         if re.search(rf"\b{re.escape(modelo)}\b", t) and modelo not in found:
             found.append(modelo)
-    for m in _PAT_MODELO_SUELTO.finditer(t):
+    for alias, canon in _ALIAS_VEHICULO.items():
+        if re.search(rf"\b{re.escape(alias)}\b", t) and canon not in found:
+            if canon in _MODELOS_VEHICULO or re.match(r"^\d+$", canon):
+                found.append(canon)
+    for m in _pat_modelo_suelto().finditer(t):
         v = m.group(1)
         if v not in found:
             found.append(v)

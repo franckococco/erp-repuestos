@@ -14,6 +14,11 @@ from modulos.db_firebase import (
     formatear_id_variante,
 )
 from modulos.ia_asistente import normalizar_texto_basico
+from modulos.voz_repuestos import (
+    es_palabra_repuesto,
+    obtener_vocabulario_repuesto_voz,
+    palabras_cantidad_repuesto_voz,
+)
 
 
 def descartar_panels_operacion_anterior():
@@ -23,10 +28,238 @@ def descartar_panels_operacion_anterior():
     st.session_state.pop("hist_arca_preview", None)
 
 
-def preprocesar_texto_mostrador(texto):
-    """Alias del preprocesador compartido (código + cantidad separados)."""
+_NUMEROS_VOZ = {
+    "cero": "0", "uno": "1", "un": "1", "una": "1",
+    "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+    "seis": "6", "siete": "7", "ocho": "8", "nueve": "9", "diez": "10",
+    "once": "11", "doce": "12", "trece": "13", "catorce": "14", "quince": "15",
+    "dieciseis": "16", "dieciséis": "16", "diecisiete": "17", "dieciocho": "18",
+    "diecinueve": "19", "veinte": "20", "veintiuno": "21", "veintidos": "22",
+    "veintidós": "22", "veintitres": "23", "veintitrés": "23", "treinta": "30",
+    "cuarenta": "40", "cincuenta": "50",
+}
+
+_PREFIJOS_PEDIDO_VOZ = (
+    r"haceme|hacerme|hacemelo|necesito|necesitamos|quiero|quisiera|"
+    r"dame|damele|damela|pasame|pasáme|pasale|pasala|"
+    r"agregame|agregáme|agregale|agregále|meteme|metéme|metele|metéle|"
+    r"cargame|cárgame|cargale|cárgale|armame|ármame|armeme|ármelo|"
+    r"pongame|poneme|ponéme|ponle|ponéle|sumame|súmame|sumale|"
+    r"buscame|buscáme|busca|buscá|fijate|fijate si|fijame|fijá|"
+    r"anotame|anotá|apuntame|apuntá|fichame|fichá|"
+    r"mandame|mandá|preparame|prepará|sacame|sacá|"
+    r"tirame|tirá|dejame|dejá|che\s+dame|"
+    r"anda\s+buscando|fijate\s+si\s+tenes|fijate\s+si\s+tenés"
+)
+
+# Vocabulario de repuestos (sinónimos + raíces) para cortar cliente y cantidades
+_INICIO_DESCRIPCION_VOZ = obtener_vocabulario_repuesto_voz()
+
+
+def _expandir_numeros_compuestos(texto: str) -> str:
+    """treinta y dos unidades → 32 unidades."""
+    unidades = {
+        "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+        "seis": 6, "siete": 7, "ocho": 8, "nueve": 9,
+    }
+    t = texto
+    for decena, base in (("treinta", 30), ("cuarenta", 40), ("cincuenta", 50)):
+        for nombre, val in unidades.items():
+            if nombre == "uno":
+                frase = f"{decena} y uno"
+                num = base + 1
+            else:
+                frase = f"{decena} y {nombre}"
+                num = base + val
+            t = re.sub(rf"\b{frase}\s+unidades?\b", f"{num} unidades", t)
+        t = re.sub(rf"\b{decena}\s+unidades?\b", f"{base} unidades", t)
+    return t
+
+
+def normalizar_orden_voz_mostrador(texto):
+    """
+    Convierte frases habladas del mostrador a texto estable para el parser local.
+    Quita muletillas, unifica sinónimos de comando y cantidades dictadas.
+    """
     from modulos.ia_asistente import preprocesar_texto_usuario
-    return preprocesar_texto_usuario(texto)
+
+    if not texto:
+        return ""
+    t = preprocesar_texto_usuario(str(texto).strip())
+    t = normalizar_texto_basico(t).lower()
+    t = re.sub(r"\bguion\b", "-", t)
+    t = re.sub(r"\bguión\b", "-", t)
+
+    # Presupuesto / cotización
+    t = re.sub(
+        r"\b(cotizacion|cotización|cotiza|cotizame|cotizáme|presu|presupuestito|"
+        r"presupuestame|presupuestáme|armame el presu)\b",
+        "presupuesto",
+        t,
+    )
+
+    # Factura / ticket fiscal
+    t = re.sub(
+        r"\b(facturame|facturáme|facturá|facturame|sacame la factura|"
+        r"sacá la factura|ticket fiscal|factura fiscal)\b",
+        "factura",
+        t,
+    )
+    t = re.sub(r"\bfactura\s+be\b", "factura b", t)
+    t = re.sub(r"\bfactura\s+ve\b", "factura a", t)
+    t = re.sub(r"\bfactura\s+bee\b", "factura b", t)
+    t = re.sub(r"\bfactura\s+abierta\b", "factura a", t)
+    t = re.sub(r"\bfactura\s+ce\b", "factura c", t)
+
+    # Código / artículo
+    t = re.sub(
+        r"\b(codi|cod\.|articulo|artículo|art\.|item|ítem|repuesto numero|"
+        r"numero de parte|nro de parte|número de parte|codigo de pieza)\b",
+        "codigo",
+        t,
+    )
+
+    # Cliente / consumidor final
+    t = re.sub(r"\b(?:a|al)\s+nombre\s+de\s+", "para ", t)
+    t = re.sub(r"\bdel\s+cliente\s+", "para ", t)
+    t = re.sub(r"\bcliente\s+(?!final\b)", "para ", t)
+    t = re.sub(
+        r"\b(sin nombre|sin cliente|venta de mostrador|mostrador|"
+        r"consumidor final|particular)\b",
+        "consumidor final",
+        t,
+    )
+
+    # Vehículo
+    t = re.sub(
+        r"\b(?:del auto|del vehiculo|del vehículo|del coche|modelo)\s+",
+        "para el ",
+        t,
+    )
+
+    # Cierre de orden
+    t = re.sub(
+        r"\b(ya esta|ya está|eso es todo|nada mas|nada más|basta|"
+        r"cerrá|cierra|cerrar|dale listo|listo dale|termina|terminá)\b",
+        "listo",
+        t,
+    )
+
+    # Unidades coloquiales
+    t = re.sub(r"\b(ud|uds|u\.d\.|piezas?|pzas?|pza|unid)\b", "unidades", t)
+    t = re.sub(r"\bmedia docena\b", "6 unidades", t)
+    t = re.sub(r"\buna docena\b", "12 unidades", t)
+    t = re.sub(r"\bdocena\b", "12 unidades", t)
+
+    t = re.sub(
+        rf"\b(?:{_PREFIJOS_PEDIDO_VOZ})\s+(?:un|una|el|la|me|le|nos)?\s*",
+        " ",
+        t,
+    )
+
+    t = _expandir_numeros_compuestos(t)
+
+    for palabra, num in sorted(_NUMEROS_VOZ.items(), key=lambda x: -len(x[0])):
+        if palabra in ("un", "una", "uno", "cero"):
+            continue
+        t = re.sub(rf"\b{palabra}\s+unidades?\b", f"{num} unidades", t)
+
+    _palabras_cant = palabras_cantidad_repuesto_voz()
+    prod_pat = "|".join(re.escape(p) for p in _palabras_cant)
+    nums = "|".join(
+        p for p in _NUMEROS_VOZ if p not in ("un", "una", "uno", "cero")
+    )
+    from modulos.voz_repuestos import corregir_palabra_dictada
+
+    def _cantidad_repuesto(m):
+        num = _NUMEROS_VOZ.get(m.group(1), m.group(1))
+        rep = m.group(2)
+        if rep.endswith("s") and len(rep) > 4:
+            rep = rep[:-1]
+        rep = corregir_palabra_dictada(rep)
+        return f"{rep} {num} unidades"
+
+    t = re.sub(rf"\b({nums})\s+({prod_pat})\w*\b", _cantidad_repuesto, t)
+
+    t = re.sub(r"\bx\s*(\d{1,2})\b", r"\1 unidades", t)
+    t = re.sub(r"\bpor\s+(\d{1,2})\b(?!\s*%|\s*ciento)", r"\1 unidades", t)
+    t = re.sub(r"\b(?:un|una)\s+par\s+de\s+", "2 unidades ", t)
+    t = re.sub(r"\bpar\s+de\s+", "", t)
+    t = re.sub(r"\bjuego\s+de\s+", "", t)
+    t = re.sub(r"\bkit\s+de\s+", "kit ", t)
+
+    # Separadores de ítems
+    t = re.sub(r"\b(tambien|también|ademas|además|despues|después)\b", " y ", t)
+
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def preprocesar_texto_mostrador(texto):
+    """Preprocesa dictado del mostrador (código+cantidad + lenguaje natural)."""
+    return normalizar_orden_voz_mostrador(texto)
+
+
+def interpretar_orden_voz_mostrador(texto):
+    """
+    Interpreta una orden hablada/escrita sin inventario ni Groq.
+    Devuelve texto normalizado, cliente, ítems e intención detectada.
+    """
+    raw = str(texto or "").strip()
+    norm = normalizar_orden_voz_mostrador(raw)
+    t = norm.lower()
+    cliente = extraer_cliente_orden_voz(raw)
+    items = extraer_items_orden_voz(raw)
+
+    intent = None
+    if re.search(r"\bpresupuesto\b", t):
+        intent = "presupuesto"
+    elif re.search(r"factura\s+a\b", t):
+        intent = "factura_a"
+    elif re.search(r"\bfactura\b", t):
+        intent = "factura_b"
+
+    forma_pago = None
+    if re.search(r"contado|efectivo|cash|plata", t):
+        forma_pago = "Contado"
+    elif re.search(r"transfer|transfe|banco", t):
+        forma_pago = "Transferencia"
+    elif re.search(r"tarjeta.*credito|credito|crédito", t):
+        forma_pago = "Tarjeta"
+    elif re.search(r"tarjeta.*debito|debito|débito|tarjeta", t):
+        forma_pago = "Tarjeta"
+    elif re.search(r"cheque", t):
+        forma_pago = "Cheque"
+    elif re.search(r"mercado\s*pago|mercadopago|\bmp\b", t):
+        forma_pago = "MercadoPago"
+    elif re.search(r"cuenta\s+corriente|cta\s*cte", t):
+        forma_pago = "Cuenta corriente"
+
+    partes = []
+    if cliente.get("consumidor_final"):
+        partes.append("cliente: consumidor final")
+    elif cliente.get("nombre_cliente"):
+        partes.append(f"cliente: {cliente['nombre_cliente']}")
+    for it in items:
+        frag = f"{it.get('termino', '?')} x{it.get('cantidad', 1)}"
+        if it.get("vehiculo"):
+            frag += f" ({it['vehiculo']})"
+        partes.append(frag)
+    if intent:
+        partes.append(f"acción: {intent.replace('_', ' ')}")
+    if forma_pago:
+        partes.append(f"pago: {forma_pago}")
+
+    return {
+        "texto_original": raw,
+        "texto_normalizado": norm,
+        "cliente": cliente,
+        "items": items,
+        "intent": intent,
+        "forma_pago": forma_pago,
+        "listo": bool(re.search(r"\b(listo|termine|terminé|fin|dale)\b", t)),
+        "resumen": " · ".join(partes) if partes else "",
+    }
 
 
 def _limpiar_termino_item(termino):
@@ -68,20 +301,13 @@ _STOPWORDS_ITEM = frozenset({
     "LISTO", "FIN", "FACTURA", "PRESUPUESTO", "CODIGO", "UNIDAD",
     "UNIDADES", "CLIENTE", "CARGAME", "HACEME", "CARGA", "CARGAR",
     "HACER", "ARME", "ARMAR", "PARA", "EL", "LA", "UN", "UNA", "DE",
+    "NECESITO", "QUIERO", "DAME", "PASAME", "AGREGAME", "METEME",
+    "BUSCAME", "ANOTAME", "FICHAME", "MANDAME", "PREPARAME", "SACAME",
+    "TAMBIEN", "TAMBIÉN", "ADEMAS", "ADEMÁS", "DESPUES", "DESPUÉS",
+    "Y", "CON", "SIN", "DEL", "LOS", "LAS",
 })
 
-# Palabras que suelen iniciar la descripción del repuesto (corte de nombre de cliente).
-_INICIO_DESCRIPCION_VOZ = (
-    "buje", "bujes", "filtro", "filtros", "pastilla", "pastillas", "aceite",
-    "amortiguador", "amortiguadores", "disco", "discos", "bomba", "kit",
-    "rotula", "rótula", "fuelle", "tensor", "correa", "cadena", "resorte",
-    "espiral", "bujia", "bujía", "bobina", "ruleman", "rulemán", "cruceta",
-    "homocinetica", "homocinética", "semieje", "palier", "terminal", "barra",
-    "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
-    "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
-    "embrague", "crapodina", "crápodina", "cazoleta", "cazoletas", "soporte", "silent",
-    "bieleta", "bieletas", "bielete", "bieletes", "biela", "bielas",
-)
+# _INICIO_DESCRIPCION_VOZ se carga arriba desde voz_repuestos.obtener_vocabulario_repuesto_voz()
 
 
 def _strip_termino_cant_de_resto(resto: str, termino: str, cantidad: int) -> str:
@@ -115,9 +341,10 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
     """Quita cliente, factura y prefijos de armado para buscar por descripción."""
     cliente_info = extraer_cliente_orden_voz(texto)
     t = normalizar_texto_basico(texto).lower()
-    t = re.sub(r"\b(listo|termine|terminé|fin)\b", " ", t)
+    t = re.sub(r"\b(listo|termine|terminé|fin|dale)\b", " ", t)
     t = re.sub(
-        r"\b(carg\w*|hac\w*|arm\w*|rgame|cargame|haceme|armeme|armame)\b",
+        r"\b(carg\w*|hac\w*|arm\w*|rgame|cargame|haceme|armeme|armame|"
+        r"met\w*|agreg\w*|busc\w*|anot\w*|fich\w*|mand\w*|prepar\w*|sac\w*)\b",
         " ",
         t,
     )
@@ -164,6 +391,7 @@ def extraer_items_orden_voz(texto):
     """Extrae uno o varios códigos/descripciones + cantidad desde la orden hablada/escrita."""
     if not texto:
         return []
+    texto = normalizar_orden_voz_mostrador(texto)
 
     def _extraer_de_fragmento(fragmento, acumulado, vistos):
         t = normalizar_texto_basico(fragmento).lower()
@@ -336,7 +564,7 @@ def _limpiar_nombre_cliente_voz(nombre: str) -> str:
     if nombre.lower() in ("factura", "presupuesto", "consumidor final", "particular", "el", "la"):
         return ""
     primera = nombre.split()[0].lower()
-    if primera in _INICIO_DESCRIPCION_VOZ:
+    if es_palabra_repuesto(primera):
         return ""
     return nombre.upper()
 
@@ -351,12 +579,15 @@ def _palabra_parece_nombre_cliente(palabra: str) -> bool:
         "factura", "presupuesto", "cliente", "codigo", "código", "listo",
         "consumidor", "particular", "contado", "transferencia",
         "para", "por", "de", "del", "una", "uno", "un", "el", "la", "los", "las",
-        "hacer", "haceme", "haceme", "cargame", "armame",
+        "hacer", "haceme", "cargame", "armame", "necesito", "quiero", "dame",
+        "pasame", "agregame", "poneme", "sumame", "meteme", "buscame", "anotame",
+        "fichame", "mandame", "preparame", "sacame", "tirame", "dejame",
+        "cotiza", "cotizame", "facturame", "presu",
     ):
         return False
-    if es_referencia_vehiculo(p):
+    if es_palabra_repuesto(p):
         return False
-    if p in _INICIO_DESCRIPCION_VOZ:
+    if es_referencia_vehiculo(p):
         return False
     return True
 
@@ -365,7 +596,7 @@ def extraer_cliente_orden_voz(texto):
     """Extrae nombre de cliente o consumidor final desde la orden."""
     if not texto:
         return {}
-    t = normalizar_texto_basico(texto).lower()
+    t = normalizar_orden_voz_mostrador(texto).lower()
     if re.search(r"consumidor\s+final|particular", t):
         return {"consumidor_final": True}
 

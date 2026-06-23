@@ -16,11 +16,27 @@ from modulos.mostrador_voz_flujo import (
     descartar_panels_operacion_anterior,
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
+    interpretar_orden_voz_mostrador,
     inventario_cache_mostrador,
     marcar_verificacion_mostrador,
 )
 from modulos.ia_mostrador import procesar_orden_mostrador
 from modulos.ui_mostrador import render_mostrador_accion_pendiente, render_presupuesto_pdf_pendiente
+
+
+def _chat_orden(orden, msj, tipo="info"):
+    """Guarda respuesta del chat; en órdenes largas muestra qué entendió el parser."""
+    key = "_mostrador_interp_mostrada"
+    if (
+        len(str(orden).split()) >= 5
+        and tipo in ("ok", "warning", "error")
+        and st.session_state.get(key) != orden
+    ):
+        resumen = interpretar_orden_voz_mostrador(orden).get("resumen")
+        if resumen:
+            msj = f"**Entendí:** {resumen}\n\n{msj}"
+            st.session_state[key] = orden
+    guardar_mensaje_chat(orden, msj, tipo)
 
 
 def _procesar_orden_chat(
@@ -84,14 +100,14 @@ def _procesar_orden_chat(
                     msj = f"{msj} Revisá los ítems y usá **Imprimir presupuesto**."
             elif intent in ("factura_b", "factura_a") and resp.get("ir_verificacion"):
                 msj = f"{msj} Revisá y pulsá **Facturar e imprimir**."
-            guardar_mensaje_chat(orden, msj, "ok")
+            _chat_orden(orden,msj, "ok")
             return True
         if ambiguos:
             st.session_state.resultados_ia_mostrador = ambiguos
             st.session_state.msg_ia_mostrador = msj or "Elegí el producto exacto:"
-            guardar_mensaje_chat(orden, msj, "warning")
+            _chat_orden(orden,msj, "warning")
             return False
-        guardar_mensaje_chat(orden, msj or "No se pudo completar la orden.", "error")
+        _chat_orden(orden,msj or "No se pudo completar la orden.", "error")
         return False
 
     if accion == "agregar_carrito":
@@ -106,14 +122,14 @@ def _procesar_orden_chat(
                 carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or []),
                 desc_porc,
             )
-            guardar_mensaje_chat(orden, f"🛒 {msj} · Total ${tf:,.2f}", "ok")
+            _chat_orden(orden,f"🛒 {msj} · Total ${tf:,.2f}", "ok")
             return True
         if ambiguos:
             st.session_state.resultados_ia_mostrador = ambiguos
             st.session_state.msg_ia_mostrador = f"Elegí variante de '{termino}':"
-            guardar_mensaje_chat(orden, msj, "warning")
+            _chat_orden(orden,msj, "warning")
             return False
-        guardar_mensaje_chat(orden, msj, "error")
+        _chat_orden(orden,msj, "error")
         return False
 
     if accion == "agregar_items":
@@ -123,28 +139,28 @@ def _procesar_orden_chat(
         if ambiguos:
             st.session_state.resultados_ia_mostrador = ambiguos
             st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
-            guardar_mensaje_chat(orden, msj, "warning")
+            _chat_orden(orden,msj, "warning")
             return False
         if n:
             _, tf = calcular_totales_carrito(
                 carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or []),
                 desc_porc,
             )
-            guardar_mensaje_chat(orden, f"{msj} · Total ${tf:,.2f}", "ok")
+            _chat_orden(orden,f"{msj} · Total ${tf:,.2f}", "ok")
             return True
-        guardar_mensaje_chat(orden, msj, "error")
+        _chat_orden(orden,msj, "error")
         return False
 
     if accion == "presupuesto_pdf":
         carrito_n = _carrito_para_presupuesto(vendedor)
         if not carrito_n:
-            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            _chat_orden(orden,"El carrito está vacío.", "error")
             return False
         _, tb = calcular_totales_carrito(carrito_n, desc_porc)
         _, tf = calcular_totales_carrito(carrito_n, desc_porc)
         _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
         marcar_verificacion_mostrador("presupuesto")
-        guardar_mensaje_chat(
+        _chat_orden(
             orden,
             f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.",
             "ok",
@@ -154,7 +170,7 @@ def _procesar_orden_chat(
     if accion == "listo_armado":
         carrito_n = _carrito_para_presupuesto(vendedor)
         if not carrito_n:
-            guardar_mensaje_chat(orden, "Carrito vacío.", "error")
+            _chat_orden(orden,"Carrito vacío.", "error")
             return False
         _, tf = calcular_totales_carrito(carrito_n, desc_porc)
         intent = resp.get("intent_sugerido")
@@ -162,23 +178,23 @@ def _procesar_orden_chat(
         if intent == "presupuesto":
             _, tb = calcular_totales_carrito(carrito_n, desc_porc)
             _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
-            guardar_mensaje_chat(
+            _chat_orden(
                 orden, f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.", "ok"
             )
         else:
-            guardar_mensaje_chat(orden, f"Listo (${tf:,.2f}). Revisá el comprobante.", "ok")
+            _chat_orden(orden,f"Listo (${tf:,.2f}). Revisá el comprobante.", "ok")
         return True
 
     if accion == "imprimir_ticket":
         if not carrito:
-            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            _chat_orden(orden,"El carrito está vacío.", "error")
             return False
         ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
         if not ok_val:
-            guardar_mensaje_chat(orden, msg_val, "error")
+            _chat_orden(orden,msg_val, "error")
             return False
         _marcar_listo_para_ticket(vendedor, total_final)
-        guardar_mensaje_chat(orden, f"Listo para cerrar · ${total_final:,.2f}", "ok")
+        _chat_orden(orden,f"Listo para cerrar · ${total_final:,.2f}", "ok")
         return True
 
     if accion == "set_cliente":
@@ -189,11 +205,11 @@ def _procesar_orden_chat(
         )
         if cli:
             _invalidar_pdf_presupuesto_mostrador()
-            guardar_mensaje_chat(
+            _chat_orden(
                 orden, f"Cliente {cli.get('nombre', '')} activado.", "ok"
             )
             return True
-        guardar_mensaje_chat(orden, "No pude activar el cliente.", "error")
+        _chat_orden(orden,"No pude activar el cliente.", "error")
         return False
 
     if accion == "set_tipo_factura":
@@ -202,7 +218,7 @@ def _procesar_orden_chat(
         t = str(tipo).upper()
         cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
         st.session_state.cliente_activo = cli
-        guardar_mensaje_chat(
+        _chat_orden(
             orden,
             f"Factura {_tipo_comprobante_label(cli['tipo_comprobante'])}.",
             "ok",
@@ -217,17 +233,17 @@ def _procesar_orden_chat(
             cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
         st.session_state.cliente_activo = cli
         _invalidar_pdf_presupuesto_mostrador()
-        guardar_mensaje_chat(orden, "Consumidor final activado.", "ok")
+        _chat_orden(orden,"Consumidor final activado.", "ok")
         return True
 
     if accion == "set_forma_pago":
         fp = _set_forma_pago(vendedor, resp.get("forma_pago", "Contado"))
-        guardar_mensaje_chat(orden, f"Forma de pago: {fp}.", "ok")
+        _chat_orden(orden,f"Forma de pago: {fp}.", "ok")
         return True
 
     if accion == "guardar_presupuesto":
         if not carrito:
-            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            _chat_orden(orden,"El carrito está vacío.", "error")
             return False
         nota = str(resp.get("nota", "") or "")
         st.session_state.mostrador_accion_pendiente = {
@@ -238,16 +254,16 @@ def _procesar_orden_chat(
                 f"{st.session_state.cliente_activo.get('nombre', 'CONSUMIDOR FINAL')}?"
             ),
         }
-        guardar_mensaje_chat(orden, "Confirmá guardar el presupuesto.", "warning")
+        _chat_orden(orden,"Confirmá guardar el presupuesto.", "warning")
         return False
 
     if accion == "confirmar_venta":
         if not carrito:
-            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            _chat_orden(orden,"El carrito está vacío.", "error")
             return False
         ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
         if not ok_val:
-            guardar_mensaje_chat(orden, msg_val, "error")
+            _chat_orden(orden,msg_val, "error")
             return False
         st.session_state.mostrador_accion_pendiente = {
             "tipo": "confirmar_venta",
@@ -256,19 +272,19 @@ def _procesar_orden_chat(
                 f"(sin factura fiscal) y descontar stock?"
             ),
         }
-        guardar_mensaje_chat(orden, "Confirmá la venta.", "warning")
+        _chat_orden(orden,"Confirmá la venta.", "warning")
         return False
 
     if accion == "facturar":
         if not carrito:
-            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            _chat_orden(orden,"El carrito está vacío.", "error")
             return False
         ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
         if not ok_val:
-            guardar_mensaje_chat(orden, msg_val, "error")
+            _chat_orden(orden,msg_val, "error")
             return False
         _marcar_listo_para_ticket(vendedor, total_final, obtener_intent_venta())
-        guardar_mensaje_chat(
+        _chat_orden(
             orden, f"Listo para facturar · ${total_final:,.2f}", "ok"
         )
         return True
@@ -276,24 +292,24 @@ def _procesar_orden_chat(
     if accion in ("buscar", "consulta"):
         termino = str(resp.get("termino", "") or orden)
         if not termino:
-            guardar_mensaje_chat(orden, "No detecté qué producto buscar.", "warning")
+            _chat_orden(orden,"No detecté qué producto buscar.", "warning")
             return False
         encontrados = buscar_en_inventario(inventario, termino)
         if encontrados:
             st.session_state.resultados_ia_mostrador = encontrados[:10]
             st.session_state.msg_ia_mostrador = f"Encontré opciones para '{termino}':"
-            guardar_mensaje_chat(
+            _chat_orden(
                 orden, f"{len(encontrados[:10])} opciones para '{termino}'. Elegí una.", "warning"
             )
             return False
-        guardar_mensaje_chat(
+        _chat_orden(
             orden, f"No encontré coincidencias para '{termino}'.", "error"
         )
         return False
 
     if accion == "vaciar_carrito":
         limpiar_venta_mostrador(vendedor, reset_cliente=False)
-        guardar_mensaje_chat(orden, "Carrito vaciado.", "info")
+        _chat_orden(orden,"Carrito vaciado.", "info")
         return True
 
     if accion == "confirmar_pendiente":
@@ -303,18 +319,18 @@ def _procesar_orden_chat(
                 vendedor, pend, carrito_ui, total_final, desc_porc
             )
             _limpiar_accion_pendiente()
-            guardar_mensaje_chat(orden, msj, "ok" if ok else "error")
+            _chat_orden(orden,msj, "ok" if ok else "error")
             return ok
-        guardar_mensaje_chat(orden, "No hay acción pendiente.", "info")
+        _chat_orden(orden,"No hay acción pendiente.", "info")
         return False
 
     if accion == "cancelar_pendiente":
         _limpiar_accion_pendiente()
-        guardar_mensaje_chat(orden, "Acción cancelada.", "info")
+        _chat_orden(orden,"Acción cancelada.", "info")
         return True
 
     texto = resp.get("respuesta") or "Orden procesada."
-    guardar_mensaje_chat(orden, texto, "info" if accion != "error" else "error")
+    _chat_orden(orden,texto, "info" if accion != "error" else "error")
     return accion != "error"
 
 

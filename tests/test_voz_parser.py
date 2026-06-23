@@ -1,7 +1,12 @@
 """Tests del parser de órdenes de voz del mostrador."""
 import unittest
 
-from modulos.mostrador_voz_flujo import extraer_cliente_orden_voz, extraer_items_orden_voz
+from modulos.mostrador_voz_flujo import (
+    extraer_cliente_orden_voz,
+    extraer_items_orden_voz,
+    interpretar_orden_voz_mostrador,
+    normalizar_orden_voz_mostrador,
+)
 from modulos.voz_repuestos import corregir_termino_repuesto
 
 
@@ -9,6 +14,41 @@ class TestVozParser(unittest.TestCase):
     def test_sinonimo_bielete(self):
         self.assertEqual(corregir_termino_repuesto("bielete"), "bieleta")
         self.assertEqual(corregir_termino_repuesto("biela"), "bieleta")
+        self.assertEqual(corregir_termino_repuesto("ferodo"), "pastilla")
+        self.assertEqual(corregir_termino_repuesto("amorti"), "amortiguador")
+        self.assertEqual(corregir_termino_repuesto("ruliman"), "ruleman")
+        self.assertEqual(corregir_termino_repuesto("homo"), "homocinetica")
+
+    def test_cotizacion_como_presupuesto(self):
+        t = "cotizame para lucas dos amortiguadores para el gol 2 unidades"
+        interp = interpretar_orden_voz_mostrador(t)
+        self.assertEqual(interp["intent"], "presupuesto")
+        self.assertEqual(interp["cliente"].get("nombre_cliente"), "LUCAS")
+        amortis = [i for i in interp["items"] if "AMORTIGUADOR" in i["termino"]]
+        self.assertTrue(amortis)
+        self.assertEqual(amortis[0]["cantidad"], 2)
+
+    def test_meteme_codigo_jerga(self):
+        items = extraer_items_orden_voz("meteme codi 222 3 unidades")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "222")
+        self.assertEqual(items[0]["cantidad"], 3)
+
+    def test_factura_abierta(self):
+        interp = interpretar_orden_voz_mostrador(
+            "factura abierta para taller san martin codigo 111 1"
+        )
+        self.assertEqual(interp["intent"], "factura_a")
+
+    def test_treinta_y_dos_unidades(self):
+        norm = normalizar_orden_voz_mostrador("pastilla treinta y dos unidades")
+        self.assertIn("32 unidades", norm)
+
+    def test_ademas_separador(self):
+        items = extraer_items_orden_voz(
+            "bieleta 2 unidades ademas codigo 111 1 para el 207"
+        )
+        self.assertGreaterEqual(len(items), 2)
 
     def test_cliente_al_final_presupuesto(self):
         r = extraer_cliente_orden_voz(
@@ -74,6 +114,38 @@ class TestVozParser(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].get("cantidad"), 2)
         self.assertIn("vehiculo", items[0])
+
+    def test_normalizar_necesito_presupuesto(self):
+        t = "necesito un presupuesto para maria de una bieleta para el 207 2 unidades"
+        norm = normalizar_orden_voz_mostrador(t)
+        self.assertIn("presupuesto", norm)
+        self.assertNotIn("necesito", norm)
+        self.assertEqual(extraer_cliente_orden_voz(t).get("nombre_cliente"), "MARIA")
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "BIELETA")
+
+    def test_normalizar_a_nombre_de(self):
+        t = "factura be a nombre de carlos codigo 111 2"
+        interp = interpretar_orden_voz_mostrador(t)
+        self.assertEqual(interp["cliente"].get("nombre_cliente"), "CARLOS")
+        self.assertEqual(interp["intent"], "factura_b")
+        self.assertEqual(len(interp["items"]), 1)
+
+    def test_cantidad_en_palabras(self):
+        t = "dame dos bujes para el gol 1 unidad"
+        items = extraer_items_orden_voz(t)
+        self.assertGreaterEqual(len(items), 1)
+        bujes = [i for i in items if "BUJE" in i["termino"]]
+        self.assertTrue(bujes)
+        self.assertEqual(bujes[0]["cantidad"], 2)
+
+    def test_interpretar_resumen(self):
+        t = "haceme un presupuesto para pedro de una bieleta para el 207 2 unidades"
+        interp = interpretar_orden_voz_mostrador(t)
+        self.assertIn("PEDRO", interp["resumen"])
+        self.assertIn("BIELETA", interp["resumen"])
+        self.assertEqual(interp["intent"], "presupuesto")
 
 
 if __name__ == "__main__":
