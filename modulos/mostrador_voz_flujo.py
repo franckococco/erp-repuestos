@@ -419,6 +419,12 @@ def extraer_cliente_orden_voz(texto):
         if nombre:
             return {"nombre_cliente": nombre}
 
+    m_para_final = re.search(r"\bpara\s+([a-záéíóúñ]{3,20})\s*$", t)
+    if m_para_final and _palabra_parece_nombre_cliente(m_para_final.group(1)):
+        nombre = _limpiar_nombre_cliente_voz(m_para_final.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
     patrones = (
         rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
         rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
