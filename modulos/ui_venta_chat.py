@@ -9,7 +9,6 @@ from modulos.mostrador_estado import (
     obtener_estado_venta,
     obtener_intent_venta,
     obtener_historial_chat,
-    obtener_mensaje_chat,
 )
 from modulos.mostrador_voz_flujo import (
     activar_cliente_voz,
