@@ -743,6 +743,7 @@ elif pagina == "mostrador":
             calcular_totales_carrito=calcular_totales_carrito,
             limpiar_venta_mostrador=limpiar_venta_mostrador,
             inv_mostrador=inv_mostrador,
+            decodificar_qr_fn=decodificar_qr_desde_imagen,
         )
 
 # --- ASISTENTE ---

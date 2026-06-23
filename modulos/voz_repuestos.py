@@ -26,6 +26,15 @@ _SINONIMOS_DICTADO = {
     "lampara": "lámpara",
     "liquido": "líquido",
     "reten": "retén",
+    "fuelle": "fuelle",
+    "fuelles": "fuelles",
+    "correa": "correa",
+    "correas": "correas",
+    "tensor": "tensor",
+    "tensors": "tensor",
+    "kit": "kit",
+    "kits": "kit",
+    "directa": "directa",
 }
 
 # Modelos / referencias frecuentes en descripción (orden largo → corto)

@@ -345,6 +345,20 @@ def extraer_cliente_orden_voz(texto):
         if nombre:
             return {"nombre_cliente": nombre}
 
+    m_final = re.search(r"\bpresupuesto\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s*$", t)
+    if m_final:
+        nombre = _limpiar_nombre_cliente_voz(m_final.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
+    m_factura = re.search(
+        r"\bfactura\s+[ab]\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s*$", t
+    )
+    if m_factura:
+        nombre = _limpiar_nombre_cliente_voz(m_factura.group(1))
+        if nombre:
+            return {"nombre_cliente": nombre}
+
     patrones = (
         rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",
         rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para|a\s+el|a)\s+(.+?){fin}",

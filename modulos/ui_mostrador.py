@@ -661,8 +661,31 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
     return 0, "No se detectaron productos.", None
 
 
+def _finalizar_revision_si_listo(vendedor):
+    """Tras completar cola de ambiguos: PDF presupuesto si corresponde."""
+    if not st.session_state.get("mostrador_listo_para_ticket"):
+        return
+    intent = st.session_state.get("mostrador_intent_sugerido")
+    if intent != "presupuesto":
+        return
+    from modulos.ui_mostrador import (
+        _carrito_para_presupuesto,
+        _preparar_pdf_presupuesto_borrador,
+        calcular_totales_carrito,
+    )
+
+    carrito_n = _carrito_para_presupuesto(vendedor)
+    if not carrito_n:
+        return
+    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+    _, tb = calcular_totales_carrito(carrito_n, desc_porc)
+    _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
+
+
 def _tras_agregar_coincidencia_voz(vendedor, buscar_en_inventario, obtener_inventario, agregar_al_carrito):
     """Tras elegir una variante, sigue con el resto de ítems pendientes de la orden."""
+    from modulos.mostrador_estado import guardar_mensaje_chat
+
     cola = st.session_state.get("mostrador_voz_cola_ambiguos")
     if cola:
         cola.pop(0)
@@ -677,8 +700,13 @@ def _tras_agregar_coincidencia_voz(vendedor, buscar_en_inventario, obtener_inven
         return
     st.session_state.resultados_ia_mostrador = None
     st.session_state.msg_ia_mostrador = None
+    _finalizar_revision_si_listo(vendedor)
     if msg:
-        _set_ia_feedback(vendedor, "ok", msg)
+        guardar_mensaje_chat(
+            st.session_state.get("venta_chat_orden", "Orden"),
+            msg,
+            "ok",
+        )
 
 
 def _set_ia_feedback(vendedor, tipo, mensaje):

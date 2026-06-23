@@ -11,10 +11,13 @@ from modulos.mostrador_estado import (
     obtener_mensaje_chat,
 )
 from modulos.mostrador_voz_flujo import (
+    activar_cliente_voz,
+    agregar_termino_voz,
     descartar_panels_operacion_anterior,
     ejecutar_flujo_factura_voz,
     extraer_items_orden_voz,
     inventario_cache_mostrador,
+    marcar_verificacion_mostrador,
 )
 from modulos.ia_mostrador import procesar_orden_mostrador
 
@@ -29,16 +32,27 @@ def _procesar_orden_chat(
     """Ejecuta una orden de voz/texto y guarda respuesta para el chat."""
     descartar_panels_operacion_anterior()
     from modulos.ui_mostrador import (
-        calcular_totales_carrito,
+        _agregar_items_voz,
         _carrito_para_presupuesto,
+        _ejecutar_accion_pendiente,
+        _limpiar_accion_pendiente,
+        _marcar_listo_para_ticket,
         _preparar_pdf_presupuesto_borrador,
+        calcular_totales_carrito,
+        carrito_efectivo_mostrador,
         ejecutar_emitir_factura_arca,
+        limpiar_venta_mostrador,
+        validar_carrito_para_venta,
     )
+    from modulos.presupuesto_pdf import VALIDEZ_PRESUPUESTO_DIAS
 
     resp = procesar_orden_mostrador(orden) or {}
     accion = resp.get("accion")
     inventario = inventario_cache_mostrador(obtener_inventario_completo)
+    carrito = obtener_carrito(str(vendedor)) or []
+    carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
     desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+    total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
 
     if accion == "flujo_factura":
         if not resp.get("items"):
@@ -75,21 +89,126 @@ def _procesar_orden_chat(
         guardar_mensaje_chat(orden, msj or "No se pudo completar la orden.", "error")
         return False
 
-    if accion == "listo_armado":
-        from modulos.ui_mostrador import _carrito_para_presupuesto as _cp
-
-        carrito_n = _cp(vendedor)
-        if carrito_n:
-            _, tb = calcular_totales_carrito(carrito_n, desc_porc)
-            if resp.get("intent_sugerido") == "presupuesto":
-                _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
-            guardar_mensaje_chat(orden, "Listo. Revisá el comprobante.", "ok")
+    if accion == "agregar_carrito":
+        termino = str(resp.get("termino", ""))
+        cant_raw = resp.get("cantidad")
+        cant = int(cant_raw) if cant_raw is not None and str(cant_raw).isdigit() else 1
+        ok, msj, ambiguos = agregar_termino_voz(
+            vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito
+        )
+        if ok:
+            _, tf = calcular_totales_carrito(
+                carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or []),
+                desc_porc,
+            )
+            guardar_mensaje_chat(orden, f"🛒 {msj} · Total ${tf:,.2f}", "ok")
             return True
-        guardar_mensaje_chat(orden, "Carrito vacío.", "error")
+        if ambiguos:
+            st.session_state.resultados_ia_mostrador = ambiguos
+            st.session_state.msg_ia_mostrador = f"Elegí variante de '{termino}':"
+            guardar_mensaje_chat(orden, msj, "warning")
+            return False
+        guardar_mensaje_chat(orden, msj, "error")
+        return False
+
+    if accion == "agregar_items":
+        n, msj, ambiguos = _agregar_items_voz(
+            vendedor, resp.get("items"), inventario, buscar_en_inventario, agregar_al_carrito
+        )
+        if ambiguos:
+            st.session_state.resultados_ia_mostrador = ambiguos
+            st.session_state.msg_ia_mostrador = "Elegí el producto exacto:"
+            guardar_mensaje_chat(orden, msj, "warning")
+            return False
+        if n:
+            _, tf = calcular_totales_carrito(
+                carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or []),
+                desc_porc,
+            )
+            guardar_mensaje_chat(orden, f"{msj} · Total ${tf:,.2f}", "ok")
+            return True
+        guardar_mensaje_chat(orden, msj, "error")
+        return False
+
+    if accion == "presupuesto_pdf":
+        carrito_n = _carrito_para_presupuesto(vendedor)
+        if not carrito_n:
+            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            return False
+        _, tb = calcular_totales_carrito(carrito_n, desc_porc)
+        _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+        _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
+        marcar_verificacion_mostrador("presupuesto")
+        guardar_mensaje_chat(
+            orden,
+            f"Presupuesto BORRADOR (${tf:,.2f}). Validez {VALIDEZ_PRESUPUESTO_DIAS} días.",
+            "ok",
+        )
+        return True
+
+    if accion == "listo_armado":
+        carrito_n = _carrito_para_presupuesto(vendedor)
+        if not carrito_n:
+            guardar_mensaje_chat(orden, "Carrito vacío.", "error")
+            return False
+        _, tf = calcular_totales_carrito(carrito_n, desc_porc)
+        intent = resp.get("intent_sugerido")
+        _marcar_listo_para_ticket(vendedor, tf, intent)
+        if intent == "presupuesto":
+            _, tb = calcular_totales_carrito(carrito_n, desc_porc)
+            _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
+            guardar_mensaje_chat(
+                orden, f"PDF listo (${tf:,.2f}). Revisá e imprimí.", "ok"
+            )
+        else:
+            guardar_mensaje_chat(orden, f"Listo (${tf:,.2f}). Revisá el comprobante.", "ok")
+        return True
+
+    if accion == "imprimir_ticket":
+        if not carrito:
+            guardar_mensaje_chat(orden, "El carrito está vacío.", "error")
+            return False
+        ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
+        if not ok_val:
+            guardar_mensaje_chat(orden, msg_val, "error")
+            return False
+        _marcar_listo_para_ticket(vendedor, total_final)
+        guardar_mensaje_chat(orden, f"Listo para cerrar · ${total_final:,.2f}", "ok")
+        return True
+
+    if accion == "set_cliente":
+        cli = activar_cliente_voz(
+            nombre_cliente=resp.get("nombre_cliente"),
+            consumidor_final=resp.get("consumidor_final"),
+            tipo_comprobante=resp.get("tipo_comprobante"),
+        )
+        if cli:
+            guardar_mensaje_chat(
+                orden, f"Cliente {cli.get('nombre', '')} activado.", "ok"
+            )
+            return True
+        guardar_mensaje_chat(orden, "No pude activar el cliente.", "error")
+        return False
+
+    if accion == "vaciar_carrito":
+        limpiar_venta_mostrador(vendedor, reset_cliente=False)
+        guardar_mensaje_chat(orden, "Carrito vaciado.", "info")
+        return True
+
+    if accion == "confirmar_pendiente":
+        pend = st.session_state.get("mostrador_accion_pendiente")
+        if pend:
+            ok, msj = _ejecutar_accion_pendiente(
+                vendedor, pend, carrito_ui, total_final, desc_porc
+            )
+            _limpiar_accion_pendiente()
+            guardar_mensaje_chat(orden, msj, "ok" if ok else "error")
+            return ok
+        guardar_mensaje_chat(orden, "No hay acción pendiente.", "info")
         return False
 
     if accion == "cancelar_pendiente":
-        st.session_state.mostrador_accion_pendiente = None
+        _limpiar_accion_pendiente()
         guardar_mensaje_chat(orden, "Acción cancelada.", "info")
         return True
 
@@ -98,19 +217,22 @@ def _procesar_orden_chat(
     return accion != "error"
 
 
-def _render_header_venta(vendedor):
+def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito):
     cli = st.session_state.get("cliente_activo") or {}
     nombre = cli.get("nombre", "CONSUMIDOR FINAL")
     intent = etiqueta_intent()
-    carrito = obtener_carrito(str(vendedor)) or []
+    carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
     n_items = len(carrito)
     estado = obtener_estado_venta(vendedor)
+    desc_porc = float(cli.get("descuento", 0))
+    _, total = calcular_totales_carrito(carrito, desc_porc)
 
-    c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+    c1, c2, c3, c4, c5 = st.columns([2.5, 1.5, 1.2, 1.2, 1.5])
     c1.markdown(f"**Cliente:** {nombre}")
-    c2.markdown(f"**Tipo:** {intent}")
-    c3.markdown(f"**Ítems:** {n_items}")
-    c4.markdown(f"**Estado:** {estado.replace('_', ' ').title()}")
+    c2.markdown(f"**{intent}**")
+    c3.markdown(f"**{n_items}** ítems")
+    c4.markdown(f"**${total:,.2f}**")
+    c5.caption(estado.replace("_", " ").title())
 
 
 def _render_chat_historial():
@@ -118,7 +240,8 @@ def _render_chat_historial():
     if not orden:
         st.caption(
             "Dictá o escribí la orden completa. Ej: "
-            "*presupuesto para Pablo, código 111 1, bielete para el 207 2 unidades*"
+            "*presupuesto para Pablo, código 111 1, bielete para el 207 2 unidades* · "
+            "Decí **listo** para revisar."
         )
         return
     with st.chat_message("user"):
@@ -155,10 +278,11 @@ def render_venta_chat(
     calcular_totales_carrito,
     limpiar_venta_mostrador,
     inv_mostrador,
+    decodificar_qr_fn=None,
 ):
     """UI principal del mostrador (chat + vista por estado)."""
     estado = obtener_estado_venta(vendedor)
-    _render_header_venta(vendedor)
+    _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
 
     if estado == EstadoVenta.LISTO:
         render_factura_arca_exitosa("top")
@@ -186,6 +310,14 @@ def render_venta_chat(
             obtener_inventario=obtener_inventario_completo,
         )
         _render_chat_historial()
+        orden = st.chat_input("Corrección o nueva búsqueda…", key=f"chat_elegir_{vendedor}")
+        if orden:
+            with st.spinner("Procesando…"):
+                _procesar_orden_chat(
+                    vendedor, orden, obtener_inventario_completo,
+                    buscar_en_inventario, agregar_al_carrito,
+                )
+            st.rerun()
         return
 
     if estado == EstadoVenta.REVISAR:
@@ -195,7 +327,7 @@ def render_venta_chat(
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         intent = obtener_intent_venta()
 
-        st.markdown(f"### Revisar {etiqueta_intent(intent)}")
+        st.markdown(f"### Revisar {etiqueta_intent(intent)} · ${total_final:,.2f}")
         render_carrito_grilla(vendedor, carrito_ui)
         if intent == "presupuesto" and st.session_state.get("presupuesto_pdf_descarga"):
             render_descarga_presupuesto_prominente(vendedor)
@@ -219,10 +351,11 @@ def render_venta_chat(
         desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
         _, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         with st.expander(
-            f"🛒 Carrito · {len(carrito_ui)} ítem(s) · ${total_final:,.2f}",
+            f"🛒 Ver carrito · {len(carrito_ui)} ítem(s) · ${total_final:,.2f}",
             expanded=False,
         ):
             render_carrito_grilla(vendedor, carrito_ui)
+        st.info("Seguí dictando ítems o decí **listo** para revisar e imprimir.")
 
     _render_chat_historial()
 
@@ -239,8 +372,25 @@ def render_venta_chat(
         st.rerun()
 
     with st.expander("Más herramientas", expanded=False):
+        col_v, col_n = st.columns(2)
+        with col_v:
+            if st.button("🗑️ Vaciar carrito", key=f"vaciar_chat_{vendedor}", use_container_width=True):
+                limpiar_venta_mostrador(vendedor, reset_cliente=False)
+                from modulos.mostrador_estado import limpiar_mensaje_chat
+
+                limpiar_mensaje_chat()
+                st.rerun()
+        with col_n:
+            if st.button("✅ Nueva venta", key=f"nueva_chat_{vendedor}", use_container_width=True):
+                limpiar_venta_mostrador(vendedor, reset_cliente=True)
+                from modulos.mostrador_estado import limpiar_mensaje_chat
+
+                limpiar_mensaje_chat()
+                st.rerun()
+
         render_presupuestos_guardados(vendedor)
-        t_buscar, t_manual = st.tabs(["🔍 Buscador", "⌨️ Pistola / Manual"])
+        tabs = ["🔍 Buscador", "⌨️ Pistola", "📷 QR"]
+        t_buscar, t_manual, t_qr = st.tabs(tabs)
         with t_buscar:
             if inv_mostrador:
                 render_buscador_productos(
@@ -249,7 +399,7 @@ def render_venta_chat(
             else:
                 st.info("Inventario vacío.")
         with t_manual:
-            cod = st.text_input("Código variante", key=f"manual_chat_{vendedor}")
+            cod = st.text_input("Código variante (CODIGO_MARCA)", key=f"manual_chat_{vendedor}")
             if st.button("➕ Agregar", key=f"manual_add_{vendedor}") and cod:
                 exito, msj = agregar_al_carrito(vendedor, cod)
                 if exito:
@@ -257,3 +407,20 @@ def render_venta_chat(
                     st.rerun()
                 else:
                     st.error(msj)
+        with t_qr:
+            if decodificar_qr_fn:
+                foto_qr = st.camera_input("Escanear QR", key=f"cam_chat_{vendedor}")
+                if foto_qr:
+                    from PIL import Image
+
+                    cod_detectado = decodificar_qr_fn(Image.open(foto_qr))
+                    if cod_detectado:
+                        id_limpio = cod_detectado.split("\n")[0].replace("COD:", "").strip()
+                        exito, msj = agregar_al_carrito(vendedor, id_limpio)
+                        if exito:
+                            st.success(f"Añadido: {id_limpio}")
+                            st.rerun()
+                        else:
+                            st.error(msj)
+            else:
+                st.caption("Escáner QR no disponible.")
