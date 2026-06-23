@@ -80,7 +80,7 @@ _INICIO_DESCRIPCION_VOZ = (
     "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
     "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
     "embrague", "crapodina", "crápodina", "cazoleta", "cazoletas", "soporte", "silent",
-    "bieleta", "bieletas",
+    "bieleta", "bieletas", "bielete", "bieletes",
 )
 
 
@@ -130,6 +130,9 @@ def _limpiar_texto_para_items_descripcion(texto: str) -> str:
         t = re.sub(rf"\bpara\s+(?:el\s+)?(?:cliente\s+)?{nom}\b", " ", t, flags=re.I)
     elif cliente_info.get("consumidor_final"):
         t = re.sub(r"\b(consumidor\s+final|particular)\b", " ", t)
+    if cliente_info.get("nombre_cliente"):
+        nom = re.escape(str(cliente_info["nombre_cliente"]).lower())
+        t = re.sub(rf"\b{nom}\b", " ", t, flags=re.I)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -213,7 +216,13 @@ def extraer_items_orden_voz(texto):
         n_antes = len(acumulado)
 
         resto = _limpiar_texto_para_items_descripcion(fragmento)
+        pat_repuesto_veh = re.compile(
+            r"\b([a-záéíóúñ][a-záéíóúñ\-]{2,24})\s+para\s+(?:el|la)\s+"
+            r"(\d{3,4})\s+(\d{1,2})\s*(?:unidades?|u\.?|uds?)?\b",
+            re.I,
+        )
         patrones_desc = [
+            pat_repuesto_veh,
             r"(?:un|una)\s+(.+?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
             r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\s*(?:unidades?|u\.?|uds?|unidad)\b",
             r"(?:^|\s)([a-z0-9][a-z0-9\s\-]{2,}?)\s+(\d{1,4})\b",
@@ -221,11 +230,19 @@ def extraer_items_orden_voz(texto):
         while resto:
             encontrado = False
             for patron in patrones_desc:
-                m = re.search(patron, resto)
+                if hasattr(patron, "search"):
+                    m = patron.search(resto)
+                else:
+                    m = re.search(patron, resto)
                 if not m:
                     continue
                 n_desc = len(acumulado)
-                agregar(m.group(1), m.group(2), es_descripcion=True)
+                if hasattr(patron, "search") and m.lastindex == 3:
+                    agregar(m.group(1), m.group(3), es_descripcion=True)
+                    if len(acumulado) > n_desc:
+                        acumulado[-1]["vehiculo"] = m.group(2)
+                else:
+                    agregar(m.group(1), m.group(2), es_descripcion=True)
                 if len(acumulado) <= n_desc:
                     continue
                 item = acumulado[-1]

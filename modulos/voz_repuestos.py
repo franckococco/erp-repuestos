@@ -35,6 +35,18 @@ _SINONIMOS_DICTADO = {
     "kit": "kit",
     "kits": "kit",
     "directa": "directa",
+    "pastilla": "pastilla",
+    "pastillas": "pastillas",
+    "disco": "disco",
+    "discos": "discos",
+    "filtro": "filtro",
+    "filtros": "filtros",
+    "bomba": "bomba",
+    "bombas": "bombas",
+    "radiador": "radiador",
+    "radiadores": "radiadores",
+    "embrague": "embrague",
+    "homocineticas": "homocinéticas",
 }
 
 # Modelos / referencias frecuentes en descripción (orden largo → corto)
@@ -177,13 +189,18 @@ def enriquecer_items_con_vehiculo(items: list, texto_completo: str) -> list:
         nom_cli = (extraer_cliente_orden_voz(texto_completo) or {}).get("nombre_cliente", "")
     except Exception:
         nom_cli = ""
+    from modulos.util_busqueda import parece_codigo_producto
+
     out = []
     vistos = set()
     for item in items:
         if not isinstance(item, dict):
             continue
         term = item.get("termino") or item.get("descripcion") or ""
-        v = item.get("vehiculo") or extraer_vehiculo_cerca_termino(texto_completo, str(term)) or global_v
+        es_codigo = parece_codigo_producto(str(term))
+        v = item.get("vehiculo")
+        if not v and not es_codigo:
+            v = extraer_vehiculo_cerca_termino(texto_completo, str(term)) or global_v
         term_limpio = _limpiar_termino_item_voz(str(term), vehs, nombre_cliente=str(nom_cli or ""))
         if nom_cli and term_limpio:
             palabras = [
