@@ -371,7 +371,6 @@ def render_venta_chat(
     *,
     render_carrito_grilla,
     render_panel_coincidencias_mostrador,
-    render_descarga_presupuesto_prominente,
     render_panel_cobro_mostrador,
     render_factura_arca_exitosa,
     render_credenciales_arca,
@@ -433,10 +432,8 @@ def render_venta_chat(
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         intent = obtener_intent_venta()
 
-        st.markdown(f"### Revisar {etiqueta_intent(intent)} · ${total_final:,.2f}")
+        st.markdown(f"### Revisar {etiqueta_intent(intent)}")
         render_carrito_grilla(vendedor, carrito_ui)
-        if intent == "presupuesto" and st.session_state.get("presupuesto_pdf_descarga"):
-            render_descarga_presupuesto_prominente(vendedor)
         render_panel_cobro_mostrador(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )

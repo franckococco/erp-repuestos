@@ -10,6 +10,8 @@ _SINONIMOS_DICTADO = {
     "bielete": "bieleta",
     "bieletes": "bieletas",
     "bieletta": "bieleta",
+    "biela": "bieleta",
+    "bielas": "bieletas",
     "bujete": "buje",
     "bujetes": "bujes",
     "rotula": "rótula",

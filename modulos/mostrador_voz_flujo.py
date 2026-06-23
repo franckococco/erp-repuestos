@@ -80,7 +80,7 @@ _INICIO_DESCRIPCION_VOZ = (
     "brazo", "optica", "óptica", "lampara", "lámpara", "faro", "escobilla",
     "liquido", "líquido", "junta", "juntas", "reten", "retén", "polea",
     "embrague", "crapodina", "crápodina", "cazoleta", "cazoletas", "soporte", "silent",
-    "bieleta", "bieletas", "bielete", "bieletes",
+    "bieleta", "bieletas", "bielete", "bieletes", "biela", "bielas",
 )
 
 

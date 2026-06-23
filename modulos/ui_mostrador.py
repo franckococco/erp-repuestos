@@ -545,44 +545,105 @@ def _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True):
     )
 
 
-def render_descarga_presupuesto_prominente(vendedor):
-    """Botón de descarga del PDF (la revisión de ítems es la grilla de arriba)."""
+def _finalizar_presupuesto_impreso(vendedor):
+    """Tras descargar/imprimir: vacía carrito y deja el mostrador listo para otra venta."""
+    from modulos.mostrador_estado import limpiar_mensaje_chat
+
+    limpiar_mensaje_chat()
+    _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True)
+
+
+def _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc):
+    """Generar o descargar PDF en un solo lugar (sin duplicar botones)."""
     pdf_ready = st.session_state.get("presupuesto_pdf_descarga")
-    if not pdf_ready:
-        return
-    fp_actual = _fingerprint_presupuesto(vendedor)
+    fp_actual = _fingerprint_presupuesto(vendedor, carrito)
     fp_guardado = st.session_state.get("presupuesto_pdf_fingerprint")
-    if fp_guardado and fp_actual != fp_guardado:
-        st.warning(
-            "⚠️ **Los ítems o el cliente cambiaron** desde que generaste el PDF. "
-            "Regeneralo con **Generar PDF e imprimir presupuesto** (panel derecho) "
-            "antes de descargar."
-        )
-        return
-    st.info(
-        "PDF generado. **Revisá los ítems en la grilla** (editá o eliminá con 🗑️). "
-        "Regenerá el PDF si cambiás algo. Descargá cuando esté conforme."
-    )
-    col_dl, col_nueva = st.columns([3, 1])
-    with col_dl:
+    pdf_valido = bool(pdf_ready and fp_guardado and fp_actual == fp_guardado)
+
+    if pdf_valido:
         st.download_button(
-            "⬇️ DESCARGAR / IMPRIMIR PRESUPUESTO",
+            "⬇️ Descargar / imprimir presupuesto",
             pdf_ready,
             st.session_state.get("presupuesto_pdf_nombre", "Presupuesto.pdf"),
             "application/pdf",
             type="primary",
             use_container_width=True,
-            key=f"dl_pres_top_{vendedor}",
+            key=f"dl_pres_{vendedor}",
+            on_click=_finalizar_presupuesto_impreso,
+            args=(vendedor,),
         )
-    with col_nueva:
+        st.caption("Al descargar se vacía el carrito para la próxima venta.")
+        col_regen, col_nueva = st.columns(2)
+        with col_regen:
+            if st.button(
+                "🔄 Regenerar PDF",
+                use_container_width=True,
+                key=f"regen_pres_{vendedor}",
+            ):
+                carrito_sync = _carrito_para_presupuesto(vendedor)
+                if not carrito_sync:
+                    st.error("El carrito está vacío.")
+                else:
+                    _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+                    _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
+                    st.rerun()
+        with col_nueva:
+            if st.button(
+                "✅ Nueva venta",
+                use_container_width=True,
+                key=f"nueva_pres_{vendedor}",
+            ):
+                _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True)
+                st.rerun()
+    else:
+        if pdf_ready and fp_guardado and fp_actual != fp_guardado:
+            st.caption("Los ítems cambiaron. Regenerá el PDF antes de descargar.")
         if st.button(
-            "✅ Nueva venta",
+            "⬇️ Generar presupuesto PDF",
             use_container_width=True,
-            key=f"nueva_venta_pres_{vendedor}",
-            help="Vacía pantalla y deja listo el mostrador para otra operación.",
+            type="primary",
+            key=f"btn_pdf_pres_{vendedor}",
         ):
-            _cerrar_presupuesto_mostrador(vendedor, reset_cliente=True)
-            st.rerun()
+            carrito_sync = _carrito_para_presupuesto(vendedor)
+            if not carrito_sync:
+                st.error("El carrito está vacío.")
+            else:
+                _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+                _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
+                st.rerun()
+
+    if st.button(
+        "💾 Guardar presupuesto numerado",
+        use_container_width=True,
+        key=f"btn_guardar_pres_{vendedor}",
+    ):
+        carrito_sync = _carrito_para_presupuesto(vendedor)
+        if not carrito_sync:
+            st.error("El carrito está vacío.")
+        else:
+            ok, msj, nuevo_id = guardar_presupuesto(
+                str(vendedor), st.session_state.cliente_activo, ""
+            )
+            if ok:
+                pres = obtener_presupuesto_guardado(nuevo_id) or {}
+                nro = pres.get("numero_presupuesto")
+                _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
+                pdf = generar_pdf_presupuesto_mostrador(
+                    vendedor, carrito_sync, tb, desc_porc, numero=nro,
+                )
+                cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
+                st.session_state.presupuesto_pdf_descarga = pdf
+                st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
+                    nro, cli_nom,
+                )
+                st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(
+                    vendedor, carrito_sync
+                )
+                st.session_state.presupuesto_cargado_id = nuevo_id
+                st.success(f"{msj} Descargá el PDF; el carrito se vaciará al imprimir.")
+                st.rerun()
+            else:
+                st.error(msj)
 
 
 def generar_pdf_presupuesto_mostrador(vendedor, carrito, total_bruto, desc_porc, numero=None, nota=""):
@@ -1775,8 +1836,7 @@ def render_confirmacion_pendiente_mostrador(vendedor, carrito, total_final, desc
 def _marcar_listo_para_ticket(vendedor, total_final, intent_sugerido=None):
     marcar_verificacion_mostrador(intent_sugerido)
     return (
-        f"Revisá la grilla (total ${total_final:,.2f}) y elegí "
-        "**Facturar ARCA** o **Presupuesto** en el panel derecho."
+        f"Revisá la grilla (total ${total_final:,.2f}) y usá los botones de abajo."
     )
 
 
@@ -1813,8 +1873,8 @@ def _aplicar_cambios_carrito_filas(vendedor, carrito, filas_editadas):
 
 def render_carrito_grilla(vendedor, carrito):
     """Grilla editable con tachito por fila para quitar ítems."""
-    st.markdown("**Ítems del presupuesto**")
-    st.caption("Editá **Cant.** y **Precio unit.**; usá **🗑️** en cada fila para quitar.")
+    st.markdown("**Ítems**")
+    st.caption("Editá cantidad o precio; 🗑️ para quitar. **Aplicar cambios** si modificás la grilla.")
 
     items = [i for i in carrito if isinstance(i, dict)]
     if not items:
@@ -1913,55 +1973,7 @@ def render_panel_cobro_mostrador(
         if listo_para_cerrar:
             intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
             if intent == "presupuesto":
-                st.caption(
-                    "Revisá y editá los ítems en la grilla de arriba (🗑️ para quitar). "
-                    "Generá el PDF cuando esté conforme."
-                )
-                if st.button(
-                    "⬇️ Generar PDF e imprimir presupuesto",
-                    use_container_width=True,
-                    type="primary",
-                    key=f"btn_pdf_pres_{vendedor}",
-                ):
-                    carrito_sync = _carrito_para_presupuesto(vendedor)
-                    if not carrito_sync:
-                        st.error("El carrito está vacío.")
-                    else:
-                        _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
-                        _preparar_pdf_presupuesto_borrador(vendedor, carrito_sync, tb)
-                        st.rerun()
-                if st.button(
-                    "💾 Guardar presupuesto numerado",
-                    use_container_width=True,
-                    key=f"btn_guardar_pres_{vendedor}",
-                ):
-                    carrito_sync = _carrito_para_presupuesto(vendedor)
-                    if not carrito_sync:
-                        st.error("El carrito está vacío.")
-                    else:
-                        ok, msj, nuevo_id = guardar_presupuesto(
-                            str(vendedor), st.session_state.cliente_activo, ""
-                        )
-                        if ok:
-                            pres = obtener_presupuesto_guardado(nuevo_id) or {}
-                            nro = pres.get("numero_presupuesto")
-                            _, tb = calcular_totales_carrito(carrito_sync, desc_porc)
-                            pdf = generar_pdf_presupuesto_mostrador(
-                                vendedor, carrito_sync, tb, desc_porc, numero=nro,
-                            )
-                            cli_nom = st.session_state.cliente_activo.get("nombre", "CLIENTE")
-                            st.session_state.presupuesto_pdf_descarga = pdf
-                            st.session_state.presupuesto_pdf_nombre = _nombre_archivo_presupuesto(
-                                nro, cli_nom,
-                            )
-                            st.session_state.presupuesto_pdf_fingerprint = _fingerprint_presupuesto(
-                                vendedor, carrito_sync
-                            )
-                            st.session_state.presupuesto_cargado_id = nuevo_id
-                            st.success(msj)
-                            st.rerun()
-                        else:
-                            st.error(msj)
+                _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc)
             else:
                 forma_pago = st.selectbox(
                     "Forma de pago",
@@ -1987,17 +1999,18 @@ def render_panel_cobro_mostrador(
             st.caption("Decí **listo** en la orden rápida para cerrar.")
 
         with st.expander("Más acciones", expanded=False):
-            nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
-            if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
-                ok, msj, nuevo_id = guardar_presupuesto(
-                    str(vendedor), st.session_state.cliente_activo, nota_pres
-                )
-                if ok:
-                    st.session_state.presupuesto_cargado_id = nuevo_id
-                    st.success(msj)
-                    st.rerun()
-                else:
-                    st.error(msj)
+            if intent != "presupuesto" or not listo_para_cerrar:
+                nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
+                if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
+                    ok, msj, nuevo_id = guardar_presupuesto(
+                        str(vendedor), st.session_state.cliente_activo, nota_pres
+                    )
+                    if ok:
+                        st.session_state.presupuesto_cargado_id = nuevo_id
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
             if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
                 _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
                 if err_sync:

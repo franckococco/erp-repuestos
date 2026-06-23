@@ -160,15 +160,58 @@ def filtrar_por_busqueda_flexible(items, termino_busqueda, extraer_texto, limite
 
 
 def item_coincide_vehiculo(item, vehiculo: str) -> bool:
-    """True si el ítem menciona el modelo/marca en descripción o vehículo."""
+    """True si el ítem aplica al modelo (207 ≠ 206-207-20 en medidas)."""
     if not vehiculo:
         return True
-    texto = normalizar_para_busqueda(texto_item_inventario(item))
-    v_norm = normalizar_para_busqueda(str(vehiculo))
+    if not isinstance(item, dict):
+        return False
+
+    v_norm = normalizar_para_busqueda(str(vehiculo)).strip()
+    if not v_norm:
+        return True
+
+    veh_text = normalizar_para_busqueda(
+        f"{item.get('vehiculo', '')} {item.get('vehiculos_busqueda', '')}"
+    )
+    if veh_text and veh_text not in ("universal", ""):
+        tokens = [t for t in v_norm.split() if len(t) >= 2] or [v_norm]
+        if all(termino_en_texto(t, veh_text) for t in tokens):
+            return True
+
+    desc_raw = str(item.get("descripcion", "") or "")
+    desc_norm = normalizar_para_busqueda(desc_raw)
+
+    if re.match(r"^\d{3,4}$", v_norm):
+        return _modelo_numerico_coincide(v_norm, desc_raw, desc_norm)
+
     tokens = [t for t in v_norm.split() if len(t) >= 2]
     if not tokens:
-        tokens = [v_norm] if v_norm else []
-    return all(termino_en_texto(t, texto) for t in tokens)
+        tokens = [v_norm]
+    return all(termino_en_texto(t, desc_norm) for t in tokens)
+
+
+def _modelo_numerico_coincide(modelo: str, desc_raw: str, desc_norm: str) -> bool:
+    """207 válido en «PEUGEOT 207»; inválido en «206-207-20» o listas 206/207/20."""
+    if re.search(rf"\d-{re.escape(modelo)}(-\d|\d)", desc_raw, re.I):
+        return False
+    if re.search(rf"{re.escape(modelo)}-\d", desc_raw, re.I):
+        return False
+
+    if re.search(
+        rf"(?:^|\s)(?:peugeot|citroen|fiat|ford|vw|volkswagen)\s+{re.escape(modelo)}(?:\s|$)",
+        desc_norm,
+        re.I,
+    ):
+        return True
+
+    for m in re.finditer(rf"(?<!\d){re.escape(modelo)}(?!\d)", desc_norm):
+        start, end = m.span()
+        before = desc_norm[max(0, start - 6) : start]
+        after = desc_norm[end : end + 6]
+        if re.search(r"\d\s*$", before) and re.search(r"^\s*\d", after):
+            continue
+        return True
+    return False
 
 
 def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_texto=None):
@@ -206,4 +249,4 @@ def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_tex
             scored.sort(key=lambda x: -x[0])
             return [it for _, it in scored[:25]]
 
-    return base
+    return []

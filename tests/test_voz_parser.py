@@ -8,6 +8,7 @@ from modulos.voz_repuestos import corregir_termino_repuesto
 class TestVozParser(unittest.TestCase):
     def test_sinonimo_bielete(self):
         self.assertEqual(corregir_termino_repuesto("bielete"), "bieleta")
+        self.assertEqual(corregir_termino_repuesto("biela"), "bieleta")
 
     def test_cliente_al_final_presupuesto(self):
         r = extraer_cliente_orden_voz(
