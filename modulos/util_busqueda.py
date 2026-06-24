@@ -292,3 +292,8 @@ def buscar_en_inventario_mostrador(items, termino, extraer_texto=None):
     if estrictos:
         return estrictos
     return filtrar_por_busqueda_flexible(items, term_prep, ext, limite=25)
+
+
+def buscar_en_inventario(items, termino, extraer_texto=None):
+    """Punto único de búsqueda en inventario (mostrador y asistente)."""
+    return buscar_en_inventario_mostrador(items, termino, extraer_texto)

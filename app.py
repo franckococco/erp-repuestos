@@ -117,7 +117,7 @@ try:
         filtrar_por_busqueda,
         filtrar_por_busqueda_flexible,
         texto_item_inventario,
-        buscar_en_inventario_mostrador,
+        buscar_en_inventario,
     )
 
     if not st.session_state._firebase_ok:
@@ -257,10 +257,6 @@ def agrupar_por_maestro(items):
             }
         grupos[key]['variantes'].append(item)
     return grupos
-
-
-def buscar_en_inventario(items, termino):
-    return buscar_en_inventario_mostrador(items, termino, texto_item_inventario)
 
 
 def filtrar_inventario(items, termino_busqueda):
