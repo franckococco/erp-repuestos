@@ -2,7 +2,13 @@
 import unicodedata
 import re
 
-from modulos.ia_asistente import normalizar_texto_basico
+
+def _normalizar_texto_basico(texto):
+    if not texto:
+        return ""
+    texto = str(texto).lower()
+    texto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
 def normalizar_para_busqueda(texto):
@@ -240,7 +246,7 @@ def preparar_busqueda_repuesto_vehiculo(texto: str):
     vehs = extraer_vehiculos_de_texto(raw)
     veh = vehs[0] if len(vehs) == 1 else None
 
-    t = normalizar_texto_basico(raw).lower()
+    t = _normalizar_texto_basico(raw).lower()
     for v in vehs:
         t = re.sub(rf"\b{re.escape(v)}\b", " ", t, flags=re.I)
     t = re.sub(r"\b(?:de|del|para|el|la)\s+", " ", t)
