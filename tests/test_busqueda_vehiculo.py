@@ -36,6 +36,18 @@ INVENTARIO_FAKE = [
         "vehiculo": "PEUGEOT",
     },
     {
+        "id": "B3",
+        "codigo": "411314",
+        "descripcion": "BIELETA BARRA ESTABILIZADORA VW POINTER",
+        "vehiculo": "VOLKSWAGEN",
+    },
+    {
+        "id": "B4",
+        "codigo": "BUJE-B",
+        "descripcion": "BUJE BIELETA BARRA ESTAB VW",
+        "vehiculo": "UNIVERSAL",
+    },
+    {
         "id": "G1",
         "codigo": "7212SQ0-O",
         "descripcion": "GANCHO DE REMOLQUE ORIGINA 207-",
@@ -68,14 +80,25 @@ class TestBusquedaVehiculo(unittest.TestCase):
         self.assertTrue(any(r["id"] == "R1_SKF" for r in res))
 
     def test_gancho_207_no_es_modelo(self):
-        self.assertFalse(item_coincide_vehiculo(INVENTARIO_FAKE[4], "207"))
+        self.assertFalse(item_coincide_vehiculo(INVENTARIO_FAKE[5], "207"))
 
     def test_bieleta_suspension_207_mostrador(self):
         res = buscar_en_inventario_mostrador(INVENTARIO_FAKE, "bieleta de suspension 207")
         ids = [r["id"] for r in res]
         self.assertIn("B1_GEN", ids)
+        self.assertIn("B2_GEN", ids)
+        self.assertIn("B3", ids)
+        self.assertIn("B4", ids)
         self.assertNotIn("D1", ids)
         self.assertNotIn("G1", ids)
+        self.assertNotIn("R1_SKF", ids)
+        self.assertEqual(ids[0], "B1_GEN")
+
+    def test_bieleta_suspension_sin_vehiculo(self):
+        res = buscar_en_inventario_mostrador(INVENTARIO_FAKE, "bieleta de suspension")
+        ids = [r["id"] for r in res]
+        self.assertIn("B3", ids)
+        self.assertIn("B4", ids)
         self.assertNotIn("R1_SKF", ids)
 
 

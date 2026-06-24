@@ -18,7 +18,14 @@ key_ai = os.getenv("ANTHROPIC_API_KEY")
 if not key_ai and "ANTHROPIC_API_KEY" in st.secrets:
     key_ai = st.secrets["ANTHROPIC_API_KEY"]
 
-cliente = Anthropic(api_key=key_ai) if key_ai else None
+cliente: Anthropic | None = Anthropic(api_key=key_ai) if key_ai else None
+
+
+def _anthropic_client() -> Anthropic:
+    if cliente is None:
+        raise Exception("Falta la API Key de Anthropic.")
+    return cliente
+
 
 def pil_a_base64(imagen_pil):
     buffered = BytesIO()
@@ -36,10 +43,8 @@ def _extraer_json_respuesta(texto_limpio):
 
 
 def _procesar_documento_ia(imagen_pil, prompt):
-    if not cliente:
-        raise Exception("Falta la API Key de Anthropic.")
     imagen_b64 = pil_a_base64(imagen_pil)
-    respuesta = cliente.messages.create(
+    respuesta = _anthropic_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
         temperature=0.0,

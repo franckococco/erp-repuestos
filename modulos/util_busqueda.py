@@ -232,6 +232,96 @@ def _modelo_numerico_coincide(modelo: str, desc_raw: str, desc_norm: str) -> boo
     return False
 
 
+_STOPWORDS_BUSQUEDA = frozenset({
+    "de", "del", "para", "el", "la", "los", "las", "un", "una", "con", "sin",
+    "y", "o", "en", "al", "the", "buscar", "busca", "codigo", "cod",
+})
+
+
+def _palabras_busqueda_repuesto(termino: str):
+    from modulos.voz_repuestos import corregir_termino_repuesto
+
+    t = normalizar_para_busqueda(corregir_termino_repuesto(str(termino or "")))
+    return [p for p in t.split() if len(p) >= 2 and p not in _STOPWORDS_BUSQUEDA]
+
+
+def _ancla_y_opcionales_busqueda(termino: str):
+    """Palabra principal del repuesto (bieleta) y calificadores opcionales (suspension)."""
+    from modulos.voz_repuestos import corregir_palabra_dictada, es_palabra_repuesto
+
+    palabras = _palabras_busqueda_repuesto(termino)
+    if not palabras:
+        return str(termino or "").strip(), []
+
+    ancla = None
+    for p in palabras:
+        cp = corregir_palabra_dictada(p)
+        if es_palabra_repuesto(cp) or es_palabra_repuesto(p):
+            ancla = cp
+            break
+    if not ancla:
+        ancla = max(palabras, key=len)
+
+    ancla_norm = corregir_palabra_dictada(ancla)
+    opcionales = [
+        p for p in palabras
+        if p != ancla and corregir_palabra_dictada(p) != ancla_norm
+    ]
+    return ancla_norm, opcionales
+
+
+def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
+    """
+    Muestra todo lo que contiene la palabra ancla del repuesto (ej. bieleta).
+    Palabras extra (suspension) solo suben el ranking, no excluyen.
+    """
+    term_limpio = _limpiar_prefijo_busqueda(str(termino or "").strip())
+    if not term_limpio:
+        return []
+
+    if parece_codigo_producto(term_limpio):
+        exactos = buscar_codigo_exacto_inventario(items, term_limpio)
+        if exactos:
+            return exactos[:limite]
+
+    ancla, opcionales = _ancla_y_opcionales_busqueda(term_limpio)
+    if not ancla:
+        return filtrar_por_busqueda_flexible(items, term_limpio, extraer_texto, limite=limite)
+
+    scored = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        texto_norm = normalizar_para_busqueda(extraer_texto(item))
+        if not termino_en_texto(ancla, texto_norm):
+            continue
+        score = 10
+        for op in opcionales:
+            if termino_en_texto(op, texto_norm):
+                score += 5
+        scored.append((score, item))
+
+    if not scored:
+        return filtrar_por_busqueda_flexible(items, term_limpio, extraer_texto, limite=limite)
+
+    scored.sort(key=lambda x: -x[0])
+    return [it for _, it in scored[:limite]]
+
+
+def _ordenar_por_vehiculo(items, vehiculo, extraer_texto=None):
+    """Ítems que coinciden con el vehículo primero; el resto después (sin ocultar)."""
+    if not vehiculo or not items:
+        return list(items)
+    con_veh = []
+    resto = []
+    for item in items:
+        if item_coincide_vehiculo(item, vehiculo):
+            con_veh.append(item)
+        else:
+            resto.append(item)
+    return con_veh + resto
+
+
 def preparar_busqueda_repuesto_vehiculo(texto: str):
     """
     Separa repuesto y vehículo en consultas tipo «bieleta suspension 207».
@@ -259,7 +349,8 @@ def preparar_busqueda_repuesto_vehiculo(texto: str):
 
 def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_texto=None):
     """
-    Búsqueda por repuesto + filtro opcional de vehículo (ej. bieleta + 207).
+    Búsqueda por repuesto + vehículo opcional.
+    Ancla en palabra del repuesto; el vehículo ordena (207 primero) sin ocultar el resto.
     """
     from modulos.voz_repuestos import corregir_termino_repuesto
 
@@ -268,30 +359,17 @@ def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_tex
     if not term:
         return []
 
-    base = filtrar_por_busqueda(items, term, ext)
-    if not base:
-        base = filtrar_por_busqueda_flexible(items, term, ext, limite=25)
-
+    base = buscar_por_ancla_repuesto(items, term, ext, limite=50)
     if not vehiculo:
         return base
-
-    con_veh = [i for i in base if item_coincide_vehiculo(i, vehiculo)]
-    if con_veh:
-        return con_veh
-
-    return []
+    return _ordenar_por_vehiculo(base, vehiculo, ext)[:50]
 
 
 def buscar_en_inventario_mostrador(items, termino, extraer_texto=None):
-    """Búsqueda de mostrador: separa vehículo del término y filtra sin falsos positivos."""
+    """Búsqueda de mostrador: ancla en repuesto; vehículo opcional solo reordena."""
     ext = extraer_texto or texto_item_inventario
     term_prep, veh = preparar_busqueda_repuesto_vehiculo(termino)
-    if veh:
-        return buscar_en_inventario_con_vehiculo(items, term_prep, veh, ext)
-    estrictos = filtrar_por_busqueda(items, term_prep, ext)
-    if estrictos:
-        return estrictos
-    return filtrar_por_busqueda_flexible(items, term_prep, ext, limite=25)
+    return buscar_en_inventario_con_vehiculo(items, term_prep, veh, ext)
 
 
 def buscar_en_inventario(items, termino, extraer_texto=None):

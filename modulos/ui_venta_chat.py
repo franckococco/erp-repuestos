@@ -296,10 +296,10 @@ def _procesar_orden_chat(
             return False
         encontrados = buscar_en_inventario(inventario, termino)
         if encontrados:
-            st.session_state.resultados_ia_mostrador = encontrados[:10]
+            st.session_state.resultados_ia_mostrador = encontrados[:25]
             st.session_state.msg_ia_mostrador = f"Encontré opciones para '{termino}':"
             _chat_orden(
-                orden, f"{len(encontrados[:10])} opciones para '{termino}'. Elegí una.", "warning"
+                orden, f"{len(encontrados[:25])} opciones para '{termino}'. Elegí una.", "warning"
             )
             return False
         _chat_orden(
