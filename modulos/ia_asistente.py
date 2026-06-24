@@ -144,6 +144,8 @@ def parse_cargar_producto_rapido(texto_usuario):
         return None
 
     ubi = _extraer_ubicacion_orden(t)
+    from modulos.normalizar_carga_producto import extraer_ubicacion_desde_texto, extraer_stock_desde_texto
+    ubi = {**ubi, **extraer_ubicacion_desde_texto(t)}
     t_sin_ubi = t
     for pat in (
         r"\bpasillo\s+\d+",
@@ -157,6 +159,14 @@ def parse_cargar_producto_rapido(texto_usuario):
 
     codigo = descripcion = None
     stock = 1
+
+    num_pal = r"(?:\d+|cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)"
+    m_cant = re.search(rf"\bcantidad\s+({num_pal})\b", t_sin_ubi)
+    if m_cant:
+        from modulos.normalizar_carga_producto import _entero_ubi
+        v = _entero_ubi(m_cant.group(1))
+        if v is not None and v > 0:
+            stock = v
 
     m = re.search(
         r"(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
@@ -177,6 +187,10 @@ def parse_cargar_producto_rapido(texto_usuario):
         if not m2:
             return None
         codigo, descripcion = m2.group(1), m2.group(2).strip()
+        if stock == 1:
+            st_extra = extraer_stock_desde_texto(t_sin_ubi)
+            if st_extra:
+                stock = st_extra
 
     descripcion = re.sub(r"\s+", " ", descripcion).strip(" ,.-")
     if not descripcion or len(descripcion) < 3:

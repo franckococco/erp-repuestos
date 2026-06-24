@@ -69,6 +69,9 @@ def extraer_marca_desde_texto(texto: str, marca_actual: str = "") -> str:
     if mar and mar != "GENERICO":
         return mar
     t = str(texto or "").upper()
+    m = re.search(r"\bMARCA\s+([A-Z0-9][A-Z0-9\s\-]{1,40}?)(?=\s+(?:cantidad|vehiculo|vehículo|pasillo|piso|modulo|módulo|fila|fondo|stock|auto)\b|$)", t, re.I)
+    if m:
+        return sanitizar_clave_marca(re.sub(r"\s+", " ", m.group(1)).strip())
     m = re.search(r"\bMARCA\s+([A-Z0-9][A-Z0-9\-]{1,20})\b", t)
     if m:
         return sanitizar_clave_marca(m.group(1))
@@ -103,6 +106,23 @@ def _quitar_ruido_descripcion(desc: str, vehiculos: List[str]) -> str:
     return d
 
 
+def extraer_stock_desde_texto(texto: str) -> Optional[int]:
+    """cantidad 4, 4 unidades, cantidad cuatro…"""
+    t = normalizar_texto_basico(str(texto or "")).lower()
+    num = r"(?:\d+|cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)"
+    for pat in (
+        rf"\bcantidad\s+({num})\b",
+        rf"\bstock\s+({num})\b",
+        rf"\b({num})\s+unidad",
+    ):
+        m = re.search(pat, t)
+        if m:
+            v = _entero_ubi(m.group(1))
+            if v is not None and v > 0:
+                return v
+    return None
+
+
 def extraer_stock_critico_desde_texto(texto: str) -> Optional[int]:
     t = normalizar_texto_basico(str(texto or "")).lower()
     num = r"(?:\d+|cero|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)"
@@ -132,12 +152,10 @@ def normalizar_orden_cargar_producto(
 
     ubi_txt = extraer_ubicacion_desde_texto(blob)
     for k in ("pasillo", "piso", "modulo", "fila", "fondo"):
-        if ubi_txt.get(k) is not None:
+        if k in ubi_txt:
             out[k] = ubi_txt[k]
-        elif out.get(k) is not None:
-            v = _entero_ubi(out.get(k))
-            if v is not None:
-                out[k] = v
+        else:
+            out.pop(k, None)
 
     sc = extraer_stock_critico_desde_texto(blob)
     if sc is not None:
@@ -160,7 +178,16 @@ def normalizar_orden_cargar_producto(
     out["marca"] = marca
 
     stock_raw = out.get("stock")
-    if stock_raw is None and texto_original:
+    extraido = extraer_stock_desde_texto(blob)
+    if extraido is not None:
+        out["stock"] = extraido
+    elif stock_raw is not None:
+        try:
+            out["stock"] = max(0, int(stock_raw))
+        except (TypeError, ValueError):
+            pass
+
+    if out.get("stock") is None and texto_original:
         m = re.search(
             r"\b(\d{1,4})\s*(?:unidad(?:es)?|u\.?)\b",
             normalizar_texto_basico(texto_original),

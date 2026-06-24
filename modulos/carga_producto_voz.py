@@ -34,7 +34,7 @@ def _entero_stock_critico(val):
         return STOCK_CRITICO_DEFAULT
 
 
-def validar_y_preparar_carga_producto_voz(datos):
+def validar_y_preparar_carga_producto_voz(datos, texto_original=None):
     """
     Valida una orden cargar_producto del asistente.
     Retorna (ok, payload, mensaje_resumen).
@@ -42,7 +42,8 @@ def validar_y_preparar_carga_producto_voz(datos):
     if not isinstance(datos, dict):
         return False, None, "Datos inválidos."
 
-    datos = normalizar_orden_cargar_producto(dict(datos))
+    blob = str(texto_original or datos.get("texto_original") or "").strip()
+    datos = normalizar_orden_cargar_producto(dict(datos), texto_original=blob or None)
 
     codigo = normalizar_codigo_proveedor(datos.get("codigo", ""))
     descripcion = str(datos.get("descripcion", "") or "").strip()
@@ -80,13 +81,11 @@ def validar_y_preparar_carga_producto_voz(datos):
         "precio_base": precio,
         "cuit_proveedor": "0",
         "recargo": 0.0,
-        "pasillo": _entero_ubicacion(datos.get("pasillo")),
-        "piso": _entero_ubicacion(datos.get("piso")),
-        "modulo": _entero_ubicacion(datos.get("modulo")),
-        "fila": _entero_ubicacion(datos.get("fila")),
-        "fondo": _entero_ubicacion(datos.get("fondo")),
         "solo_variante": False,
     }
+    for k in ("pasillo", "piso", "modulo", "fila", "fondo"):
+        if k in datos:
+            payload[k] = _entero_ubicacion(datos.get(k))
 
     existente = obtener_producto_por_codigo(codigo)
     desc_existente = ""
@@ -102,12 +101,17 @@ def validar_y_preparar_carga_producto_voz(datos):
         payload["id_maestro"] = existente.get("id", codigo)
 
     veh_texto = vehiculos_a_texto(vehiculos)
-    tiene_ubi = any(payload[k] for k in ("pasillo", "piso", "modulo", "fila", "fondo"))
-    ubi_txt = (
-        f"Pasillo {payload['pasillo']}, Piso {payload['piso']}, "
-        f"Módulo {payload['modulo']}, Fila {payload['fila']}, Fondo {payload['fondo']}"
-        if tiene_ubi else "Sin ubicación (0/0/0/0/0)"
-    )
+    partes_ubi = []
+    for key, label in (
+        ("pasillo", "Pasillo"),
+        ("piso", "Piso"),
+        ("modulo", "Módulo"),
+        ("fila", "Fila"),
+        ("fondo", "Fondo"),
+    ):
+        if key in payload:
+            partes_ubi.append(f"{label} {payload[key]}")
+    ubi_txt = ", ".join(partes_ubi) if partes_ubi else "Sin ubicación"
     precio_txt = f"${precio:,.0f}" if precio > 0 else "Sin precio (completar después)"
 
     msg = (

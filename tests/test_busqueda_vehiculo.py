@@ -1,7 +1,11 @@
 """Tests de búsqueda repuesto + vehículo."""
 import unittest
 
-from modulos.util_busqueda import buscar_en_inventario_con_vehiculo, item_coincide_vehiculo
+from modulos.util_busqueda import (
+    buscar_en_inventario_con_vehiculo,
+    buscar_en_inventario_mostrador,
+    item_coincide_vehiculo,
+)
 from modulos.voz_repuestos import corregir_termino_repuesto
 
 
@@ -24,6 +28,18 @@ INVENTARIO_FAKE = [
         "codigo": "B111",
         "descripcion": "BIELETA GENERICA",
         "vehiculo": "UNIVERSAL",
+    },
+    {
+        "id": "D1",
+        "codigo": "4246W70-H",
+        "descripcion": "DISCO FRENO DEL Ø266mm 207-307-",
+        "vehiculo": "PEUGEOT",
+    },
+    {
+        "id": "G1",
+        "codigo": "7212SQ0-O",
+        "descripcion": "GANCHO DE REMOLQUE ORIGINA 207-",
+        "vehiculo": "PEUGEOT",
     },
 ]
 
@@ -50,6 +66,17 @@ class TestBusquedaVehiculo(unittest.TestCase):
     def test_sin_vehiculo_no_filtra_por_207(self):
         res = buscar_en_inventario_con_vehiculo(INVENTARIO_FAKE, "ruleman", None)
         self.assertTrue(any(r["id"] == "R1_SKF" for r in res))
+
+    def test_gancho_207_no_es_modelo(self):
+        self.assertFalse(item_coincide_vehiculo(INVENTARIO_FAKE[4], "207"))
+
+    def test_bieleta_suspension_207_mostrador(self):
+        res = buscar_en_inventario_mostrador(INVENTARIO_FAKE, "bieleta de suspension 207")
+        ids = [r["id"] for r in res]
+        self.assertIn("B1_GEN", ids)
+        self.assertNotIn("D1", ids)
+        self.assertNotIn("G1", ids)
+        self.assertNotIn("R1_SKF", ids)
 
 
 if __name__ == "__main__":

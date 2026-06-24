@@ -2,6 +2,8 @@
 import unicodedata
 import re
 
+from modulos.ia_asistente import normalizar_texto_basico
+
 
 def normalizar_para_busqueda(texto):
     if not texto:
@@ -191,10 +193,16 @@ def item_coincide_vehiculo(item, vehiculo: str) -> bool:
 
 
 def _modelo_numerico_coincide(modelo: str, desc_raw: str, desc_norm: str) -> bool:
-    """207 válido en «PEUGEOT 207»; inválido en «206-207-20» o listas 206/207/20."""
+    """207 válido en «PEUGEOT 207»; inválido en «206-207-20», «P207» o códigos «207-»."""
+    if re.search(rf"{re.escape(modelo)}-\s*$", desc_raw, re.I):
+        return False
+    if re.search(rf"{re.escape(modelo)}-\s*$", desc_norm):
+        return False
     if re.search(rf"\d-{re.escape(modelo)}(-\d|\d)", desc_raw, re.I):
         return False
     if re.search(rf"{re.escape(modelo)}-\d", desc_raw, re.I):
+        return False
+    if re.search(rf"[a-z]{re.escape(modelo)}(?!\d)", desc_norm, re.I):
         return False
 
     if re.search(
@@ -210,8 +218,37 @@ def _modelo_numerico_coincide(modelo: str, desc_raw: str, desc_norm: str) -> boo
         after = desc_norm[end : end + 6]
         if re.search(r"\d\s*$", before) and re.search(r"^\s*\d", after):
             continue
+        if re.search(r"^-\d", after):
+            continue
+        if before and before[-1].isalpha():
+            continue
         return True
     return False
+
+
+def preparar_busqueda_repuesto_vehiculo(texto: str):
+    """
+    Separa repuesto y vehículo en consultas tipo «bieleta suspension 207».
+    Retorna (termino_repuesto, vehiculo_o_None).
+    """
+    from modulos.voz_repuestos import extraer_vehiculos_de_texto, es_referencia_vehiculo
+
+    raw = str(texto or "").strip()
+    if not raw:
+        return "", None
+
+    vehs = extraer_vehiculos_de_texto(raw)
+    veh = vehs[0] if len(vehs) == 1 else None
+
+    t = normalizar_texto_basico(raw).lower()
+    for v in vehs:
+        t = re.sub(rf"\b{re.escape(v)}\b", " ", t, flags=re.I)
+    t = re.sub(r"\b(?:de|del|para|el|la)\s+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+
+    palabras = [p for p in t.split() if len(p) >= 2 and not es_referencia_vehiculo(p)]
+    termino = " ".join(palabras).strip() or raw
+    return termino, veh
 
 
 def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_texto=None):
@@ -236,17 +273,16 @@ def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_tex
     if con_veh:
         return con_veh
 
-    palabras = [p for p in normalizar_para_busqueda(term).split() if len(p) >= 3]
-    solo_veh = [i for i in (items or []) if item_coincide_vehiculo(i, vehiculo)]
-    if palabras and solo_veh:
-        scored = []
-        for item in solo_veh:
-            texto = normalizar_para_busqueda(ext(item))
-            hits = sum(1 for p in palabras if termino_en_texto(p, texto))
-            if hits:
-                scored.append((hits, item))
-        if scored:
-            scored.sort(key=lambda x: -x[0])
-            return [it for _, it in scored[:25]]
-
     return []
+
+
+def buscar_en_inventario_mostrador(items, termino, extraer_texto=None):
+    """Búsqueda de mostrador: separa vehículo del término y filtra sin falsos positivos."""
+    ext = extraer_texto or texto_item_inventario
+    term_prep, veh = preparar_busqueda_repuesto_vehiculo(termino)
+    if veh:
+        return buscar_en_inventario_con_vehiculo(items, term_prep, veh, ext)
+    estrictos = filtrar_por_busqueda(items, term_prep, ext)
+    if estrictos:
+        return estrictos
+    return filtrar_por_busqueda_flexible(items, term_prep, ext, limite=25)

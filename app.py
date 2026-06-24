@@ -259,10 +259,8 @@ def agrupar_por_maestro(items):
 
 
 def buscar_en_inventario(items, termino):
-    estrictos = filtrar_por_busqueda(items, termino, texto_item_inventario)
-    if estrictos:
-        return estrictos
-    return filtrar_por_busqueda_flexible(items, termino, texto_item_inventario)
+    from modulos.util_busqueda import buscar_en_inventario_mostrador, texto_item_inventario
+    return buscar_en_inventario_mostrador(items, termino, texto_item_inventario)
 
 
 def filtrar_inventario(items, termino_busqueda):
@@ -962,7 +960,9 @@ elif pagina == "asistente":
                     st.session_state.ultimo_estado = "success" if exito else "error"
 
             elif accion == "cargar_producto":
-                ok_prep, payload, msg_prep = validar_y_preparar_carga_producto_voz(respuesta_json)
+                ok_prep, payload, msg_prep = validar_y_preparar_carga_producto_voz(
+                    respuesta_json, texto_original=orden_usuario
+                )
                 if ok_prep and payload:
                     st.session_state.producto_pendiente_voz = {
                         "payload": payload,
