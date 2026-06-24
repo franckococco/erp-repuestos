@@ -764,24 +764,8 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
 
 
 def _finalizar_revision_si_listo(vendedor):
-    """Tras completar cola de ambiguos: PDF presupuesto si corresponde."""
-    if not st.session_state.get("mostrador_listo_para_ticket"):
-        return
-    intent = st.session_state.get("mostrador_intent_sugerido")
-    if intent != "presupuesto":
-        return
-    from modulos.ui_mostrador import (
-        _carrito_para_presupuesto,
-        _preparar_pdf_presupuesto_borrador,
-        calcular_totales_carrito,
-    )
-
-    carrito_n = _carrito_para_presupuesto(vendedor)
-    if not carrito_n:
-        return
-    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-    _, tb = calcular_totales_carrito(carrito_n, desc_porc)
-    _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
+    """Tras completar cola de ambiguos: la grilla de revisión queda activa vía marcar_verificacion_mostrador."""
+    return
 
 
 def _tras_agregar_coincidencia_voz(vendedor, buscar_en_inventario, obtener_inventario, agregar_al_carrito):

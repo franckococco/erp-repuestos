@@ -93,12 +93,13 @@ def _procesar_orden_chat(
             st.session_state.resultados_ia_mostrador = None
             intent = resp.get("intent_sugerido")
             if intent == "presupuesto" and resp.get("ir_verificacion"):
-                carrito_n = _carrito_para_presupuesto(vendedor)
-                if carrito_n:
-                    _, tb = calcular_totales_carrito(carrito_n, desc_porc)
-                    _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
-                    msj = f"{msj} Revisá los ítems y usá **Imprimir presupuesto**."
+                marcar_verificacion_mostrador("presupuesto")
+                msj = (
+                    f"{msj} Revisá cantidades y precios en la grilla; "
+                    "después usá **Generar presupuesto PDF**."
+                )
             elif intent in ("factura_b", "factura_a") and resp.get("ir_verificacion"):
+                marcar_verificacion_mostrador(intent)
                 msj = f"{msj} Revisá y pulsá **Facturar e imprimir**."
             _chat_orden(orden,msj, "ok")
             return True
@@ -159,7 +160,6 @@ def _procesar_orden_chat(
         _, tb = calcular_totales_carrito(carrito_n, desc_porc)
         _, tf = calcular_totales_carrito(carrito_n, desc_porc)
         _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
-        marcar_verificacion_mostrador("presupuesto")
         _chat_orden(
             orden,
             f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.",
@@ -176,10 +176,10 @@ def _procesar_orden_chat(
         intent = resp.get("intent_sugerido")
         _marcar_listo_para_ticket(vendedor, tf, intent)
         if intent == "presupuesto":
-            _, tb = calcular_totales_carrito(carrito_n, desc_porc)
-            _preparar_pdf_presupuesto_borrador(vendedor, carrito_n, tb)
             _chat_orden(
-                orden, f"Presupuesto emitido (${tf:,.2f}). Descargá el PDF arriba.", "ok"
+                orden,
+                f"Revisá el presupuesto (${tf:,.2f}). Editá cantidades o precios y generá el PDF.",
+                "ok",
             )
         else:
             _chat_orden(orden,f"Listo (${tf:,.2f}). Revisá el comprobante.", "ok")
