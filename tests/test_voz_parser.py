@@ -192,6 +192,30 @@ class TestVozParser(unittest.TestCase):
         self.assertIn("PABLO CASTELLANOS", interp["resumen"])
         self.assertNotIn("CASTELLANOS 111", interp["resumen"])
 
+    def test_juan_guzman_bieleta_sin_unidades(self):
+        t = "haceme un presupuesto para juan guzman bieleta de suspension 207"
+        self.assertEqual(
+            extraer_cliente_orden_voz(t).get("nombre_cliente"),
+            "JUAN GUZMAN",
+        )
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertIn("BIELETA", items[0]["termino"])
+        self.assertEqual(items[0]["cantidad"], 1)
+        self.assertEqual(items[0].get("vehiculo"), "207")
+
+    def test_juan_guzman_de_bieleta_tres_unidades(self):
+        t = "haceme un presupuesto para juan guzamn de bieleta de suspension 3 unidades"
+        self.assertEqual(
+            extraer_cliente_orden_voz(t).get("nombre_cliente"),
+            "JUAN GUZAMN",
+        )
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "BIELETA SUSPENSION")
+        self.assertEqual(items[0]["cantidad"], 3)
+        self.assertNotIn("GUZAMN", items[0]["termino"])
+
 
 if __name__ == "__main__":
     unittest.main()

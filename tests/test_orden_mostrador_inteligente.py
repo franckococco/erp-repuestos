@@ -41,6 +41,23 @@ class TestOrdenMostradorInteligente(unittest.TestCase):
         self.assertEqual(norm["items"][0]["termino"], "BIELETA SUSPENSION")
         self.assertEqual(norm["items"][0]["vehiculo"], "207")
 
+    def test_fusionar_prefiere_cliente_local_completo(self):
+        from modulos.orden_mostrador_inteligente import fusionar_con_parser_local, normalizar_accion_mostrador
+
+        groq = {
+            "accion": "flujo_factura",
+            "nombre_cliente": "JUAN",
+            "intent_sugerido": "presupuesto",
+            "items": [{"termino": "GUZAMN BIELETA SUSPENSION", "cantidad": 3}],
+        }
+        texto = "haceme un presupuesto para juan guzamn de bieleta de suspension 3 unidades"
+        merged = normalizar_accion_mostrador(
+            fusionar_con_parser_local(groq, texto),
+            texto,
+        )
+        self.assertEqual(merged.get("nombre_cliente"), "JUAN GUZAMN")
+        self.assertEqual(merged["items"][0]["termino"], "BIELETA SUSPENSION")
+
 
 if __name__ == "__main__":
     unittest.main()

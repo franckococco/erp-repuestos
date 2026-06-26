@@ -133,6 +133,57 @@ def _normalizar_items(items: Any) -> list[dict]:
     return out
 
 
+def _elegir_mejor_nombre_cliente(groq_nombre, local_nombre) -> Optional[str]:
+    g = str(groq_nombre or "").strip().upper()
+    l = str(local_nombre or "").strip().upper()
+    if not l:
+        return g or None
+    if not g:
+        return l
+    if len(l.split()) > len(g.split()):
+        return l
+    if l.startswith(g) or g in l.split():
+        return l
+    return g
+
+
+def _limpiar_termino_de_cliente(termino: str, nombre_cliente: str) -> str:
+    if not nombre_cliente or not termino:
+        return termino
+    tokens_cli = set(nombre_cliente.upper().split())
+    tokens_term = [t for t in str(termino).upper().split() if t not in tokens_cli]
+    limpio = " ".join(tokens_term).strip()
+    return limpio if len(limpio) >= 2 else termino
+
+
+def _items_parecen_contaminados(items, nombre_cliente: str) -> bool:
+    if not nombre_cliente or not items:
+        return False
+    tokens = nombre_cliente.upper().split()
+    if len(tokens) < 2:
+        return False
+    apellido = tokens[-1]
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        partes = str(it.get("termino", "")).upper().split()
+        if apellido in partes and not all(p in tokens for p in partes):
+            return True
+    return False
+
+
+def _limpiar_items_de_cliente(items, nombre_cliente: str) -> list[dict]:
+    out = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        it = dict(raw)
+        term = _limpiar_termino_de_cliente(str(it.get("termino", "")), nombre_cliente)
+        it["termino"] = term
+        out.append(it)
+    return out
+
+
 def normalizar_accion_mostrador(data: dict, texto_original: str = "") -> dict:
     """Convierte respuesta Groq/local a contrato rígido del mostrador."""
     from modulos.mostrador_voz_flujo import (
@@ -171,6 +222,16 @@ def normalizar_accion_mostrador(data: dict, texto_original: str = "") -> dict:
         items = _normalizar_items(flujo.get("items"))
         if not items and texto:
             items = extraer_items_orden_voz(texto)
+        nombre_cli = flujo.get("nombre_cliente")
+        if texto and nombre_cli:
+            cli_local = extraer_cliente_orden_voz(texto).get("nombre_cliente")
+            nombre_cli = _elegir_mejor_nombre_cliente(nombre_cli, cli_local) or nombre_cli
+            flujo["nombre_cliente"] = nombre_cli
+        if items and nombre_cli and _items_parecen_contaminados(items, nombre_cli):
+            items = extraer_items_orden_voz(texto) if texto else items
+        if items and nombre_cli:
+            items = _limpiar_items_de_cliente(items, nombre_cli)
+            items = _normalizar_items(items)
         flujo["items"] = items
 
         intent = flujo.get("intent_sugerido")
@@ -243,15 +304,24 @@ def fusionar_con_parser_local(groq_data: dict, texto_original: str) -> dict:
     if out.get("accion") != "flujo_factura":
         return out
 
-    if not out.get("nombre_cliente") and not out.get("consumidor_final"):
-        cli = local.get("cliente") or {}
-        if cli.get("nombre_cliente"):
-            out["nombre_cliente"] = cli["nombre_cliente"]
-        elif cli.get("consumidor_final"):
-            out["consumidor_final"] = True
+    cli = local.get("cliente") or {}
+    local_cli = cli.get("nombre_cliente")
+    mejor_cli = _elegir_mejor_nombre_cliente(out.get("nombre_cliente"), local_cli)
+    if mejor_cli:
+        out["nombre_cliente"] = mejor_cli
+    elif cli.get("consumidor_final"):
+        out["consumidor_final"] = True
 
-    if not out.get("items") and local.get("items"):
-        out["items"] = local["items"]
+    local_items = local.get("items") or []
+    groq_items = out.get("items") or []
+    if local_items and (
+        not groq_items or _items_parecen_contaminados(groq_items, mejor_cli or local_cli or "")
+    ):
+        out["items"] = local_items
+    elif groq_items:
+        out["items"] = _limpiar_items_de_cliente(groq_items, mejor_cli or local_cli or "")
+    elif local_items:
+        out["items"] = local_items
 
     if not out.get("intent_sugerido") and local.get("intent"):
         out["intent_sugerido"] = local["intent"]

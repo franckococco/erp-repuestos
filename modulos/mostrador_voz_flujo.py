@@ -470,6 +470,10 @@ def extraer_items_orden_voz(texto):
                 cant = max(1, int(cantidad))
             except (TypeError, ValueError):
                 return
+            from modulos.voz_repuestos import es_referencia_vehiculo
+
+            if es_referencia_vehiculo(str(cant)):
+                return
             if not es_descripcion and _norm_busq(term) in veh_set and re.match(r"^\d{3,4}$", _norm_busq(term)):
                 return
             if es_descripcion:
@@ -605,7 +609,45 @@ def extraer_items_orden_voz(texto):
 
     from modulos.voz_repuestos import enriquecer_items_con_vehiculo
 
+    if not items:
+        fallback = _extraer_item_sin_cantidad_explicita(raw)
+        if fallback:
+            items.append(fallback)
+
     return enriquecer_items_con_vehiculo(items, raw)
+
+
+def _extraer_item_sin_cantidad_explicita(texto_original: str):
+    """Repuesto + vehículo sin «N unidades» (ej. bieleta de suspension 207 → cant 1)."""
+    resto = _limpiar_texto_para_items_descripcion(texto_original)
+    if not resto:
+        return None
+    from modulos.voz_repuestos import extraer_vehiculos_de_texto, corregir_termino_repuesto
+
+    t = normalizar_texto_basico(resto).lower().strip()
+    t = re.sub(r"\b(?:de|del)\s+(?:una?|el|la)\s+", " ", t)
+    vehs = extraer_vehiculos_de_texto(resto)
+    veh = vehs[0] if vehs else None
+    if veh:
+        t = re.sub(rf"\b(?:para\s+el\s+)?{re.escape(veh)}\b", " ", t, flags=re.I)
+    prod_pat = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
+    m = re.search(
+        rf"\b({prod_pat})\w*(?:\s+de\s+([a-záéíóúñ]+(?:\s+[a-záéíóúñ]+)?))?",
+        t,
+        re.I,
+    )
+    if not m:
+        return None
+    partes = [corregir_termino_repuesto(m.group(1))]
+    if m.group(2):
+        partes.append(m.group(2).strip())
+    term = corregir_termino_repuesto(" ".join(partes)).upper()
+    if not _termino_descripcion_valido(term):
+        return None
+    item = {"termino": term, "cantidad": 1}
+    if veh:
+        item["vehiculo"] = veh
+    return item
 
 
 def _limpiar_nombre_cliente_voz(nombre: str) -> str:

@@ -6,6 +6,7 @@ from modulos.mostrador_estado import (
     EstadoVenta,
     etiqueta_intent,
     guardar_mensaje_chat,
+    limpiar_pantalla_mostrador,
     obtener_estado_venta,
     obtener_intent_venta,
     obtener_historial_chat,
@@ -349,10 +350,19 @@ def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_
     c2.markdown(f"**{intent}**")
     c3.markdown(f"**{n_items}** ítems")
     c4.markdown(f"**${total:,.2f}**")
-    c5.caption(estado.replace("_", " ").title())
+    with c5:
+        st.caption(estado.replace("_", " ").title())
+        if st.button(
+            "🧹 Limpiar pantalla",
+            key=f"limpiar_pantalla_{vendedor}",
+            help="Borra el chat y las coincidencias abiertas.",
+            use_container_width=True,
+        ):
+            limpiar_pantalla_mostrador(vendedor)
+            st.rerun()
 
 
-def _render_chat_historial():
+def _render_chat_historial(vendedor):
     historial = obtener_historial_chat()
     if not historial:
         st.caption(
@@ -431,7 +441,7 @@ def render_venta_chat(
             buscar_en_inventario=buscar_en_inventario,
             obtener_inventario=obtener_inventario_completo,
         )
-        _render_chat_historial()
+        _render_chat_historial(vendedor)
         orden = st.chat_input("Corrección o nueva búsqueda…", key=f"chat_elegir_{vendedor}")
         if orden:
             with st.spinner("Procesando…"):
@@ -454,7 +464,7 @@ def render_venta_chat(
         render_panel_cobro_mostrador(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )
-        _render_chat_historial()
+        _render_chat_historial(vendedor)
         orden = st.chat_input("Otra orden o corrección…", key=f"chat_revisar_{vendedor}")
         if orden:
             with st.spinner("Procesando…"):
@@ -477,7 +487,7 @@ def render_venta_chat(
             render_carrito_grilla(vendedor, carrito_ui)
         st.info("Seguí dictando ítems o decí **listo** para revisar e imprimir.")
 
-    _render_chat_historial()
+    _render_chat_historial(vendedor)
 
     orden = st.chat_input("Dicte o escriba la orden de venta…", key=f"chat_venta_{vendedor}")
     if orden:

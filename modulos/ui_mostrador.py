@@ -1096,10 +1096,10 @@ def render_panel_coincidencias_mostrador(
             f"**{st.session_state.get('msg_ia_mostrador', 'Coincidencias')}**"
         )
     with col_x:
-        if st.button("✕", key=f"cerrar_coinc_most_{vid}", help="Cerrar coincidencias"):
-            st.session_state.resultados_ia_mostrador = None
-            st.session_state.msg_ia_mostrador = None
-            limpiar_cola_voz_mostrador()
+        if st.button("✕", key=f"cerrar_coinc_most_{vid}", help="Cerrar y limpiar chat"):
+            from modulos.mostrador_estado import limpiar_pantalla_mostrador
+
+            limpiar_pantalla_mostrador(vendedor)
             st.rerun()
 
     flat = []

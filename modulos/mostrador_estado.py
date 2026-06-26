@@ -71,3 +71,14 @@ def limpiar_mensaje_chat():
     st.session_state.pop("venta_chat_orden", None)
     st.session_state.pop("venta_chat_respuesta", None)
     st.session_state.pop("venta_chat_tipo", None)
+
+
+def limpiar_pantalla_mostrador(vendedor=None):
+    """Limpia chat, coincidencias y colas de voz (pantalla en blanco para nueva orden)."""
+    from modulos.mostrador_voz_flujo import limpiar_cola_voz_mostrador
+
+    limpiar_mensaje_chat()
+    st.session_state.pop("_mostrador_interp_mostrada", None)
+    st.session_state.resultados_ia_mostrador = None
+    st.session_state.pop("msg_ia_mostrador", None)
+    limpiar_cola_voz_mostrador()
