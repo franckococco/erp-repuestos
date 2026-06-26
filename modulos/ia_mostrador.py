@@ -1,20 +1,12 @@
 """IA de voz/texto exclusiva del mostrador (ventas, cliente, facturación)."""
-import json
-import os
 import re
 
 import streamlit as st
 from dotenv import load_dotenv
-from groq import Groq  # type: ignore
-
-from modulos.ia_asistente import normalizar_texto_basico
 
 load_dotenv(override=True)
 
 FORMAS_PAGO = ("Contado", "Transferencia", "Tarjeta", "Cheque", "MercadoPago")
-
-_MODELO_RAPIDO = "llama-3.1-8b-instant"
-_MODELO_FLUJO = "llama-3.3-70b-versatile"
 
 
 def normalizar_forma_pago(texto):
@@ -289,108 +281,49 @@ def _fallback_orden_local(texto_usuario):
 
 
 def procesar_orden_mostrador(texto_usuario):
+    from modulos.orden_mostrador_inteligente import (
+        interpretar_orden_groq,
+        normalizar_accion_mostrador,
+        orden_compuesta_requiere_groq,
+    )
+
     if es_cancelacion_usuario(texto_usuario) and _es_comando_corto(texto_usuario):
         return {"accion": "cancelar_pendiente"}
 
-    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
-    if flujo_rapido:
-        return flujo_rapido
+    rapido = parse_rapido_voz(texto_usuario)
+    if rapido:
+        return rapido
 
     if es_confirmacion_usuario(texto_usuario) and _es_comando_corto(texto_usuario):
         if st.session_state.get("mostrador_accion_pendiente"):
             return {"accion": "confirmar_pendiente"}
         return {"accion": "listo_armado"}
 
+    if orden_compuesta_requiere_groq(texto_usuario):
+        groq_accion = interpretar_orden_groq(texto_usuario)
+        if groq_accion and groq_accion.get("accion") != "error":
+            return groq_accion
+
+    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
+    if flujo_rapido:
+        return normalizar_accion_mostrador(flujo_rapido, texto_usuario)
+
     armado = parse_armado_rapido_voz(texto_usuario)
     if armado:
-        return armado
-
-    rapido = parse_rapido_voz(texto_usuario)
-    if rapido:
-        return rapido
+        return normalizar_accion_mostrador(armado, texto_usuario)
 
     fallback = _fallback_orden_local(texto_usuario)
     if fallback:
-        return fallback
+        return normalizar_accion_mostrador(fallback, texto_usuario)
 
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["GROQ_API_KEY"]
-        except Exception:
-            api_key = None
+    groq_accion = interpretar_orden_groq(texto_usuario)
+    if groq_accion:
+        return groq_accion
 
-    if not api_key:
-        fb = _fallback_orden_local(texto_usuario)
-        if fb:
-            return fb
-        return {
-            "accion": "error",
-            "respuesta": "Orden no reconocida. Ejemplo: «presupuesto buje directa 3 unidades» o «código 111 2 unidades».",
-        }
-
-    client = Groq(api_key=api_key)
-    from modulos.mostrador_voz_flujo import preprocesar_texto_mostrador
-
-    texto_procesado = preprocesar_texto_mostrador(texto_usuario)
-    es_flujo = _orden_es_flujo_complejo(texto_procesado)
-    modelo = _MODELO_FLUJO if es_flujo else _MODELO_RAPIDO
-
-    prompt = f"""
-    Eres el asistente de MOSTRADOR / CAJA de "Hafid Repuestos".
-    Interpretás órdenes de venta y facturación fiscal ARCA/AFIP.
-
-    ORDEN: "{texto_procesado}"
-
-    REGLAS:
-    - Si la orden tiene VARIAS partes (cliente + productos + pago + imprimir), usá "flujo_factura".
-    - "Factura B" -> tipo_comprobante "6". "Factura A" -> "1".
-    - "Imprimir" / "ticket" al final -> imprimir_ticket true (arma carrito; NO factura sola: el usuario revisa la grilla y confirma).
-    - Códigos de producto: números o CODIGO_MARCA (ej. 3524150, F00099C125_GENERICO).
-    - "Agregá código X 5 unidades" -> items con termino X y cantidad 5.
-    - "Cargame factura B para [cliente]" -> nombre_cliente + tipo 6 + vaciar_antes true si dice cargar/cargame.
-    - Una sola acción simple -> acciones individuales abajo.
-
-    FLUJO COMPLETO (preferido si hay varias instrucciones en una frase):
-    {{
-      "accion": "flujo_factura",
-      "vaciar_antes": true/false,
-      "tipo_comprobante": "6" o "1",
-      "nombre_cliente": "NOMBRE o null",
-      "consumidor_final": true/false,
-      "items": [{{"termino": "CODIGO_O_DESC", "cantidad": N}}],
-      "forma_pago": "Contado|Transferencia|Tarjeta|Cheque|MercadoPago",
-      "imprimir_ticket": true/false
-    }}
-
-    ACCIONES SIMPLES (una sola):
-    {{"accion": "agregar_carrito", "termino": "RAIZ", "cantidad": N}}
-    {{"accion": "buscar", "termino": "RAIZ"}}
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE", "tipo_comprobante": "6" o "1" o null}}
-    {{"accion": "set_tipo_factura", "tipo_comprobante": "6" o "1"}}
-    {{"accion": "consumidor_final", "tipo_comprobante": "6"}}
-    {{"accion": "set_forma_pago", "forma_pago": "Contado"}}
-    {{"accion": "imprimir_ticket"}}
-    {{"accion": "presupuesto_pdf"}}
-    {{"accion": "agregar_items", "items": [{{"termino": "CODIGO_O_DESC", "cantidad": N}}]}}
-    {{"accion": "listo_armado"}}
-    {{"accion": "confirmar_venta"}}
-    {{"accion": "facturar"}}
-    {{"accion": "vaciar_carrito"}}
-    {{"accion": "consulta", "respuesta": "..."}}
-
-    Devolvé SOLO JSON válido.
-    """
-
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=modelo,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        texto = chat_completion.choices[0].message.content.strip()  # type: ignore
-        texto = texto.replace("```json", "").replace("```", "").strip()
-        return json.loads(texto)
-    except Exception as e:
-        return {"accion": "error", "respuesta": f"Error en lectura de IA: {str(e)}"}
+    return {
+        "accion": "error",
+        "respuesta": (
+            "Orden no reconocida. Ejemplo: «presupuesto para Carlos Alberto de 2 bieletas 207» "
+            "o «código 111 2 unidades»."
+        ),
+    }

@@ -147,6 +147,36 @@ class TestVozParser(unittest.TestCase):
         self.assertIn("BIELETA", interp["resumen"])
         self.assertEqual(interp["intent"], "presupuesto")
 
+    def test_cliente_nombre_completo_tres_palabras(self):
+        t = (
+            "haceme un presupuesto para carlos alberto poccia de 2 bieletas "
+            "de suspension 207"
+        )
+        cli = extraer_cliente_orden_voz(t)
+        self.assertEqual(cli.get("nombre_cliente"), "CARLOS ALBERTO POCCIA")
+        items = extraer_items_orden_voz(t)
+        self.assertGreaterEqual(len(items), 1)
+        bieletas = [i for i in items if "BIELETA" in i.get("termino", "")]
+        self.assertTrue(bieletas)
+        self.assertNotIn("POCCIA", bieletas[0]["termino"])
+        self.assertNotIn("ALBERTO", bieletas[0]["termino"])
+
+    def test_mismo_pedido_orden_invertido(self):
+        a = (
+            "presupuesto para carlos alberto poccia de 2 bieletas de suspension 207"
+        )
+        b = (
+            "carlos alberto poccia presupuesto 2 bieletas suspension para el 207"
+        )
+        ca = extraer_cliente_orden_voz(a).get("nombre_cliente")
+        cb = extraer_cliente_orden_voz(b).get("nombre_cliente")
+        self.assertEqual(ca, "CARLOS ALBERTO POCCIA")
+        self.assertEqual(cb, "CARLOS ALBERTO POCCIA")
+        ta = {i["termino"] for i in extraer_items_orden_voz(a)}
+        tb = {i["termino"] for i in extraer_items_orden_voz(b)}
+        self.assertTrue(any("BIELETA" in x for x in ta))
+        self.assertTrue(any("BIELETA" in x for x in tb))
+
 
 if __name__ == "__main__":
     unittest.main()

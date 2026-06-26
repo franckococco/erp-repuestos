@@ -188,6 +188,28 @@ def normalizar_orden_voz_mostrador(texto):
     t = re.sub(r"\bjuego\s+de\s+", "", t)
     t = re.sub(r"\bkit\s+de\s+", "kit ", t)
 
+    # «de 2 bieletas de suspension 207» → «bieletas de suspension 2 unidades 207»
+    t = re.sub(
+        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=\d{3,4}\s*$)",
+        r"\2 \1 unidades ",
+        t,
+    )
+    t = re.sub(
+        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=para\s+el\s+)",
+        r"\2 \1 unidades ",
+        t,
+    )
+    t = re.sub(
+        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=(?:codigo|código)\b)",
+        r"\2 \1 unidades ",
+        t,
+    )
+    t = re.sub(
+        r"\b(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=para\s+el\s+)",
+        r"\2 \1 unidades ",
+        t,
+    )
+
     # Separadores de ítems
     t = re.sub(r"\b(tambien|también|ademas|además|despues|después)\b", " y ", t)
 
@@ -331,10 +353,35 @@ def _strip_termino_cant_de_resto(resto: str, termino: str, cantidad: int) -> str
 def _patron_fin_cliente_voz() -> str:
     prod = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
     return (
-        r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|\s+(?:un|una)\s|"
+        r"(?=\s+codigo|\s+listo|\s+factura|\s+presupuesto|"
+        r"\s+de\s+(?:una?\s+)?\d{1,2}\b|"
+        r"\s+de\s+(?:una?\s+)?\d{1,2}\s+(?:unidades?|u\.?|uds?|unidad)?\b|"
+        r"\s+de\s+\d{1,2}\s+(?:unidades?|u\.?|uds?|unidad)?\b|"
+        r"\s+(?:un|una)\s|"
         r"\b[\dA-Za-z]*\d[\dA-Za-z\-]*\s+\d{1,4}\s+unidades?\b|"
         rf"\s+(?:{prod})\b|$)"
     )
+
+
+def _nombre_cliente_valido(nombre: str) -> bool:
+    nombre = str(nombre or "").strip()
+    if len(nombre) < 2:
+        return False
+    primera = nombre.split()[0]
+    return _palabra_parece_nombre_cliente(primera)
+
+
+def _extraer_nombre_multipalabra(texto_norm: str, prefijos: tuple[str, ...]) -> str:
+    """Captura nombre completo (varias palabras) hasta el fin lógico del bloque cliente."""
+    fin = _patron_fin_cliente_voz()
+    for pref in prefijos:
+        m = re.search(rf"{pref}\s+(.+?){fin}", texto_norm, flags=re.I)
+        if not m:
+            continue
+        nombre = _limpiar_nombre_cliente_voz(m.group(1))
+        if nombre and _nombre_cliente_valido(nombre):
+            return nombre
+    return ""
 
 
 def _limpiar_texto_para_items_descripcion(texto: str) -> str:
@@ -377,6 +424,8 @@ def _termino_descripcion_valido(termino: str) -> bool:
 
 
 def _normalizar_termino_descripcion(termino: str) -> str:
+    from modulos.voz_repuestos import corregir_termino_repuesto
+
     t = normalizar_texto_basico(str(termino or "")).upper()
     palabras = [
         p for p in t.split()
@@ -384,7 +433,10 @@ def _normalizar_termino_descripcion(termino: str) -> str:
     ]
     while palabras and palabras[0] in ("Y", "E", "TAMBIEN", "TAMBIÉN", "MAS", "MÁS"):
         palabras.pop(0)
-    return " ".join(palabras).strip()
+    base = " ".join(palabras).strip()
+    if not base:
+        return ""
+    return corregir_termino_repuesto(base).upper()
 
 
 def extraer_items_orden_voz(texto):
@@ -601,77 +653,65 @@ def extraer_cliente_orden_voz(texto):
         return {"consumidor_final": True}
 
     fin = _patron_fin_cliente_voz()
-    m_directo = re.search(
-        r"\bpresupuesto\s+para\s+([a-záéíóúñ]{3,20})\s+(?:de\s+)?(?:una?\s+)?"
-        r"(?:codigo|código|\d|[a-záéíóúñ]{4,})",
+
+    nombre = _extraer_nombre_multipalabra(
         t,
+        (
+            r"\bpresupuesto\s+para",
+            r"\bpresupuesto\s+(?!para\b)",
+            r"\bpresupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
+            r"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
+            r"\bfactura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
+            r"\bpara\s+el\s+cliente",
+        ),
     )
-    if m_directo:
-        nombre = _limpiar_nombre_cliente_voz(m_directo.group(1))
-        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
-            return {"nombre_cliente": nombre}
+    if nombre:
+        return {"nombre_cliente": nombre}
 
-    m_directo2 = re.search(
-        r"\bpresupuesto\s+(?!para\b)([a-záéíóúñ]{3,20})\s+(?:codigo|código|\d|[a-záéíóúñ]{4,})",
+    m_antes_presu = re.search(
+        r"^([a-záéíóúñ]+(?:\s+[a-záéíóúñ]+){0,3})\s+presupuesto\b",
         t,
+        flags=re.I,
     )
-    if m_directo2:
-        nombre = _limpiar_nombre_cliente_voz(m_directo2.group(1))
-        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
+    if m_antes_presu:
+        nombre = _limpiar_nombre_cliente_voz(m_antes_presu.group(1))
+        if nombre and _nombre_cliente_valido(nombre):
             return {"nombre_cliente": nombre}
 
-    m_final = re.search(r"\bpresupuesto\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s*$", t)
-    if m_final:
-        nombre = _limpiar_nombre_cliente_voz(m_final.group(1))
-        if nombre and _palabra_parece_nombre_cliente(nombre.split()[0]):
-            return {"nombre_cliente": nombre}
-
-    m_factura = re.search(
-        r"\bfactura\s+[ab]\s+(?:para\s+)?([a-záéíóúñ]{3,20})\s*$", t
+    m_para = re.search(
+        rf"\bpara\s+(?!el\s+\d{{3,4}}\b)(?!el\s+cliente\b)(.+?){fin}",
+        t,
+        flags=re.I,
     )
-    if m_factura:
-        nombre = _limpiar_nombre_cliente_voz(m_factura.group(1))
-        if nombre:
+    if m_para:
+        nombre = _limpiar_nombre_cliente_voz(m_para.group(1))
+        if nombre and _nombre_cliente_valido(nombre):
             return {"nombre_cliente": nombre}
 
-    m_cli = re.search(r"\bcliente\s+([a-záéíóúñ]{3,20})\s*$", t)
-    if m_cli and _palabra_parece_nombre_cliente(m_cli.group(1)):
+    m_presu_final = re.search(rf"\bpresupuesto\s+(?:para\s+)?(.+?){fin}", t)
+    if m_presu_final:
+        nombre = _limpiar_nombre_cliente_voz(m_presu_final.group(1))
+        if nombre and _nombre_cliente_valido(nombre):
+            return {"nombre_cliente": nombre}
+
+    m_factura_final = re.search(r"\bfactura\s+[ab]\s+(?:para\s+)?(.+?)\s*$", t)
+    if m_factura_final:
+        nombre = _limpiar_nombre_cliente_voz(m_factura_final.group(1))
+        if nombre and _nombre_cliente_valido(nombre):
+            return {"nombre_cliente": nombre}
+
+    m_cli = re.search(rf"\bcliente\s+(.+?){fin}", t)
+    if m_cli:
         nombre = _limpiar_nombre_cliente_voz(m_cli.group(1))
-        if nombre:
+        if nombre and _nombre_cliente_valido(nombre):
             return {"nombre_cliente": nombre}
 
-    m_para_nombre = re.search(
-        r"\bpara\s+(?!el\s+\d{3,4}\b)(?!el\s+cliente\b)"
-        r"([a-záéíóúñ]{3,20})\s+(?:de\s+)?(?:una?\s+)?",
-        t,
-    )
-    if m_para_nombre and _palabra_parece_nombre_cliente(m_para_nombre.group(1)):
-        nombre = _limpiar_nombre_cliente_voz(m_para_nombre.group(1))
-        if nombre:
-            return {"nombre_cliente": nombre}
-
-    m_para_final = re.search(r"\bpara\s+([a-záéíóúñ]{3,20})\s*$", t)
-    if m_para_final and _palabra_parece_nombre_cliente(m_para_final.group(1)):
+    m_para_final = re.search(r"\bpara\s+(.+?)\s*$", t)
+    if m_para_final:
         nombre = _limpiar_nombre_cliente_voz(m_para_final.group(1))
-        if nombre:
+        if nombre and _nombre_cliente_valido(nombre):
             return {"nombre_cliente": nombre}
 
-    patrones = (
-        rf"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
-        rf"factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
-        rf"presupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)\s+(.+?){fin}",
-        rf"para\s+el\s+cliente\s+(.+?){fin}",
-        rf"cliente\s+(.+?){fin}",
-    )
-    for patron in patrones:
-        m = re.search(patron, t)
-        if not m:
-            continue
-        nombre = _limpiar_nombre_cliente_voz(m.group(1))
-        if nombre:
-            primera = nombre.split()[0]
-            if _palabra_parece_nombre_cliente(primera):
-                return {"nombre_cliente": primera}
     return {}
 
 
