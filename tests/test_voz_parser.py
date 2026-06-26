@@ -178,5 +178,20 @@ class TestVozParser(unittest.TestCase):
         self.assertTrue(any("BIELETA" in x for x in tb))
 
 
+    def test_cliente_para_el_cliente_presupuesto_codigo(self):
+        t = "para el cliente pablo castellanos haceme un presupuesto del codigo 111 3 unidades"
+        self.assertEqual(
+            extraer_cliente_orden_voz(t).get("nombre_cliente"),
+            "PABLO CASTELLANOS",
+        )
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "111")
+        self.assertEqual(items[0]["cantidad"], 3)
+        interp = interpretar_orden_voz_mostrador(t)
+        self.assertIn("PABLO CASTELLANOS", interp["resumen"])
+        self.assertNotIn("CASTELLANOS 111", interp["resumen"])
+
+
 if __name__ == "__main__":
     unittest.main()

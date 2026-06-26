@@ -118,9 +118,12 @@ def normalizar_orden_voz_mostrador(texto):
         "codigo",
         t,
     )
+    t = re.sub(r"\bdel\s+codigo\b", "codigo", t)
+    t = re.sub(r"\bde\s+el\s+codigo\b", "codigo", t)
 
     # Cliente / consumidor final
     t = re.sub(r"\b(?:a|al)\s+nombre\s+de\s+", "para ", t)
+    t = re.sub(r"\bpara\s+el\s+cliente\s+", "para ", t)
     t = re.sub(r"\bdel\s+cliente\s+", "para ", t)
     t = re.sub(r"\bcliente\s+(?!final\b)", "para ", t)
     t = re.sub(
@@ -657,12 +660,12 @@ def extraer_cliente_orden_voz(texto):
     nombre = _extraer_nombre_multipalabra(
         t,
         (
+            r"\bpara\s+el\s+cliente",
             r"\bpresupuesto\s+para",
             r"\bpresupuesto\s+(?!para\b)",
             r"\bpresupuesto\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
             r"(?:hacer\s+)?factura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
             r"\bfactura\s+[ab]\s+(?:al\s+nombre\s+de|para\s+el\s+cliente|para\s+cliente|para\s+el|a\s+el|a)",
-            r"\bpara\s+el\s+cliente",
         ),
     )
     if nombre:

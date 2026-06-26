@@ -74,6 +74,10 @@ EJEMPLOS (misma salida, distinto orden):
 - "Carlos Alberto Poccia presupuesto 2 bieletas de suspension para el 207"
 → cliente Carlos Alberto Poccia, items [{{termino: bieleta suspension, cantidad: 2, vehiculo: 207}}], intent presupuesto
 
+- "para el cliente Pablo Castellanos presupuesto codigo 111 3 unidades"
+→ cliente Pablo Castellanos, items [{{termino: 111, cantidad: 3}}], intent presupuesto
+  (Castellanos es apellido, NO parte del codigo)
+
 Si hay cliente + productos o presupuesto/factura + productos → accion "flujo_factura".
 
 JSON flujo_factura:
