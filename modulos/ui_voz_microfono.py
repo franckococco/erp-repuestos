@@ -1,6 +1,8 @@
 """Dictado por voz en el navegador (micrófono del celular vía Web Speech API)."""
 import json
+import re
 
+import streamlit as st
 import streamlit.components.v1 as components
 
 _SPEECH_HTML = """
@@ -114,8 +116,20 @@ def render_boton_dictado(component_key: str, lang: str = "es-AR") -> str | None:
     Muestra botón de micrófono. En Chrome/Android devuelve el texto dictado.
     Retorna None si el usuario no dictó nada en este render.
     """
-    html_block = _SPEECH_HTML.replace("__LANG__", json.dumps(lang))
-    transcript = components.html(html_block, height=88, key=component_key)
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(component_key or "mic"))
+    html_block = (
+        _SPEECH_HTML.replace("__LANG__", json.dumps(lang))
+        .replace('id="mic-btn"', f'id="mic-btn-{safe_id}"')
+        .replace('id="mic-status"', f'id="mic-status-{safe_id}"')
+        .replace("getElementById('mic-btn')", f"getElementById('mic-btn-{safe_id}')")
+        .replace("getElementById('mic-status')", f"getElementById('mic-status-{safe_id}')")
+    )
+    try:
+        # components.html no acepta `key` (TypeError en Streamlit Cloud).
+        transcript = components.html(html_block, height=88, scrolling=False)
+    except Exception:
+        st.caption("Dictado por voz no disponible en este entorno. Escribí la orden abajo.")
+        return None
     if transcript and isinstance(transcript, str) and transcript.strip():
         return transcript.strip()
     return None
