@@ -173,7 +173,6 @@ def _unificar_comprobantes_y_acciones(t: str) -> str:
     t = re.sub(r"\bfactura\s+tipo\s+a\b", "factura a", t)
     t = re.sub(r"\bfactura\s+tipo\s+b\b", "factura b", t)
     t = re.sub(r"\bfactura\s+a\s+responsable\b", "factura a", t)
-    t = re.sub(r"\bfactura\s+b\s+consumidor\b", "factura b", t)
     return t
 
 
@@ -391,6 +390,7 @@ def segmentar_orden_natural(texto: str) -> Dict:
     from modulos.mostrador_voz_flujo import normalizar_orden_voz_mostrador
 
     norm_full = normalizar_orden_voz_mostrador(raw)
+    raw_low = raw.lower()
 
     cliente = extraer_cliente_orden_voz(raw)
     items = extraer_items_orden_voz(raw)
@@ -426,7 +426,10 @@ def segmentar_orden_natural(texto: str) -> Dict:
         "items": items,
         "intent": intent,
         "forma_pago": forma_pago,
-        "listo": bool(re.search(r"\b(listo|termine|terminé|fin|dale)\b", t)),
+        "listo": bool(
+            re.search(r"\b(listo|termine|terminé|fin|dale)\b", raw_low)
+            or re.search(r"\b(listo|termine|terminé|fin|dale)\b", t)
+        ),
     }
 
 

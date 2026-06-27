@@ -348,6 +348,11 @@ def configurar_cliente(
         "actualizado": datetime.now(timezone.utc),
     }
     get_db().collection("clientes").document(id_cli).set(payload, merge=True)
+    try:
+        from modulos.cliente_resolver import invalidar_cache_clientes_mostrador
+        invalidar_cache_clientes_mostrador()
+    except Exception:
+        pass
     return True, "Cliente configurado."
 
 
@@ -2010,3 +2015,8 @@ def invalidar_cache_datos():
     _limpiar_cache_streamlit(obtener_inventario_completo)
     _limpiar_cache_streamlit(_indice_resolucion_productos)
     _limpiar_cache_streamlit(obtener_proveedores)
+    try:
+        from modulos.cliente_resolver import invalidar_cache_clientes_mostrador
+        invalidar_cache_clientes_mostrador()
+    except Exception:
+        pass

@@ -23,6 +23,8 @@ from modulos.mostrador_voz_flujo import (
 )
 from modulos.ia_mostrador import procesar_orden_mostrador
 from modulos.ui_mostrador import render_mostrador_accion_pendiente, render_presupuesto_pdf_pendiente
+from modulos.ui_voz_microfono import render_boton_dictado
+from modulos.cliente_resolver import listar_clientes_frecuentes
 
 
 def _chat_orden(orden, msj, tipo="info"):
@@ -335,6 +337,82 @@ def _procesar_orden_chat(
     return accion != "error"
 
 
+def _render_atajos_clientes(vendedor):
+    """Botones rápidos con clientes frecuentes de Firebase (mecánicos / cuenta corriente)."""
+    clientes = listar_clientes_frecuentes(8)
+    if not clientes:
+        return
+    st.caption("Clientes frecuentes")
+    n_cols = min(4, len(clientes))
+    cols = st.columns(n_cols)
+    for i, (nombre, _datos) in enumerate(clientes):
+        with cols[i % n_cols]:
+            etiqueta = nombre if len(nombre) <= 24 else nombre[:22] + "…"
+            if st.button(
+                etiqueta,
+                key=f"cli_freq_{vendedor}_{i}",
+                use_container_width=True,
+                help=f"Activar cliente {nombre}",
+            ):
+                activar_cliente_voz(nombre_cliente=nombre)
+                guardar_mensaje_chat(
+                    f"cliente {nombre}",
+                    f"Cliente activo: **{nombre}**.",
+                    "ok",
+                )
+                st.rerun()
+
+
+def _render_entrada_orden(
+    vendedor,
+    placeholder: str,
+    key_suffix: str,
+    obtener_inventario_completo,
+    buscar_en_inventario,
+    agregar_al_carrito,
+    *,
+    mostrar_atajos: bool = True,
+):
+    """Micrófono + chat: entrada unificada para dictado en celular."""
+    if mostrar_atajos:
+        _render_atajos_clientes(vendedor)
+    dictado = render_boton_dictado(f"mic_{vendedor}_{key_suffix}")
+    orden = st.chat_input(placeholder, key=f"chat_{key_suffix}_{vendedor}")
+    entrada = (dictado or orden or "").strip()
+    if not entrada:
+        return
+    with st.spinner("Procesando…"):
+        _procesar_orden_chat(
+            vendedor,
+            entrada,
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agregar_al_carrito,
+        )
+    st.rerun()
+
+
+def _etiqueta_cancelar_operacion() -> str:
+    intent = obtener_intent_venta()
+    if intent == "presupuesto":
+        return "❌ Cancelar presupuesto"
+    if intent in ("factura_a", "factura_b"):
+        return "❌ Cancelar factura"
+    return "❌ Cancelar operación"
+
+
+def _hay_operacion_activa_mostrador(vendedor, carrito_efectivo_mostrador) -> bool:
+    estado = obtener_estado_venta(vendedor)
+    if estado in (EstadoVenta.ARMANDO, EstadoVenta.REVISAR, EstadoVenta.ELEGIR):
+        return True
+    if st.session_state.get("presupuesto_emitido_ok"):
+        return True
+    if st.session_state.get("resultados_ia_mostrador"):
+        return True
+    carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
+    return bool(carrito)
+
+
 def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito):
     cli = st.session_state.get("cliente_activo") or {}
     nombre = cli.get("nombre", "CONSUMIDOR FINAL")
@@ -352,10 +430,22 @@ def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_
     c4.markdown(f"**${total:,.2f}**")
     with c5:
         st.caption(estado.replace("_", " ").title())
+        if _hay_operacion_activa_mostrador(vendedor, carrito_efectivo_mostrador):
+            if st.button(
+                _etiqueta_cancelar_operacion(),
+                key=f"cancelar_op_{vendedor}",
+                help="Vacía carrito, chat y coincidencias. Vuelve a empezar.",
+                use_container_width=True,
+                type="secondary",
+            ):
+                from modulos.ui_mostrador import cancelar_operacion_mostrador
+
+                cancelar_operacion_mostrador(vendedor, reset_cliente=True)
+                st.rerun()
         if st.button(
             "🧹 Limpiar pantalla",
             key=f"limpiar_pantalla_{vendedor}",
-            help="Borra el chat y las coincidencias abiertas.",
+            help="Borra solo el chat y las coincidencias (mantiene el carrito).",
             use_container_width=True,
         ):
             limpiar_pantalla_mostrador(vendedor)
@@ -442,14 +532,15 @@ def render_venta_chat(
             obtener_inventario=obtener_inventario_completo,
         )
         _render_chat_historial(vendedor)
-        orden = st.chat_input("Corrección o nueva búsqueda…", key=f"chat_elegir_{vendedor}")
-        if orden:
-            with st.spinner("Procesando…"):
-                _procesar_orden_chat(
-                    vendedor, orden, obtener_inventario_completo,
-                    buscar_en_inventario, agregar_al_carrito,
-                )
-            st.rerun()
+        _render_entrada_orden(
+            vendedor,
+            "Corrección o nueva búsqueda…",
+            "elegir",
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agregar_al_carrito,
+            mostrar_atajos=False,
+        )
         return
 
     if estado == EstadoVenta.REVISAR:
@@ -459,20 +550,33 @@ def render_venta_chat(
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         intent = obtener_intent_venta()
 
-        st.markdown(f"### Revisar {etiqueta_intent(intent)}")
+        c_tit, c_btn = st.columns([5, 1])
+        with c_tit:
+            st.markdown(f"### Revisar {etiqueta_intent(intent)}")
+        with c_btn:
+            if st.button(
+                _etiqueta_cancelar_operacion(),
+                key=f"cancelar_revisar_{vendedor}",
+                use_container_width=True,
+            ):
+                from modulos.ui_mostrador import cancelar_operacion_mostrador
+
+                cancelar_operacion_mostrador(vendedor, reset_cliente=True)
+                st.rerun()
         render_carrito_grilla(vendedor, carrito_ui)
         render_panel_cobro_mostrador(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )
         _render_chat_historial(vendedor)
-        orden = st.chat_input("Otra orden o corrección…", key=f"chat_revisar_{vendedor}")
-        if orden:
-            with st.spinner("Procesando…"):
-                _procesar_orden_chat(
-                    vendedor, orden, obtener_inventario_completo,
-                    buscar_en_inventario, agregar_al_carrito,
-                )
-            st.rerun()
+        _render_entrada_orden(
+            vendedor,
+            "Otra orden o corrección…",
+            "revisar",
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agregar_al_carrito,
+            mostrar_atajos=False,
+        )
         return
 
     if estado == EstadoVenta.ARMANDO:
@@ -489,17 +593,15 @@ def render_venta_chat(
 
     _render_chat_historial(vendedor)
 
-    orden = st.chat_input("Dicte o escriba la orden de venta…", key=f"chat_venta_{vendedor}")
-    if orden:
-        with st.spinner("Procesando orden…"):
-            _procesar_orden_chat(
-                vendedor,
-                orden,
-                obtener_inventario_completo,
-                buscar_en_inventario,
-                agregar_al_carrito,
-            )
-        st.rerun()
+    _render_entrada_orden(
+        vendedor,
+        "Dicte o escriba la orden de venta…",
+        "venta",
+        obtener_inventario_completo,
+        buscar_en_inventario,
+        agregar_al_carrito,
+        mostrar_atajos=True,
+    )
 
     with st.expander("Más herramientas", expanded=False):
         col_v, col_n = st.columns(2)

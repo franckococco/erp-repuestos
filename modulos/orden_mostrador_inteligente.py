@@ -1,9 +1,11 @@
 """Interpretación de órdenes del mostrador: Groq primero, salida rígida, parser local de respaldo."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import time
 from typing import Any, Optional
 
 import streamlit as st
@@ -143,17 +145,23 @@ def _normalizar_items(items: Any) -> list[dict]:
 
 
 def _elegir_mejor_nombre_cliente(groq_nombre, local_nombre) -> Optional[str]:
+    from modulos.cliente_resolver import corregir_nombre_con_clientes
+
     g = str(groq_nombre or "").strip().upper()
     l = str(local_nombre or "").strip().upper()
     if not l:
-        return g or None
-    if not g:
-        return l
-    if len(l.split()) > len(g.split()):
-        return l
-    if l.startswith(g) or g in l.split():
-        return l
-    return g
+        candidato = g or None
+    elif not g:
+        candidato = l
+    elif len(l.split()) > len(g.split()):
+        candidato = l
+    elif l.startswith(g) or g in l.split():
+        candidato = l
+    else:
+        candidato = g
+    if candidato:
+        return corregir_nombre_con_clientes(candidato)
+    return None
 
 
 def _limpiar_termino_de_cliente(termino: str, nombre_cliente: str) -> str:
@@ -344,6 +352,33 @@ def fusionar_con_parser_local(groq_data: dict, texto_original: str) -> dict:
     return out
 
 
+_GROQ_CACHE_TTL_SEG = 3600
+
+
+def _groq_cache_key(texto_procesado: str, modelo: str) -> str:
+    digest = hashlib.sha256(f"{modelo}:{texto_procesado}".encode("utf-8")).hexdigest()[:20]
+    return digest
+
+
+def _groq_cache_get(texto_procesado: str, modelo: str) -> Optional[dict]:
+    cache = st.session_state.get("_groq_orden_cache") or {}
+    key = _groq_cache_key(texto_procesado, modelo)
+    entry = cache.get(key)
+    if entry and time.time() - float(entry.get("ts", 0)) < _GROQ_CACHE_TTL_SEG:
+        return entry.get("data")
+    return None
+
+
+def _groq_cache_set(texto_procesado: str, modelo: str, data: dict):
+    cache = dict(st.session_state.get("_groq_orden_cache") or {})
+    key = _groq_cache_key(texto_procesado, modelo)
+    cache[key] = {"ts": time.time(), "data": data}
+    if len(cache) > 80:
+        ordenado = sorted(cache.items(), key=lambda x: x[1]["ts"], reverse=True)
+        cache = dict(ordenado[:60])
+    st.session_state["_groq_orden_cache"] = cache
+
+
 def interpretar_orden_groq(texto_usuario: str) -> Optional[dict]:
     """Llama a Groq y devuelve acción normalizada, o None si no hay API/falla."""
     api_key = _groq_api_key()
@@ -355,6 +390,10 @@ def interpretar_orden_groq(texto_usuario: str) -> Optional[dict]:
 
     texto_procesado = preprocesar_texto_mostrador(texto_usuario)
     modelo = _MODELO_FLUJO if _orden_es_flujo_complejo(texto_procesado) else _MODELO_RAPIDO
+
+    cached = _groq_cache_get(texto_procesado, modelo)
+    if cached is not None:
+        return cached
 
     try:
         client = Groq(api_key=api_key)
@@ -371,4 +410,7 @@ def interpretar_orden_groq(texto_usuario: str) -> Optional[dict]:
         return None
 
     data = fusionar_con_parser_local(data, texto_usuario)
-    return normalizar_accion_mostrador(data, texto_usuario)
+    result = normalizar_accion_mostrador(data, texto_usuario)
+    if result:
+        _groq_cache_set(texto_procesado, modelo, result)
+    return result

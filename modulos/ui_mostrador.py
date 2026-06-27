@@ -462,6 +462,18 @@ def limpiar_venta_mostrador(vendedor, reset_cliente=True, conservar_pdf_presupue
     )
 
 
+def cancelar_operacion_mostrador(vendedor, reset_cliente=True):
+    """Cancela presupuesto/factura en curso, vacía carrito y deja la pantalla en blanco."""
+    from modulos.mostrador_estado import limpiar_pantalla_mostrador
+
+    limpiar_venta_mostrador(
+        vendedor,
+        reset_cliente=reset_cliente,
+        conservar_pdf_presupuesto=False,
+    )
+    limpiar_pantalla_mostrador(vendedor)
+
+
 def reset_estado_orden_mostrador(vendedor, reset_cliente=False, conservar_pdf_presupuesto=False):
     """Limpia verificación, PDF pendiente y mensajes de voz."""
     st.session_state.mostrador_listo_para_ticket = False
@@ -605,7 +617,7 @@ def render_presupuesto_pdf_pendiente(vendedor):
         f"**Presupuesto listo** — {cliente}{detalle}{total_txt}. "
         "Descargá el PDF para imprimir."
     )
-    col_dl, col_ok = st.columns([3, 1])
+    col_dl, col_ok, col_x = st.columns([3, 1, 1])
     with col_dl:
         st.download_button(
             "⬇️ Descargar / imprimir presupuesto",
@@ -626,6 +638,15 @@ def render_presupuesto_pdf_pendiente(vendedor):
             help="Cerrar sin volver a descargar.",
         ):
             _finalizar_presupuesto_impreso(vendedor)
+            st.rerun()
+    with col_x:
+        if st.button(
+            "❌ Cancelar",
+            use_container_width=True,
+            key=f"cancelar_pres_pend_{vendedor}",
+            help="Descartar presupuesto y limpiar pantalla.",
+        ):
+            cancelar_operacion_mostrador(vendedor, reset_cliente=True)
             st.rerun()
 
 

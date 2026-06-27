@@ -738,23 +738,26 @@ def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_compro
     if consumidor_final:
         cli = cliente_consumidor_final()
     elif nombre_cliente:
-        nombre_up = str(nombre_cliente).upper()
-        clientes_db = obtener_clientes() or {}
-        encontrado = None
-        mejor_len = 0
-        for c in clientes_db.values():
-            cn = str(c.get("nombre", "")).upper().strip()
-            if not cn:
-                continue
-            if cn == nombre_up or nombre_up.startswith(cn) or cn.startswith(nombre_up):
-                if len(cn) > mejor_len:
-                    encontrado = c
-                    mejor_len = len(cn)
-        if encontrado:
+        from modulos.cliente_resolver import (
+            clientes_cache_mostrador,
+            corregir_nombre_con_clientes,
+            resolver_cliente_por_nombre,
+        )
+
+        nombre_corregido = corregir_nombre_con_clientes(nombre_cliente)
+        clientes_db = clientes_cache_mostrador()
+        encontrado, score, metodo = resolver_cliente_por_nombre(
+            nombre_corregido, clientes_db
+        )
+        if not encontrado and nombre_corregido != str(nombre_cliente).strip().upper():
+            encontrado, score, metodo = resolver_cliente_por_nombre(
+                nombre_cliente, clientes_db
+            )
+        if encontrado and score >= 0.68:
             cli = cliente_db_a_activo(encontrado)
         else:
             cli = {
-                "nombre": nombre_up,
+                "nombre": nombre_corregido,
                 "cuit": "00000000000",
                 "descuento": 0.0,
                 "tipo_comprobante": "6",
