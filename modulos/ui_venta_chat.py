@@ -402,6 +402,7 @@ def _etiqueta_cancelar_operacion() -> str:
 
 
 def _hay_operacion_activa_mostrador(vendedor, carrito_efectivo_mostrador) -> bool:
+    """True si hay algo que cancelar (carrito, chat, cliente, coincidencias, PDF)."""
     estado = obtener_estado_venta(vendedor)
     if estado in (EstadoVenta.ARMANDO, EstadoVenta.REVISAR, EstadoVenta.ELEGIR):
         return True
@@ -409,8 +410,47 @@ def _hay_operacion_activa_mostrador(vendedor, carrito_efectivo_mostrador) -> boo
         return True
     if st.session_state.get("resultados_ia_mostrador"):
         return True
+    if st.session_state.get("venta_chat_historial"):
+        return True
+    if st.session_state.get("mostrador_intent_sugerido"):
+        return True
+    if st.session_state.get("mostrador_listo_para_ticket"):
+        return True
+    cli = st.session_state.get("cliente_activo") or {}
+    if str(cli.get("nombre", "CONSUMIDOR FINAL")).upper() not in ("", "CONSUMIDOR FINAL"):
+        return True
     carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
     return bool(carrito)
+
+
+def _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador):
+    """Barra visible con cancelar y limpiar (siempre en mostrador, salvo venta cerrada)."""
+    if obtener_estado_venta(vendedor) == EstadoVenta.LISTO:
+        return
+
+    with st.container(border=True):
+        c_cancel, c_limpiar = st.columns([3, 2])
+        with c_cancel:
+            if st.button(
+                _etiqueta_cancelar_operacion(),
+                key=f"cancelar_barra_{vendedor}",
+                type="primary",
+                use_container_width=True,
+                help="Vacía carrito, cliente, chat y coincidencias. Empezar de cero.",
+            ):
+                from modulos.ui_mostrador import cancelar_operacion_mostrador
+
+                cancelar_operacion_mostrador(vendedor, reset_cliente=True)
+                st.rerun()
+        with c_limpiar:
+            if st.button(
+                "🧹 Limpiar pantalla",
+                key=f"limpiar_barra_{vendedor}",
+                use_container_width=True,
+                help="Borra solo el chat y las coincidencias (mantiene el carrito).",
+            ):
+                limpiar_pantalla_mostrador(vendedor)
+                st.rerun()
 
 
 def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito):
@@ -428,28 +468,7 @@ def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_
     c2.markdown(f"**{intent}**")
     c3.markdown(f"**{n_items}** ítems")
     c4.markdown(f"**${total:,.2f}**")
-    with c5:
-        st.caption(estado.replace("_", " ").title())
-        if _hay_operacion_activa_mostrador(vendedor, carrito_efectivo_mostrador):
-            if st.button(
-                _etiqueta_cancelar_operacion(),
-                key=f"cancelar_op_{vendedor}",
-                help="Vacía carrito, chat y coincidencias. Vuelve a empezar.",
-                use_container_width=True,
-                type="secondary",
-            ):
-                from modulos.ui_mostrador import cancelar_operacion_mostrador
-
-                cancelar_operacion_mostrador(vendedor, reset_cliente=True)
-                st.rerun()
-        if st.button(
-            "🧹 Limpiar pantalla",
-            key=f"limpiar_pantalla_{vendedor}",
-            help="Borra solo el chat y las coincidencias (mantiene el carrito).",
-            use_container_width=True,
-        ):
-            limpiar_pantalla_mostrador(vendedor)
-            st.rerun()
+    c5.markdown(f"**Estado:** {estado.replace('_', ' ').title()}")
 
 
 def _render_chat_historial(vendedor):
@@ -503,6 +522,7 @@ def render_venta_chat(
     """UI principal del mostrador (chat + vista por estado)."""
     estado = obtener_estado_venta(vendedor)
     _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
+    _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador)
     render_mostrador_accion_pendiente(vendedor)
     render_presupuesto_pdf_pendiente(vendedor)
 
@@ -550,19 +570,7 @@ def render_venta_chat(
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         intent = obtener_intent_venta()
 
-        c_tit, c_btn = st.columns([5, 1])
-        with c_tit:
-            st.markdown(f"### Revisar {etiqueta_intent(intent)}")
-        with c_btn:
-            if st.button(
-                _etiqueta_cancelar_operacion(),
-                key=f"cancelar_revisar_{vendedor}",
-                use_container_width=True,
-            ):
-                from modulos.ui_mostrador import cancelar_operacion_mostrador
-
-                cancelar_operacion_mostrador(vendedor, reset_cliente=True)
-                st.rerun()
+        st.markdown(f"### Revisar {etiqueta_intent(intent)}")
         render_carrito_grilla(vendedor, carrito_ui)
         render_panel_cobro_mostrador(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
