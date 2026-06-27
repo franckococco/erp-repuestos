@@ -53,11 +53,15 @@ def orden_compuesta_requiere_groq(texto: str) -> bool:
 
 
 def _prompt_groq_orden_mostrador(texto_procesado: str) -> str:
+    from modulos.voz_lenguaje_natural import instrucciones_groq_lenguaje_natural
+
     return f"""
 Sos el intérprete de órdenes del mostrador "Hafid Repuestos" (repuestos automotrices, Argentina).
 La frase puede venir en CUALQUIER ORDEN de palabras; el significado no cambia.
 
 ORDEN (ya preprocesada): "{texto_procesado}"
+
+{instrucciones_groq_lenguaje_natural()}
 
 REGLAS CRÍTICAS:
 1. Separá SIEMPRE: cliente (persona) | productos/repuestos | vehículo (207, gol, etc.) | cantidad | acción.
@@ -76,7 +80,12 @@ EJEMPLOS (misma salida, distinto orden):
 
 - "para el cliente Pablo Castellanos presupuesto codigo 111 3 unidades"
 → cliente Pablo Castellanos, items [{{termino: 111, cantidad: 3}}], intent presupuesto
-  (Castellanos es apellido, NO parte del codigo)
+
+- "che bueno dale haceme un presupuesto para juan guzman bieleta de suspension 207"
+→ cliente Juan Guzman, items [{{termino: bieleta suspension, cantidad: 1, vehiculo: 207}}], intent presupuesto
+
+- "necesito factura b para taller san martin dos bujes de directa para el gol contado listo"
+→ cliente Taller San Martin, factura B, items buje directa x2 vehiculo gol, pago Contado, ir_verificacion true
 
 Si hay cliente + productos o presupuesto/factura + productos → accion "flujo_factura".
 
