@@ -45,6 +45,9 @@ def guardar_borrador_factura(datos, borrador_id=None):
         "fecha_ultima_modificacion": ahora,
         "estado": "borrador",
     }
+    archivo_origen = str(datos.get("archivo_origen", "")).strip()
+    if archivo_origen:
+        payload["archivo_origen"] = archivo_origen
     ref.set(payload, merge=True)
     return True, f"Borrador guardado ({formatear_fecha_ar(ahora)}).", borrador_id
 
@@ -83,7 +86,9 @@ def titulo_borrador(b):
     pv = str(b.get("punto_venta", "")).zfill(5) if b.get("punto_venta") else "—"
     num = str(b.get("numero_comprobante", "")).zfill(8) if b.get("numero_comprobante") else "—"
     fecha = formatear_fecha_ar(b.get("fecha_ultima_modificacion"))
+    archivo = b.get("archivo_origen")
+    sufijo_archivo = f" | 📎 {archivo}" if archivo else ""
     return (
         f"{b.get('proveedor', '—')} | {pv}-{num} | "
-        f"{b.get('item_count', 0)} ítems | {fecha} | `{b.get('id', '')}`"
+        f"{b.get('item_count', 0)} ítems | {fecha}{sufijo_archivo} | `{b.get('id', '')}`"
     )

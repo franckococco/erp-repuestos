@@ -119,10 +119,113 @@ def _guardar_borrador_actual(d, df_editado, condicion_pago):
         st.error(msg)
 
 
+def _enriquecer_articulos_factura(datos):
+    for art in datos.get("articulos", []):
+        if not isinstance(art, dict):
+            continue
+        cod = str(art.get("codigo", "")).strip()
+        art["codigo_proveedor"] = cod
+        prod_db = obtener_producto_por_codigo(cod)
+        if prod_db:
+            art["descripcion"] = prod_db.get("descripcion", art.get("descripcion"))
+            vehs = prod_db.get("vehiculos") or prod_db.get("vehiculo", "UNIVERSAL")
+            art["vehiculos"] = normalizar_lista_vehiculos(vehs)
+        else:
+            art["vehiculos"] = normalizar_lista_vehiculos(
+                art.get("vehiculos") or art.get("vehiculo", "UNIVERSAL")
+            )
+        art["vehiculo"] = vehiculos_a_texto(art["vehiculos"])
+        art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
+        if "condicion" in art:
+            del art["condicion"]
+    return datos
+
+
+def _procesar_upload_factura(archivo, mejorar_img):
+    from modulos.util_imagen import imagen_desde_upload
+
+    img = imagen_desde_upload(archivo)
+    img_proc = mejorar_imagen_documento(img.copy()) if mejorar_img else img
+    datos = procesar_factura_con_ia(img_proc, mejorar_imagen=False)
+    if not datos:
+        raise ValueError("La IA no devolvió datos de la factura.")
+    return datos, img, img_proc
+
+
+def _cargar_datos_en_sesion(datos):
+    st.session_state.temp_datos = datos
+    st.session_state.borrador_id = None
+    if "grilla_validacion" in st.session_state:
+        del st.session_state["grilla_validacion"]
+
+
+def _procesar_lote_facturas(archivos, condicion_pago, mejorar_img):
+    resultados = []
+    total = len(archivos)
+    barra = st.progress(0, text="Preparando lote…")
+
+    for idx, archivo in enumerate(archivos, start=1):
+        nombre = getattr(archivo, "name", f"archivo_{idx}")
+        barra.progress((idx - 1) / total, text=f"Leyendo {idx}/{total}: {nombre}")
+        fila = {"archivo": nombre, "estado": "error", "mensaje": "", "datos": None, "borrador_id": None}
+        try:
+            datos, _, _ = _procesar_upload_factura(archivo, mejorar_img)
+            datos = _enriquecer_articulos_factura(datos)
+            fila["datos"] = datos
+            payload = {
+                **datos,
+                "condicion_pago": condicion_pago,
+                "archivo_origen": nombre,
+            }
+            ok, msg, bid = guardar_borrador_factura(payload, None)
+            if ok:
+                fila["estado"] = "ok"
+                fila["mensaje"] = msg
+                fila["borrador_id"] = bid
+            else:
+                fila["estado"] = "revision"
+                fila["mensaje"] = msg
+        except Exception as e:
+            fila["mensaje"] = str(e)
+        resultados.append(fila)
+
+    barra.progress(1.0, text=f"Lote finalizado ({total} archivo(s)).")
+    return resultados
+
+
+def _mostrar_resumen_lote(resultados):
+    ok = sum(1 for r in resultados if r["estado"] == "ok")
+    rev = sum(1 for r in resultados if r["estado"] == "revision")
+    err = sum(1 for r in resultados if r["estado"] == "error")
+    st.success(f"Lote procesado: {ok} guardada(s) como borrador, {rev} para revisar, {err} con error.")
+
+    for i, r in enumerate(resultados):
+        cols = st.columns([4, 2, 1])
+        if r["estado"] == "ok":
+            cols[0].success(f"✅ {r['archivo']} — {r['mensaje']}")
+        elif r["estado"] == "revision":
+            cols[0].warning(f"⚠️ {r['archivo']} — {r['mensaje']}")
+        else:
+            cols[0].error(f"❌ {r['archivo']} — {r['mensaje']}")
+
+        prov = (r.get("datos") or {}).get("proveedor", "")
+        n_items = len((r.get("datos") or {}).get("articulos") or [])
+        if prov or n_items:
+            cols[1].caption(f"{prov or '—'} · {n_items} ítems")
+
+        if r.get("datos") and cols[2].button("Abrir", key=f"lote_abrir_{i}"):
+            _cargar_datos_en_sesion(r["datos"])
+            if r.get("borrador_id"):
+                st.session_state.borrador_id = r["borrador_id"]
+            st.session_state.condicion_pago_borrador = st.session_state.get("condicion_pago_factura", "Contado")
+            st.rerun()
+
+
 def render_carga_factura():
     ayuda(
         "Ayuda — Carga de factura",
-        "Editá la grilla (código, marca, **vehículos** en la misma tabla). Guardá con **Ctrl+G** "
+        "Podés subir **una o varias** facturas (PDF o imagen). Con varias, cada una se guarda como borrador "
+        "para revisar y confirmar. Editá la grilla (código, marca, **vehículos**). Guardá con **Ctrl+G** "
         "o el botón *Guardar borrador*. Retomá desde *Facturas en curso*.",
     )
 
@@ -158,9 +261,10 @@ def render_carga_factura():
             key="condicion_pago_factura",
         )
     with col_arch:
-        archivo = st.file_uploader(
-            "Subir factura (PDF o imagen)",
+        archivos = st.file_uploader(
+            "Subir factura(s) (PDF o imagen)",
             type=["png", "jpg", "jpeg", "pdf"],
+            accept_multiple_files=True,
             label_visibility="visible",
         )
         mejorar_img = st.checkbox(
@@ -169,45 +273,28 @@ def render_carga_factura():
             help="Recomendado para fotos con poca luz o inclinadas.",
         )
 
-    if archivo:
-        if st.button("Procesar Factura", type="primary"):
-            with st.spinner("Mejorando imagen y leyendo factura con IA..."):
-                try:
-                    from modulos.util_imagen import imagen_desde_upload
-                    img = imagen_desde_upload(archivo)
-                    img_proc = mejorar_imagen_documento(img.copy()) if mejorar_img else img
-                    if mejorar_img:
-                        with st.expander("Vista previa de imagen", expanded=False):
-                            c1, c2 = st.columns(2)
-                            c1.image(img, caption="Original", use_container_width=True)
-                            c2.image(img_proc, caption="Mejorada", use_container_width=True)
-                    datos = procesar_factura_con_ia(img_proc, mejorar_imagen=False)
-                    if datos:
-                        for art in datos.get("articulos", []):
-                            if not isinstance(art, dict):
-                                continue
-                            cod = str(art.get("codigo", "")).strip()
-                            art["codigo_proveedor"] = cod
-                            prod_db = obtener_producto_por_codigo(cod)
-                            if prod_db:
-                                art["descripcion"] = prod_db.get("descripcion", art.get("descripcion"))
-                                vehs = prod_db.get("vehiculos") or prod_db.get("vehiculo", "UNIVERSAL")
-                                art["vehiculos"] = normalizar_lista_vehiculos(vehs)
-                            else:
-                                art["vehiculos"] = normalizar_lista_vehiculos(
-                                    art.get("vehiculos") or art.get("vehiculo", "UNIVERSAL")
-                                )
-                            art["vehiculo"] = vehiculos_a_texto(art["vehiculos"])
-                            art["marca"] = art.get("marca", art.get("condicion", "GENERICO"))
-                            if "condicion" in art:
-                                del art["condicion"]
-                        st.session_state.temp_datos = datos
-                        st.session_state.borrador_id = None
-                        if "grilla_validacion" in st.session_state:
-                            del st.session_state["grilla_validacion"]
+    if archivos:
+        n_arch = len(archivos)
+        etiqueta_btn = "Procesar Factura" if n_arch == 1 else f"Procesar {n_arch} facturas"
+        if st.button(etiqueta_btn, type="primary"):
+            if n_arch == 1:
+                with st.spinner("Mejorando imagen y leyendo factura con IA..."):
+                    try:
+                        datos, img, img_proc = _procesar_upload_factura(archivos[0], mejorar_img)
+                        if mejorar_img:
+                            with st.expander("Vista previa de imagen", expanded=False):
+                                c1, c2 = st.columns(2)
+                                c1.image(img, caption="Original", use_container_width=True)
+                                c2.image(img_proc, caption="Mejorada", use_container_width=True)
+                        datos = _enriquecer_articulos_factura(datos)
+                        _cargar_datos_en_sesion(datos)
                         st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error al procesar la factura: {e}")
+                    except Exception as e:
+                        st.error(f"❌ Error al procesar la factura: {e}")
+            else:
+                with st.spinner(f"Procesando {n_arch} facturas con IA..."):
+                    resultados = _procesar_lote_facturas(archivos, condicion_pago, mejorar_img)
+                _mostrar_resumen_lote(resultados)
 
     if not st.session_state.get("temp_datos"):
         return
