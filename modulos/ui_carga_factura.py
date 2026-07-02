@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from PIL import Image
 from io import BytesIO
 import zipfile
 
@@ -141,6 +140,65 @@ def _enriquecer_articulos_factura(datos):
     return datos
 
 
+def _archivo_en_memoria(nombre, contenido):
+    buf = BytesIO(contenido)
+    buf.name = nombre
+    return buf
+
+
+def _inicializar_cola_facturas():
+    if "cola_facturas_pendientes" not in st.session_state:
+        st.session_state.cola_facturas_pendientes = []
+    if "cola_facturas_uid" not in st.session_state:
+        st.session_state.cola_facturas_uid = 0
+
+
+def _agregar_archivo_a_cola(archivo):
+    nombre = getattr(archivo, "name", "factura")
+    contenido = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo.read()
+    if not contenido:
+        return False, "El archivo está vacío."
+    cola = st.session_state.cola_facturas_pendientes
+    if any(item.get("nombre") == nombre for item in cola):
+        return False, f"«{nombre}» ya está en la lista."
+    st.session_state.cola_facturas_uid += 1
+    cola.append({
+        "uid": st.session_state.cola_facturas_uid,
+        "nombre": nombre,
+        "bytes": contenido,
+        "tamano_kb": round(len(contenido) / 1024, 1),
+    })
+    return True, f"Agregado: {nombre}"
+
+
+def _quitar_archivo_de_cola(uid):
+    st.session_state.cola_facturas_pendientes = [
+        item for item in st.session_state.cola_facturas_pendientes if item.get("uid") != uid
+    ]
+
+
+def _limpiar_cola_facturas():
+    st.session_state.cola_facturas_pendientes = []
+
+
+def _archivos_desde_cola(cola):
+    return [_archivo_en_memoria(item["nombre"], item["bytes"]) for item in cola]
+
+
+def _render_cola_facturas():
+    cola = st.session_state.cola_facturas_pendientes
+    if not cola:
+        return 0
+    st.caption(f"**{len(cola)}** factura(s) en lista — procesá todas juntas cuando termines de agregar.")
+    for item in cola:
+        c1, c2 = st.columns([5, 1])
+        c1.write(f"📄 {item['nombre']} ({item['tamano_kb']} KB)")
+        if c2.button("Quitar", key=f"cola_quitar_{item['uid']}", help="Sacar de la lista"):
+            _quitar_archivo_de_cola(item["uid"])
+            st.rerun()
+    return len(cola)
+
+
 def _procesar_upload_factura(archivo, mejorar_img):
     from modulos.util_imagen import imagen_desde_upload
 
@@ -221,12 +279,28 @@ def _mostrar_resumen_lote(resultados):
             st.rerun()
 
 
+def _procesar_una_factura_directa(archivo, mejorar_img):
+    """Una factura: abre la grilla de validación (flujo clásico)."""
+    datos, img, img_proc = _procesar_upload_factura(archivo, mejorar_img)
+    if mejorar_img:
+        with st.expander("Vista previa de imagen", expanded=False):
+            c1, c2 = st.columns(2)
+            c1.image(img, caption="Original", use_container_width=True)
+            c2.image(img_proc, caption="Mejorada", use_container_width=True)
+    datos = _enriquecer_articulos_factura(datos)
+    _cargar_datos_en_sesion(datos)
+    _limpiar_cola_facturas()
+    st.rerun()
+
+
 def render_carga_factura():
+    _inicializar_cola_facturas()
     ayuda(
         "Ayuda — Carga de factura",
-        "Podés subir **una o varias** facturas (PDF o imagen). Con varias, cada una se guarda como borrador "
-        "para revisar y confirmar. Editá la grilla (código, marca, **vehículos**). Guardá con **Ctrl+G** "
-        "o el botón *Guardar borrador*. Retomá desde *Facturas en curso*.",
+        "Subí **de a una** factura y usá *Agregar a la lista* para armar el lote. "
+        "Cuando termines, *Procesar todas*. También podés *Procesar ahora* sin agregar a la lista. "
+        "Editá la grilla (código, marca, **vehículos**). Guardá con **Ctrl+G** "
+        "o *Guardar borrador*. Retomá desde *Facturas en curso*.",
     )
 
     if "borrador_id" not in st.session_state:
@@ -261,11 +335,12 @@ def render_carga_factura():
             key="condicion_pago_factura",
         )
     with col_arch:
-        archivos = st.file_uploader(
-            "Subir factura(s) (PDF o imagen)",
+        archivo_nuevo = st.file_uploader(
+            "Elegir factura (PDF o imagen)",
             type=["png", "jpg", "jpeg", "pdf"],
-            accept_multiple_files=True,
+            accept_multiple_files=False,
             label_visibility="visible",
+            key="upload_factura_individual",
         )
         mejorar_img = st.checkbox(
             "Mejorar imagen antes de leer (contraste y nitidez)",
@@ -273,28 +348,45 @@ def render_carga_factura():
             help="Recomendado para fotos con poca luz o inclinadas.",
         )
 
-    if archivos:
-        n_arch = len(archivos)
-        etiqueta_btn = "Procesar Factura" if n_arch == 1 else f"Procesar {n_arch} facturas"
-        if st.button(etiqueta_btn, type="primary"):
-            if n_arch == 1:
+        if archivo_nuevo:
+            btn_agregar, btn_ahora = st.columns(2)
+            if btn_agregar.button("➕ Agregar a la lista", use_container_width=True):
+                ok, msg = _agregar_archivo_a_cola(archivo_nuevo)
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+            if btn_ahora.button("⚡ Procesar ahora", type="primary", use_container_width=True):
                 with st.spinner("Mejorando imagen y leyendo factura con IA..."):
                     try:
-                        datos, img, img_proc = _procesar_upload_factura(archivos[0], mejorar_img)
-                        if mejorar_img:
-                            with st.expander("Vista previa de imagen", expanded=False):
-                                c1, c2 = st.columns(2)
-                                c1.image(img, caption="Original", use_container_width=True)
-                                c2.image(img_proc, caption="Mejorada", use_container_width=True)
-                        datos = _enriquecer_articulos_factura(datos)
-                        _cargar_datos_en_sesion(datos)
-                        st.rerun()
+                        _procesar_una_factura_directa(archivo_nuevo, mejorar_img)
                     except Exception as e:
                         st.error(f"❌ Error al procesar la factura: {e}")
-            else:
-                with st.spinner(f"Procesando {n_arch} facturas con IA..."):
-                    resultados = _procesar_lote_facturas(archivos, condicion_pago, mejorar_img)
-                _mostrar_resumen_lote(resultados)
+
+        n_cola = _render_cola_facturas()
+        if n_cola:
+            btn_lote, btn_vaciar = st.columns([2, 1])
+            if btn_lote.button(
+                f"🚀 Procesar todas ({n_cola})",
+                type="primary",
+                use_container_width=True,
+            ):
+                archivos_cola = _archivos_desde_cola(st.session_state.cola_facturas_pendientes)
+                if n_cola == 1:
+                    with st.spinner("Mejorando imagen y leyendo factura con IA..."):
+                        try:
+                            _procesar_una_factura_directa(archivos_cola[0], mejorar_img)
+                        except Exception as e:
+                            st.error(f"❌ Error al procesar la factura: {e}")
+                else:
+                    with st.spinner(f"Procesando {n_cola} facturas con IA..."):
+                        resultados = _procesar_lote_facturas(archivos_cola, condicion_pago, mejorar_img)
+                    _limpiar_cola_facturas()
+                    _mostrar_resumen_lote(resultados)
+            if btn_vaciar.button("Vaciar lista", use_container_width=True):
+                _limpiar_cola_facturas()
+                st.rerun()
 
     if not st.session_state.get("temp_datos"):
         return
