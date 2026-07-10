@@ -12,6 +12,7 @@ _ARCHIVOS_MODULOS = (
     "__init__.py",
     "ia_vision.py",
     "ia_asistente.py",
+    "orden_asistente_inteligente.py",
     "ia_vinculacion.py",
     "db_firebase.py",
     "generador_qr.py",
