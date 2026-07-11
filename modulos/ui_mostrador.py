@@ -34,7 +34,8 @@ from modulos.db_firebase import (
 )
 from modulos.presupuesto_pdf import crear_pdf_presupuesto, VALIDEZ_PRESUPUESTO_DIAS
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
-from modulos.factura_arca_pdf import crear_ticket, crear_a4
+from modulos.factura_arca_pdf import crear_a4
+from modulos.factura_arca_ticket_html import crear_ticket_html
 from modulos.util_fechas import formatear_fecha_ar, rango_fechas_ar_a_utc, fecha_hoy_ar
 from modulos.ia_mostrador import (
     FORMAS_PAGO,
@@ -420,7 +421,11 @@ def agregar_al_carrito_mostrador(vendedor, id_producto, cantidad=1):
     descartar_panels_operacion_anterior()
     _invalidar_pdf_presupuesto_mostrador()
     from modulos.db_firebase import agregar_al_carrito
-    return agregar_al_carrito(str(vendedor), id_producto, cantidad)
+    from modulos.mostrador_voz_flujo import invalidar_cache_inventario_mostrador
+    exito, msj = agregar_al_carrito(str(vendedor), id_producto, cantidad)
+    if exito:
+        invalidar_cache_inventario_mostrador()
+    return exito, msj
 
 
 def _limpiar_inputs_mostrador(vendedor):
@@ -1246,13 +1251,25 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
 
     busq = busqueda.strip()
     if parece_orden_voz_mostrador(busq):
-        ultima = st.session_state.get(f"busq_voz_proc_{vendedor}")
-        if ultima != busq:
-            st.session_state[f"ia_most_{vendedor}"] = busq
-            st.session_state[f"auto_run_ia_{vendedor}"] = True
-            st.session_state[f"busq_voz_proc_{vendedor}"] = busq
-            st.rerun()
-        return
+        from modulos.mostrador_voz_flujo import (
+            extraer_items_orden_voz,
+            normalizar_orden_voz_mostrador,
+        )
+        norm = normalizar_orden_voz_mostrador(busq)
+        items_voz = extraer_items_orden_voz(norm)
+        terminos = []
+        for it in items_voz:
+            if not isinstance(it, dict):
+                continue
+            t = str(it.get("termino") or it.get("codigo") or "").strip()
+            if t:
+                terminos.append(t)
+        if terminos:
+            busq = terminos[0]
+            st.caption(f"Búsqueda del repuesto: «{busq}» (extraído de la orden).")
+        else:
+            st.info("Para órdenes completas (cliente + presupuesto) usá el chat de arriba.")
+            return
 
     encontrados = filtrar_inventario(inv_completo, busq)[:25]
     if not encontrados:
@@ -1408,19 +1425,28 @@ def carrito_a_items_factura(carrito, descuento_pct):
     for item in carrito:
         if not isinstance(item, dict):
             continue
-        cant = int(item.get("cantidad", 1))
-        sub = float(item.get("subtotal", 0)) * factor
+        cant = max(1, int(item.get("cantidad", 1)))
+        precio_u = float(item.get("precio_unitario", 0) or 0) * factor
+        sub = float(item.get("subtotal", precio_u * cant) or 0) * factor
+        if sub <= 0 and precio_u > 0:
+            sub = precio_u * cant
+        codigo = str(item.get("codigo") or item.get("id_maestro") or "").strip()
+        desc = str(item.get("descripcion", "Artículo")).strip() or "Artículo"
         items.append({
-            "descripcion": str(item.get("descripcion", "Artículo"))[:120],
+            "codigo": codigo,
+            "id_maestro": codigo or str(item.get("id", "")).split("_")[0],
+            "descripcion": desc[:120],
             "cantidad": cant,
+            "precio_unitario": round(precio_u, 2),
             "precio": round(sub, 2),
         })
     return items
 
 
-def _auto_imprimir_pdf(pdf_bytes):
-    """Impresión automática desactivada en Cloud (evita components.html / error removeChild)."""
-    return
+def _auto_imprimir_ticket(html_ticket):
+    """Marca ticket HTML para abrir diálogo de impresión al mostrar el panel."""
+    if html_ticket:
+        st.session_state["_ticket_auto_print_html"] = html_ticket
 
 
 def _formato_nro_comprobante(datos):
@@ -1457,36 +1483,62 @@ def _respuesta_para_pdf(comp):
     }
 
 
-def regenerar_pdfs_comprobante(comp):
+def regenerar_comprobantes_arca(comp):
     _, _, cfg = _leer_secrets_facturador()
     datos_resp = _respuesta_para_pdf(comp)
     datos_cliente = _cliente_para_pdf(comp.get("cliente"))
     items = comp.get("items") or []
-    ticket = crear_ticket(datos_resp, datos_cliente, items, cfg)
+    forma_pago = str(comp.get("forma_pago") or "Contado")
+    html_ticket = crear_ticket_html(
+        datos_resp, datos_cliente, items, cfg, forma_pago=forma_pago
+    )
     a4 = crear_a4(datos_resp, datos_cliente, items, cfg)
-    return ticket, a4, datos_resp
+    return html_ticket, a4, datos_resp
 
 
-def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_ticket=False):
-    """Descargar ticket / A4 en una sola fila horizontal."""
-    n_cols = 2 if (pdf_a4 and not solo_ticket) else 1
+def regenerar_pdfs_comprobante(comp):
+    """Compatibilidad: devuelve (html_ticket, a4, datos)."""
+    return regenerar_comprobantes_arca(comp)
+
+
+def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
+    if not html_ticket:
+        return
+    with st.expander("Vista previa ticket", expanded=False):
+        import streamlit.components.v1 as components
+        components.html(html_ticket, height=420, scrolling=True)
+
+
+def _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
+    """Ticket HTML imprimible + factura A4 en PDF."""
+    n_cols = 3 if (pdf_a4 and not solo_ticket and html_ticket) else 2
     cols = st.columns(n_cols)
     idx = 0
-    if pdf_ticket:
+    if html_ticket:
+        html_bytes = html_ticket.encode("utf-8")
         with cols[idx]:
             st.download_button(
-                "🖨️ Ticket",
-                pdf_ticket,
-                file_name=f"Ticket_{nro}.pdf",
-                mime="application/pdf",
+                "🖨️ Ticket HTML",
+                html_bytes,
+                file_name=f"Ticket_{nro}.html",
+                mime="text/html",
                 use_container_width=True,
-                key=f"{key_prefix}_ticket",
+                key=f"{key_prefix}_ticket_html",
             )
+        idx += 1
+        if idx < len(cols):
+            with cols[idx]:
+                if st.button(
+                    "🖨️ Imprimir ticket",
+                    use_container_width=True,
+                    key=f"{key_prefix}_ticket_print",
+                ):
+                    st.session_state[f"{key_prefix}_ticket_print_html"] = html_ticket
         idx += 1
     if pdf_a4 and not solo_ticket and idx < len(cols):
         with cols[idx]:
             st.download_button(
-                "↓ A4",
+                "↓ Factura A4",
                 pdf_a4,
                 file_name=f"Factura_{nro}.pdf",
                 mime="application/pdf",
@@ -1502,11 +1554,25 @@ def _render_acciones_pdf_compactas(nro, pdf_ticket, pdf_a4, key_prefix, solo_tic
             key=f"{key_prefix}_a4_opt",
         )
 
+    print_html = st.session_state.pop(f"{key_prefix}_ticket_print_html", None)
+    if print_html:
+        import streamlit.components.v1 as components
+        components.html(print_html, height=0, scrolling=False)
+
+
+def _render_acciones_pdf_compactas(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
+    _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=solo_ticket)
+
 
 def render_factura_arca_exitosa(key_suffix=""):
     rec = st.session_state.get("factura_arca_reciente")
     if not rec:
         return False
+
+    auto_print = st.session_state.pop("_ticket_auto_print_html", None)
+    if auto_print:
+        import streamlit.components.v1 as components
+        components.html(auto_print, height=0, scrolling=False)
 
     datos = rec.get("respuesta", {})
     nro = _formato_nro_comprobante(datos)
@@ -1537,13 +1603,14 @@ def render_factura_arca_exitosa(key_suffix=""):
         c3.caption("Comprobante")
         c3.write(nro)
 
-        _render_acciones_pdf_compactas(
+        _render_acciones_comprobante(
             nro,
-            rec.get("pdf_ticket"),
+            rec.get("html_ticket"),
             rec.get("pdf_a4"),
             f"fact_{ks}",
             solo_ticket=solo_ticket,
         )
+        _render_vista_previa_ticket_html(rec.get("html_ticket"), f"fact_{ks}")
     return True
 
 
@@ -1642,12 +1709,12 @@ def render_historial_facturas_arca():
         f"Pago: {comp.get('forma_pago', '—')} · Vendedor: {comp.get('vendedor', '—')}"
     )
 
-    if st.button("Cargar PDFs", key="hist_arca_reimprimir", use_container_width=True):
-        pdf_t, pdf_a, datos = regenerar_pdfs_comprobante(comp)
+    if st.button("Cargar comprobantes", key="hist_arca_reimprimir", use_container_width=True):
+        html_t, pdf_a, datos = regenerar_comprobantes_arca(comp)
         nro = _formato_nro_comprobante(datos)
         st.session_state.hist_arca_preview = {
             "respuesta": datos,
-            "pdf_ticket": pdf_t,
+            "html_ticket": html_t,
             "pdf_a4": pdf_a,
             "total": comp.get("total"),
             "comprobante_id": sel_id,
@@ -1658,12 +1725,13 @@ def render_historial_facturas_arca():
     preview = st.session_state.get("hist_arca_preview")
     if preview and preview.get("comprobante_id") == sel_id:
         st.caption(f"Comprobante {preview.get('nro', '—')}")
-        _render_acciones_pdf_compactas(
+        _render_acciones_comprobante(
             preview.get("nro", "—"),
-            preview.get("pdf_ticket"),
+            preview.get("html_ticket"),
             preview.get("pdf_a4"),
             f"hist_{sel_id[:8]}",
         )
+        _render_vista_previa_ticket_html(preview.get("html_ticket"), f"hist_{sel_id[:8]}")
 
 
 def _forma_pago_actual(vendedor):
@@ -1686,12 +1754,11 @@ def ejecutar_emitir_factura_arca(
     if not cuit_fact or not clave_fact:
         return False, "Completá CUIT emisor y clave secreta en «Facturación ARCA» (arriba en Mostrador).", None
 
-    _, errores_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
+    _, errores_sync = sincronizar_grilla_carrito_firebase(vendedor)
     if errores_sync:
         return False, "\n".join(errores_sync), None
 
-    carrito = obtener_carrito(str(vendedor)) or []
-    _, total_final = calcular_totales_carrito(carrito, desc_porc)
+    carrito, _, total_final = obtener_carrito_listo_facturacion(vendedor, desc_porc)
 
     ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
     if not ok_val:
@@ -1718,7 +1785,9 @@ def ejecutar_emitir_factura_arca(
     cfg = dict(config_ticket)
     if cuit_fact:
         cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
-    pdf_ticket = crear_ticket(datos_resp, datos_cliente, items_fc, cfg)
+    html_ticket = crear_ticket_html(
+        datos_resp, datos_cliente, items_fc, cfg, forma_pago=forma_pago
+    )
     pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
 
     exito_stock, msj_stock = confirmar_venta(str(vendedor))
@@ -1727,6 +1796,9 @@ def ejecutar_emitir_factura_arca(
             f"CAE obtenido pero falló el descuento de stock: {msj_stock}. "
             "Revisá inventario manualmente."
         ), None
+
+    from modulos.mostrador_voz_flujo import invalidar_cache_inventario_mostrador
+    invalidar_cache_inventario_mostrador()
 
     comp_id = guardar_comprobante_arca(
         vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
@@ -1765,7 +1837,7 @@ def ejecutar_emitir_factura_arca(
 
     datos_panel = {
         "respuesta": datos_resp,
-        "pdf_ticket": pdf_ticket,
+        "html_ticket": html_ticket,
         "pdf_a4": pdf_a4,
         "total": total_final,
         "comprobante_id": comp_id,
@@ -1784,7 +1856,7 @@ def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pag
             vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
         )
     if ok and datos:
-        _auto_imprimir_pdf(datos.get("pdf_ticket"))
+        _auto_imprimir_ticket(datos.get("html_ticket"))
     return ok, msj
 
 
@@ -1823,7 +1895,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
                 vendedor, carrito, total_final, desc_porc, forma_pago
             )
         if ok and datos:
-            _auto_imprimir_pdf(datos.get("pdf_ticket"))
+            _auto_imprimir_ticket(datos.get("html_ticket"))
         return ok, msj
 
     if tipo == "imprimir_ticket":
@@ -1832,7 +1904,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
                 vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
             )
         if ok and datos:
-            _auto_imprimir_pdf(datos.get("pdf_ticket"))
+            _auto_imprimir_ticket(datos.get("html_ticket"))
         return ok, msj
 
     if tipo == "guardar_presupuesto":
@@ -1956,7 +2028,7 @@ def render_carrito_grilla(vendedor, carrito):
         c2.markdown(f"<span style='font-size:0.82rem;color:#475569'>{desc}</span>", unsafe_allow_html=True)
         cant = c3.number_input(
             "Cant.",
-            min_value=1,
+            min_value=0,
             max_value=9999,
             value=int(item.get("cantidad", 1)),
             step=1,
@@ -1967,8 +2039,8 @@ def render_carrito_grilla(vendedor, carrito):
             "Precio",
             min_value=0.0,
             value=float(item.get("precio_unitario", 0)),
-            step=0.01,
-            format="%.2f",
+            step=1.0,
+            format="%.0f",
             key=f"cart_p_{vid}_{rev}_{idx}_{safe}",
             label_visibility="collapsed",
         )
@@ -2062,7 +2134,7 @@ def render_panel_cobro_mostrador(
                     else:
                         st.error(msj)
             if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
-                _, err_sync = sincronizar_grilla_carrito_firebase(vendedor, carrito)
+                _, err_sync = sincronizar_grilla_carrito_firebase(vendedor)
                 if err_sync:
                     st.error("\n".join(err_sync))
                 else:

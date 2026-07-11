@@ -66,6 +66,7 @@ def _procesar_orden_chat(
         cliente_consumidor_final,
         ejecutar_emitir_factura_arca,
         limpiar_venta_mostrador,
+        sincronizar_grilla_carrito_firebase,
         validar_carrito_para_venta,
     )
     from modulos.presupuesto_pdf import VALIDEZ_PRESUPUESTO_DIAS
@@ -282,6 +283,7 @@ def _procesar_orden_chat(
         if not carrito:
             _chat_orden(orden,"El carrito está vacío.", "error")
             return False
+        sincronizar_grilla_carrito_firebase(vendedor)
         ok_val, msg_val, _ = validar_carrito_para_venta(str(vendedor))
         if not ok_val:
             _chat_orden(orden,msg_val, "error")

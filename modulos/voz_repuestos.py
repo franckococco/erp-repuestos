@@ -34,7 +34,6 @@ _REPUESTOS_BASE = (
 _SINONIMOS_DICTADO = {
     # Bieletas / brazos
     "bielete": "bieleta", "bieletes": "bieletas", "bieletta": "bieleta",
-    "biela": "bieleta", "bielas": "bieletas", "biella": "bieleta",
     "tirante": "bieleta", "tirantes": "bieletas",
     # Bujes
     "bujete": "buje", "bujetes": "bujes", "bujes": "buje", "bush": "buje", "bushes": "bujes",
