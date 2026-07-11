@@ -62,6 +62,10 @@ def parece_codigo_producto(termino):
     t = _normalizar_codigo_busqueda(termino)
     if not t or " " in t:
         return False
+    from modulos.voz_repuestos import es_palabra_repuesto
+
+    if es_palabra_repuesto(t.lower()):
+        return False
     return bool(re.match(r"^[\dA-Z]+(?:[-/][\dA-Z]+)*$", t)) and len(t) <= 24
 
 

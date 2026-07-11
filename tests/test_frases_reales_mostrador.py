@@ -55,6 +55,20 @@ class TestFrasesRealesMostrador(unittest.TestCase):
         cli = extraer_cliente_orden_voz(frase)
         self.assertTrue(cli.get("consumidor_final"))
 
+    def test_factura_franco_cocco_biela_arranque_gol_trend(self):
+        frase = (
+            "haceme una factura para franco cocco de una biela y un arranque de gol trend"
+        )
+        cli = extraer_cliente_orden_voz(frase)
+        self.assertEqual(cli.get("nombre_cliente"), "FRANCO COCCO")
+        items = extraer_items_orden_voz(frase)
+        terminos = {i["termino"].upper() for i in items}
+        self.assertIn("BIELA", terminos)
+        self.assertIn("ARRANQUE", terminos)
+        self.assertEqual(len(items), 2)
+        for it in items:
+            self.assertEqual(it.get("vehiculo"), "gol trend")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -318,7 +318,22 @@ def extraer_vehiculos_de_texto(texto: str) -> List[str]:
         v = m.group(1)
         if v not in found:
             found.append(v)
-    return found
+    return _vehiculos_sin_redundancia(found)
+
+
+def _vehiculos_sin_redundancia(vehs: List[str]) -> List[str]:
+    """Quita «gol» si ya hay «gol trend» (modelos más específicos primero)."""
+    if not vehs:
+        return []
+    out: List[str] = []
+    for v in sorted(set(vehs), key=len, reverse=True):
+        if any(
+            v != o and re.search(rf"\b{re.escape(v)}\b", o)
+            for o in out
+        ):
+            continue
+        out.append(v)
+    return out
 
 
 def extraer_vehiculo_global_orden(texto: str) -> Optional[str]:

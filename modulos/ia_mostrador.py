@@ -299,14 +299,14 @@ def procesar_orden_mostrador(texto_usuario):
             return {"accion": "confirmar_pendiente"}
         return {"accion": "listo_armado"}
 
+    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
+    if flujo_rapido:
+        return normalizar_accion_mostrador(flujo_rapido, texto_usuario)
+
     if orden_compuesta_requiere_groq(texto_usuario):
         groq_accion = interpretar_orden_groq(texto_usuario)
         if groq_accion and groq_accion.get("accion") != "error":
             return groq_accion
-
-    flujo_rapido = parse_flujo_rapido_voz(texto_usuario)
-    if flujo_rapido:
-        return normalizar_accion_mostrador(flujo_rapido, texto_usuario)
 
     armado = parse_armado_rapido_voz(texto_usuario)
     if armado:

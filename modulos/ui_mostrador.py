@@ -1778,6 +1778,11 @@ def render_factura_arca_exitosa(key_suffix=""):
             f"fact_{ks}",
             solo_ticket=solo_ticket,
         )
+        if rec.get("html_ticket"):
+            st.caption(
+                "El ticket para impresora térmica es **HTML** (botón «Ticket HTML»). "
+                "El PDF es solo la factura A4."
+            )
         _render_vista_previa_ticket_html(rec.get("html_ticket"), f"fact_{ks}")
     return True
 

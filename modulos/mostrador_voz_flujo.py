@@ -27,6 +27,14 @@ def descartar_panels_operacion_anterior():
     st.session_state.pop("hist_arca_preview", None)
 
 
+def limpiar_coincidencias_pendientes_mostrador():
+    """Quita listas de elección y colas de ambigüedad de una búsqueda anterior."""
+    st.session_state.pop("resultados_ia_mostrador", None)
+    st.session_state.pop("msg_ia_mostrador", None)
+    st.session_state.pop("mostrador_voz_cola_ambiguos", None)
+    st.session_state.pop("mostrador_voz_cant_coincidencia", None)
+
+
 
 def _expandir_numeros_compuestos(texto: str) -> str:
     """Compat tests: delega en capa de lenguaje natural."""
@@ -354,10 +362,35 @@ def extraer_items_orden_voz(texto):
             for m in re.finditer(patron, resto):
                 agregar(m.group(1), m.group(2), es_descripcion=True)
 
+        prod_pat = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
+        for m in re.finditer(
+            rf"\b(?:un|una)\s+({prod_pat})\w*(?:\s+de\s+([a-záéíóúñ]+(?:\s+[a-záéíóúñ]+)?))?",
+            resto,
+            re.I,
+        ):
+            term_parts = [m.group(1)]
+            if m.group(2):
+                term_parts.append(m.group(2).strip())
+            agregar(" ".join(term_parts), 1, es_descripcion=True)
+
+    def _extraer_items_de_segmento(fragmento, acumulado, vistos):
+        n_antes = len(acumulado)
+        _extraer_de_fragmento(fragmento, acumulado, vistos)
+        if len(acumulado) > n_antes:
+            return
+        fallback = _extraer_item_sin_cantidad_explicita(fragmento)
+        if not fallback:
+            return
+        clave = (fallback["termino"], int(fallback.get("cantidad", 1)))
+        if clave in vistos:
+            return
+        vistos.add(clave)
+        acumulado.append(fallback)
+
     items = []
     vistos = set()
     raw = str(texto).strip()
-    _extraer_de_fragmento(raw, items, vistos)
+    _extraer_items_de_segmento(raw, items, vistos)
 
     if len(items) <= 1:
         t_full = normalizar_texto_basico(raw).lower()
@@ -376,7 +409,7 @@ def extraer_items_orden_voz(texto):
                 for seg in segmentos:
                     seg = seg.strip()
                     if seg:
-                        _extraer_de_fragmento(seg, items, vistos)
+                        _extraer_items_de_segmento(seg, items, vistos)
     elif len(re.findall(r"\b\d{1,4}\s+unidades?\b", normalizar_texto_basico(raw).lower())) > len(items):
         t_full = normalizar_texto_basico(raw).lower()
         prod_pat = "|".join(re.escape(p) for p in _INICIO_DESCRIPCION_VOZ)
@@ -391,7 +424,7 @@ def extraer_items_orden_voz(texto):
             for seg in re.split(separadores, t_full):
                 seg = seg.strip()
                 if seg:
-                    _extraer_de_fragmento(seg, items, vistos)
+                    _extraer_items_de_segmento(seg, items, vistos)
 
     from modulos.voz_repuestos import enriquecer_items_con_vehiculo
 
@@ -801,6 +834,8 @@ def ejecutar_flujo_factura_voz(
     emitir_factura_fn(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket)
     """
     descartar_panels_operacion_anterior()
+    if flujo.get("vaciar_antes", flujo.get("carrito_nuevo", False)):
+        limpiar_coincidencias_pendientes_mostrador()
     pasos_ok = []
     errores = []
 

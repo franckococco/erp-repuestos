@@ -13,7 +13,7 @@ from modulos.voz_repuestos import corregir_termino_repuesto
 class TestVozParser(unittest.TestCase):
     def test_sinonimo_bielete(self):
         self.assertEqual(corregir_termino_repuesto("bielete"), "bieleta")
-        self.assertEqual(corregir_termino_repuesto("biela"), "bieleta")
+        self.assertEqual(corregir_termino_repuesto("biela"), "biela")
         self.assertEqual(corregir_termino_repuesto("ferodo"), "pastilla")
         self.assertEqual(corregir_termino_repuesto("amorti"), "amortiguador")
         self.assertEqual(corregir_termino_repuesto("ruliman"), "ruleman")
