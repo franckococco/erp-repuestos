@@ -307,8 +307,15 @@ def _procesar_orden_chat(
                 orden, f"{len(encontrados[:25])} opciones para '{termino}'. Elegí una.", "warning"
             )
             return False
+        st.session_state[f"manual_add_ctx_{vendedor}"] = {
+            "termino": termino,
+            "vehiculo": None,
+            "cantidad": 1,
+        }
         _chat_orden(
-            orden, f"No encontré coincidencias para '{termino}'.", "error"
+            orden,
+            f"No encontré coincidencias para '{termino}'. Podés agregarlo manual (fuera de stock).",
+            "error",
         )
         return False
 
@@ -572,6 +579,12 @@ def render_venta_chat(
         total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
         intent = obtener_intent_venta()
 
+        if any(isinstance(i, dict) and (i.get("fuera_stock") or i.get("manual")) for i in carrito_ui):
+            st.warning(
+                "Hay ítems **manuales fuera de stock** en el carrito. "
+                "No descontarán inventario al facturar."
+            )
+
         st.markdown(f"### Revisar {etiqueta_intent(intent)}")
         render_carrito_grilla(vendedor, carrito_ui)
         render_panel_cobro_mostrador(
@@ -590,10 +603,14 @@ def render_venta_chat(
         return
 
     if estado == EstadoVenta.ARMANDO:
+        from modulos.ui_mostrador import render_agregar_manual_mostrador
+
         carrito = obtener_carrito(str(vendedor)) or []
         carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
         desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
         _, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
+        if st.session_state.get(f"manual_add_ctx_{vendedor}"):
+            render_agregar_manual_mostrador(vendedor)
         with st.expander(
             f"🛒 Ver carrito · {len(carrito_ui)} ítem(s) · ${total_final:,.2f}",
             expanded=False,

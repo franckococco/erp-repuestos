@@ -65,10 +65,20 @@ class TestBusquedaVehiculo(unittest.TestCase):
         item = INVENTARIO_FAKE[1]
         self.assertTrue(item_coincide_vehiculo(item, "207"))
 
-    def test_biela_para_207_solo_bieletas_207(self):
+    def test_biela_no_se_confunde_con_bieleta(self):
+        """biela (motor) ya no se corrige a bieleta (suspensión)."""
+        self.assertEqual(corregir_termino_repuesto("biela"), "biela")
         res = buscar_en_inventario_con_vehiculo(
             INVENTARIO_FAKE,
             corregir_termino_repuesto("biela"),
+            "207",
+        )
+        self.assertEqual(res, [])
+
+    def test_bieleta_para_207_prioriza_207(self):
+        res = buscar_en_inventario_con_vehiculo(
+            INVENTARIO_FAKE,
+            corregir_termino_repuesto("bieleta"),
             "207",
         )
         ids = [r["id"] for r in res]

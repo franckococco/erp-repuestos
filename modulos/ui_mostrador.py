@@ -938,7 +938,156 @@ def render_presupuestos_guardados(vendedor):
                 st.error(msj)
 
 
+def render_panel_cliente_pendiente_confirmar():
+    """Confirma cliente dictado que no matcheó Firebase con suficiente confianza."""
+    pend = st.session_state.get("cliente_pendiente_confirmar")
+    cli = st.session_state.get("cliente_activo") or {}
+    if not pend and not cli.get("pendiente_confirmar"):
+        return
+
+    nombre_dictado = (pend or {}).get("nombre_dictado") or cli.get("nombre", "")
+    with st.container(border=True):
+        st.warning(
+            f"**Cliente no confirmado en la base:** «{nombre_dictado}». "
+            "Elegí un cliente registrado o confirmá el nombre dictado."
+        )
+        sugerencias = (pend or {}).get("sugerencias") or []
+        if sugerencias:
+            st.caption("Clientes similares en Firebase:")
+            cols = st.columns(min(3, len(sugerencias)))
+            for i, (nombre, datos, score) in enumerate(sugerencias[:3]):
+                with cols[i % len(cols)]:
+                    if st.button(
+                        f"{nombre[:28]}",
+                        key=f"cli_pend_sel_{i}",
+                        use_container_width=True,
+                        help=f"Coincidencia {int(score * 100)}%",
+                    ):
+                        descartar_panels_operacion_anterior()
+                        _invalidar_pdf_presupuesto_mostrador()
+                        st.session_state.cliente_activo = normalizar_cliente_activo(
+                            cliente_db_a_activo(datos)
+                        )
+                        st.session_state.pop("cliente_pendiente_confirmar", None)
+                        st.rerun()
+
+        c1, c2 = st.columns(2)
+        if c1.button("Usar nombre dictado", use_container_width=True, key="cli_pend_usar_dictado"):
+            cli_act = normalizar_cliente_activo({
+                **cli,
+                "nombre": str(nombre_dictado).upper(),
+                "pendiente_confirmar": False,
+            })
+            st.session_state.cliente_activo = cli_act
+            st.session_state.pop("cliente_pendiente_confirmar", None)
+            st.rerun()
+        if c2.button("Consumidor final", use_container_width=True, key="cli_pend_cf"):
+            st.session_state.cliente_activo = cliente_consumidor_final()
+            st.session_state.pop("cliente_pendiente_confirmar", None)
+            st.rerun()
+
+
+def render_agregar_manual_mostrador(vendedor, contexto=None):
+    """Formulario para línea fuera de stock / no encontrada en inventario."""
+    ctx = contexto or st.session_state.get(f"manual_add_ctx_{vendedor}") or {}
+    termino = str(ctx.get("termino", "") or "").strip()
+    veh = ctx.get("vehiculo")
+    cant_def = max(1, int(ctx.get("cantidad") or 1))
+
+    with st.expander("⚠️ Agregar manual (fuera de stock)", expanded=bool(termino)):
+        st.caption(
+            "Solo para casos excepcionales. El ítem **no descuenta stock** "
+            "y queda marcado en el carrito."
+        )
+        if termino:
+            st.info(f"Búsqueda sin resultado: «{termino}»" + (f" · vehículo {veh}" if veh else ""))
+
+        col_d, col_c = st.columns([3, 1])
+        desc = col_d.text_input(
+            "Descripción",
+            value=termino.upper() if termino else "",
+            key=f"manual_desc_{vendedor}",
+            placeholder="Ej: BIELETA SUSPENSION DELANTERA",
+        )
+        cant = col_c.number_input(
+            "Cant.",
+            min_value=1,
+            step=1,
+            value=cant_def,
+            key=f"manual_cant_{vendedor}",
+        )
+        col_cod, col_pre = st.columns(2)
+        codigo = col_cod.text_input(
+            "Código (opcional)",
+            key=f"manual_cod_{vendedor}",
+            placeholder="Si lo tenés",
+        )
+        precio = col_pre.number_input(
+            "Precio unitario",
+            min_value=0.0,
+            step=1.0,
+            value=0.0,
+            key=f"manual_precio_{vendedor}",
+        )
+        marca = st.text_input("Marca", value="GENERICO", key=f"manual_marca_{vendedor}")
+
+        cargar_stock = st.checkbox(
+            "También dar de alta en inventario (requiere código y precio base)",
+            key=f"manual_alta_stock_{vendedor}",
+        )
+
+        if st.button("➕ Agregar al carrito", type="primary", key=f"manual_add_btn_{vendedor}"):
+            from modulos.db_firebase import agregar_linea_manual_carrito, alta_manual_producto
+            from modulos.mostrador_voz_flujo import invalidar_cache_inventario_mostrador
+
+            if cargar_stock:
+                cod_l = str(codigo or "").strip().upper().replace("/", "-")
+                if not cod_l:
+                    st.error("Para alta en stock necesitás un código.")
+                    return
+                if float(precio) <= 0:
+                    st.error("Indicá precio base para el alta en stock.")
+                    return
+                ok_alta, msj_alta = alta_manual_producto(
+                    cod_l,
+                    marca,
+                    veh or "UNIVERSAL",
+                    str(desc).strip(),
+                    "0",
+                    float(precio),
+                    0.0,
+                    int(cant),
+                    0, 0, 0, 0, 0,
+                )
+                if not ok_alta:
+                    st.error(msj_alta)
+                    return
+                invalidar_cache_inventario_mostrador()
+                from modulos.generador_qr import formatear_id_variante
+                from modulos.db_firebase import sanitizar_clave_marca
+                id_var = formatear_id_variante(cod_l, sanitizar_clave_marca(marca))
+                exito, msj = agregar_al_carrito_mostrador(vendedor, id_var, int(cant))
+            else:
+                exito, msj = agregar_linea_manual_carrito(
+                    vendedor,
+                    desc,
+                    cantidad=int(cant),
+                    precio_unitario=float(precio),
+                    codigo=codigo,
+                    marca=marca,
+                )
+            if exito:
+                st.session_state.pop(f"manual_add_ctx_{vendedor}", None)
+                st.session_state.resultados_ia_mostrador = None
+                st.session_state.msg_ia_mostrador = None
+                st.success(msj)
+                st.rerun()
+            else:
+                st.error(msj)
+
+
 def render_seccion_cliente_mostrador():
+    render_panel_cliente_pendiente_confirmar()
     st.session_state.cliente_activo = normalizar_cliente_activo(
         st.session_state.get("cliente_activo")
     )
@@ -998,6 +1147,7 @@ def render_seccion_cliente_mostrador():
                             st.session_state.cliente_activo = cliente_db_a_activo(
                                 clientes_db.get(sel_id, {})
                             )
+                            st.session_state.pop("cliente_pendiente_confirmar", None)
                             st.rerun()
                         else:
                             st.warning("Seleccioná un cliente de la lista.")
@@ -1232,6 +1382,8 @@ def render_panel_coincidencias_mostrador(
                 elif errores:
                     st.error("\n".join(errores))
 
+    render_agregar_manual_mostrador(vendedor)
+
 
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
     from modulos.ia_mostrador import parece_orden_voz_mostrador
@@ -1243,7 +1395,13 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
     busqueda = st.text_input(
         "Buscar por código, descripción, vehículo o marca",
         key=f"busq_most_{vendedor}",
-        placeholder="Ej: 111, filtro aceite, descripción buje…",
+        placeholder="Ej: 111, filtro aceite, bieleta 207…",
+    )
+    filtro_estricto = st.checkbox(
+        "Solo vehículo indicado (ej. 207)",
+        value=False,
+        key=f"busq_estricto_{vendedor}",
+        help="Si marcás esto, «bieleta 207» muestra solo compatibles con 207.",
     )
     if not busqueda or len(busqueda.strip()) < 2:
         st.info("Escribí al menos 2 caracteres para buscar.")
@@ -1271,9 +1429,19 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
             st.info("Para órdenes completas (cliente + presupuesto) usá el chat de arriba.")
             return
 
-    encontrados = filtrar_inventario(inv_completo, busq)[:25]
+    from modulos.util_busqueda import buscar_en_inventario_mostrador
+
+    encontrados = buscar_en_inventario_mostrador(
+        inv_completo, busq, filtro_vehiculo_estricto=filtro_estricto,
+    )[:25]
     if not encontrados:
         st.warning("Sin coincidencias. Probá con código, descripción u otra palabra.")
+        st.session_state[f"manual_add_ctx_{vendedor}"] = {
+            "termino": busq,
+            "vehiculo": None,
+            "cantidad": 1,
+        }
+        render_agregar_manual_mostrador(vendedor)
         return
 
     opciones = {}
@@ -2021,8 +2189,12 @@ def render_carrito_grilla(vendedor, carrito):
 
         c1, c2, c3, c4, c5 = st.columns([2.1, 3.6, 0.75, 1.05, 0.45])
         cod_txt = iid if len(iid) <= 34 else f"{iid[:31]}…"
+        if str(iid).upper().startswith("MANUAL_"):
+            cod_txt = "⚠️ MANUAL"
         c1.markdown(f"<span style='font-size:0.82rem'>{cod_txt}</span>", unsafe_allow_html=True)
         desc = str(item.get("descripcion", ""))
+        if item.get("fuera_stock") or item.get("manual"):
+            desc = f"⚠️ {desc}"
         if len(desc) > 52:
             desc = desc[:49] + "…"
         c2.markdown(f"<span style='font-size:0.82rem;color:#475569'>{desc}</span>", unsafe_allow_html=True)

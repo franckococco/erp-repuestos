@@ -347,10 +347,12 @@ def preparar_busqueda_repuesto_vehiculo(texto: str):
     return termino, veh
 
 
-def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_texto=None):
+def buscar_en_inventario_con_vehiculo(
+    items, termino, vehiculo=None, extraer_texto=None, filtro_vehiculo_estricto=False,
+):
     """
     Búsqueda por repuesto + vehículo opcional.
-    Ancla en palabra del repuesto; el vehículo ordena (207 primero) sin ocultar el resto.
+    Por defecto el vehículo reordena; con filtro_vehiculo_estricto solo devuelve compatibles.
     """
     from modulos.voz_repuestos import corregir_termino_repuesto
 
@@ -362,16 +364,24 @@ def buscar_en_inventario_con_vehiculo(items, termino, vehiculo=None, extraer_tex
     base = buscar_por_ancla_repuesto(items, term, ext, limite=50)
     if not vehiculo:
         return base
+    if filtro_vehiculo_estricto:
+        return [it for it in base if item_coincide_vehiculo(it, vehiculo)][:50]
     return _ordenar_por_vehiculo(base, vehiculo, ext)[:50]
 
 
-def buscar_en_inventario_mostrador(items, termino, extraer_texto=None):
-    """Búsqueda de mostrador: ancla en repuesto; vehículo opcional solo reordena."""
+def buscar_en_inventario_mostrador(
+    items, termino, extraer_texto=None, filtro_vehiculo_estricto=False,
+):
+    """Búsqueda de mostrador: ancla en repuesto; vehículo opcional reordena o filtra."""
     ext = extraer_texto or texto_item_inventario
     term_prep, veh = preparar_busqueda_repuesto_vehiculo(termino)
-    return buscar_en_inventario_con_vehiculo(items, term_prep, veh, ext)
+    return buscar_en_inventario_con_vehiculo(
+        items, term_prep, veh, ext, filtro_vehiculo_estricto=filtro_vehiculo_estricto,
+    )
 
 
-def buscar_en_inventario(items, termino, extraer_texto=None):
+def buscar_en_inventario(items, termino, extraer_texto=None, filtro_vehiculo_estricto=False):
     """Punto único de búsqueda en inventario (mostrador y asistente)."""
-    return buscar_en_inventario_mostrador(items, termino, extraer_texto)
+    return buscar_en_inventario_mostrador(
+        items, termino, extraer_texto, filtro_vehiculo_estricto=filtro_vehiculo_estricto,
+    )

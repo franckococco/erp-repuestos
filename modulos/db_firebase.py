@@ -1778,6 +1778,47 @@ def obtener_inventario_completo() -> list:
                 
     return inventario
 
+def es_linea_manual_carrito(item_id: str) -> bool:
+    return str(item_id or "").upper().startswith("MANUAL_")
+
+
+def agregar_linea_manual_carrito(
+    vendedor,
+    descripcion,
+    cantidad=1,
+    precio_unitario=0.0,
+    codigo="",
+    marca="GENERICO",
+):
+    """Ítem fuera de inventario para presupuesto/factura (no descuenta stock)."""
+    desc = str(descripcion or "").strip().upper()
+    if not desc:
+        return False, "La descripción es obligatoria."
+    cant = max(1, int(cantidad or 1))
+    precio = max(0.0, float(precio_unitario or 0))
+    cod = str(codigo or "").strip().upper().replace("/", "-")
+    marca_limpia = sanitizar_clave_marca(marca or "GENERICO")
+    item_id = f"MANUAL_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    etiqueta = desc if not cod else f"{desc} [{cod}]"
+    ref_item = (
+        get_db().collection("presupuestos_activos")
+        .document(str(vendedor))
+        .collection("items")
+        .document(item_id)
+    )
+    ref_item.set({
+        "id_maestro": cod or item_id,
+        "codigo": cod,
+        "marca": marca_limpia,
+        "descripcion": f"⚠️ {etiqueta} ({marca_limpia})",
+        "precio_unitario": precio,
+        "cantidad": cant,
+        "fuera_stock": True,
+        "manual": True,
+    })
+    return True, f"Agregado manual (fuera de stock): {etiqueta}"
+
+
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):
     cant = int(cantidad)
     if cant <= 0:
@@ -1857,6 +1898,19 @@ def validar_carrito_para_venta(vendedor):
     for item in items:
         cant = int(item.get("cantidad", 0))
         id_item = str(item.get("id", "")).replace("/", "-")
+        if es_linea_manual_carrito(id_item) or item.get("fuera_stock") or item.get("manual"):
+            if cant <= 0:
+                errores.append(f"{id_item}: cantidad inválida.")
+                continue
+            lineas_ok.append({
+                "item": item,
+                "ref_prod": None,
+                "marca": None,
+                "cantidad": cant,
+                "usa_variantes_fs": False,
+                "fuera_stock": True,
+            })
+            continue
         ref_prod, id_m, marca, stock_disp, err = _resolver_producto_y_stock(id_item, indice)
         err_val = _validar_resolucion_producto(ref_prod, id_m, marca, stock_disp, err)
         if err_val:
@@ -1892,15 +1946,21 @@ def _descontar_stock_lineas_carrito(vendedor, lineas_ok):
 
     for linea in lineas_ok:
         item = linea["item"]
-        ref_prod = linea["ref_prod"]
-        marca = linea["marca"]
-        cant = linea["cantidad"]
         ref_item = (
             get_db().collection("presupuestos_activos")
             .document(vendedor)
             .collection("items")
             .document(item["id"])
         )
+        if linea.get("fuera_stock"):
+            batch.delete(ref_item)
+            operaciones += 1
+            batch = _commit_batch_si_lleno(batch, operaciones)
+            continue
+
+        ref_prod = linea["ref_prod"]
+        marca = linea["marca"]
+        cant = linea["cantidad"]
 
         if linea.get("usa_variantes_fs", True):
             batch.update(ref_prod, {

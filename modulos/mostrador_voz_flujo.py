@@ -670,7 +670,12 @@ def agregar_termino_voz(
     if len(encontrados) > 1:
         hint = f" ({veh})" if veh else ""
         return False, f"Varias similitudes para '{termino}'{hint}. Elegí en la lista.", encontrados[:10]
-    return False, f"No encontré '{termino}'" + (f" para {veh}" if veh else "") + ". Probá con código.", None
+    st.session_state[f"manual_add_ctx_{vendedor}"] = {
+        "termino": termino,
+        "vehiculo": veh,
+        "cantidad": cant,
+    }
+    return False, f"No encontré '{termino}'" + (f" para {veh}" if veh else "") + ". Probá con código o agregá manual.", None
 
 
 def limpiar_cola_voz_mostrador():
@@ -755,12 +760,22 @@ def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_compro
             )
         if encontrado and score >= 0.68:
             cli = cliente_db_a_activo(encontrado)
+            st.session_state.pop("cliente_pendiente_confirmar", None)
         else:
+            from modulos.cliente_resolver import sugerencias_clientes
+
+            sugerencias = sugerencias_clientes(nombre_corregido, 5)
+            st.session_state.cliente_pendiente_confirmar = {
+                "nombre_dictado": nombre_corregido,
+                "nombre_original": str(nombre_cliente).strip().upper(),
+                "sugerencias": sugerencias,
+            }
             cli = {
                 "nombre": nombre_corregido,
                 "cuit": "00000000000",
                 "descuento": 0.0,
                 "tipo_comprobante": "6",
+                "pendiente_confirmar": True,
             }
     else:
         return None
