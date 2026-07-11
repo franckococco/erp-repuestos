@@ -1,8 +1,6 @@
 import os
-import json
 import re
 import unicodedata
-from groq import Groq # type: ignore
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -40,6 +38,36 @@ def preprocesar_texto_usuario(texto):
         return fragmento.replace(" ", "")
 
     return re.sub(r"(?:\d+\s+)+\d+", unir_si_dictado, texto_limpio)
+
+
+def normalizar_orden_voz_deposito(texto):
+    """Preprocesa dictado del asistente: códigos + lenguaje natural de depósito."""
+    from modulos.voz_lenguaje_natural import aplicar_lenguaje_natural_deposito
+
+    if not texto:
+        return ""
+    base = preprocesar_texto_usuario(str(texto).strip())
+    return aplicar_lenguaje_natural_deposito(base)
+
+
+def _limpiar_termino_busqueda(termino):
+    from modulos.voz_repuestos import corregir_palabra_dictada
+    from modulos.voz_lenguaje_natural import es_calificador_producto, quitar_muletillas_residuales
+
+    t = quitar_muletillas_residuales(str(termino or ""))
+    t = re.sub(r"^(?:el|la|los|las|de|del|al|un|una)\s+", "", t, flags=re.I)
+    t = re.sub(r"\b(?:codigo|stock|repuesto|articulo|buscar)\b", " ", t, flags=re.I)
+    t = re.sub(r"\s+para el\s+", " ", t)
+    partes = []
+    for palabra in t.split():
+        if palabra == "de":
+            partes.append(palabra)
+        elif es_calificador_producto(palabra):
+            partes.append(palabra)
+        else:
+            partes.append(corregir_palabra_dictada(palabra))
+    t = " ".join(partes).strip(" ,.-")
+    return t
 
 
 def _limpiar_codigo_orden(termino):
@@ -101,19 +129,22 @@ def _inferir_vehiculos_desde_texto(texto):
 
 def _es_carga_producto_nuevo(t):
     """True si la orden describe un producto nuevo, no sumar stock."""
-    if re.search(r"\b(?:carg\w*)\s+\d+\s*unidad\w*\s+(?:del?\s+|al?\s+)?", t):
-        return False
+    if re.search(r"\b(?:carg\w*|registr\w*|ingres\w*)\b", t):
+        if re.search(r"\b(pasillo|piso|modulo|fila|fondo)\b", t):
+            return True
+        if re.search(
+            r"\b(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
+            r"[\dA-Za-z]+(?:[-/][\dA-Za-z]+)?\s+[a-z]{4,}.+\d+\s*unidad",
+            t,
+        ):
+            return True
     if re.search(r"\b(?:agreg\w*|sum\w*|aument\w*)\s+\d+\s*unidad", t):
         return False
-    if re.search(r"\b(pasillo|piso|modulo|fila|fondo)\b", t):
-        if re.search(r"\b(carg\w*|registr\w*|ingres\w*)\b", t):
+    if re.search(r"\b(?:carg\w*)\s+\d+\s*unidad\w*\s+(?:del?\s+|al?\s+)?", t):
+        return False
+    if re.search(r"\bpasillo\b", t) and re.search(r"\bcodigo\s+[\dA-Za-z]", t):
+        if re.search(r"\bunidades\b", t) and re.search(r"[a-z]{4,}", t):
             return True
-    if re.search(
-        r"\b(?:carg\w*|registr\w*|ingres\w*)\s+(?:el\s+)?(?:codigo\s+)?"
-        r"[\dA-Za-z]+(?:[-/][\dA-Za-z]+)?\s+[a-z]{4,}.+\d+\s*unidad",
-        t,
-    ):
-        return True
     return False
 
 
@@ -124,7 +155,7 @@ def parse_cargar_producto_rapido(texto_usuario):
     """
     if not texto_usuario:
         return None
-    t = normalizar_texto_basico(str(texto_usuario)).lower()
+    t = str(texto_usuario).lower()
 
     if not re.search(r"\b(carg\w*|registr\w*|ingres\w*)\b", t):
         return None
@@ -218,7 +249,7 @@ def parse_alta_baja_rapido(texto_usuario):
     """Extrae alta/baja + código + cantidad sin llamar a Groq."""
     if not texto_usuario:
         return None
-    t = normalizar_texto_basico(texto_usuario).lower()
+    t = str(texto_usuario).lower()
 
     if _es_carga_producto_nuevo(t):
         return None
@@ -234,12 +265,13 @@ def parse_alta_baja_rapido(texto_usuario):
 
     cod_pat = r"([\dA-Za-z]+(?:[-/][\dA-Za-z]+)?)"
     patrones = [
-        r"(?:agreg\w*|sum\w*|aument\w*)\s+(\d{1,4})\s*(?:unidad\w*)?\s+(?:al?\s+)?(?:codigo\s+)?" + cod_pat,
+        r"(?:sumar|agreg\w*|sum\w*|aument\w*)\s+(\d{1,4})\s*(?:unidad\w*)?\s+(?:al?\s+)?(?:codigo\s+)?" + cod_pat,
         r"(?:carg\w*)\s+(\d{1,4})\s*unidad\w*\s+(?:del?\s+|al?\s+)?(?:codigo\s+)?" + cod_pat,
-        r"(?:agreg\w*|sum\w*|carg\w*|aument\w*|baj\w*|rest\w*)\s+(?:al?\s+)?(?:codigo\s+)?"
+        r"(?:sumar|bajar|agreg\w*|sum\w*|carg\w*|aument\w*|baj\w*|rest\w*)\s+(?:al?\s+)?(?:codigo\s+)?"
         + cod_pat + r"\s+(\d{1,4})\s*(?:unidad)?",
         r"(?:codigo\s+)" + cod_pat + r"\s+(\d{1,4})\s*(?:unidad)?",
         r"(\d{1,4})\s*(?:unidad)?\s+(?:al?\s+)?(?:codigo\s+)" + cod_pat,
+        r"(?:sumar|bajar)\s+(\d{1,4})\s+(?:al?\s+)?(?:codigo\s+)?" + cod_pat,
     ]
     for i, patron in enumerate(patrones):
         m = re.search(patron, t)
@@ -258,7 +290,163 @@ def parse_alta_baja_rapido(texto_usuario):
             return {"accion": accion, "termino": cod, "cantidad": int(cant)}
     return None
 
+
+def parse_buscar_rapido(texto_nl):
+    """Búsqueda de stock por palabra clave o código."""
+    if not texto_nl:
+        return None
+    t = str(texto_nl).lower().strip()
+
+    if re.search(r"\b(carg\w*|registr\w*|ingres\w*|sumar|bajar|ubicacion\s+\d|reporte\s+)\b", t):
+        if not t.startswith("buscar "):
+            return None
+
+    if not re.search(r"\b(busc\w*|consult\w*|stock|buscar)\b", t):
+        if re.search(
+            r"\b(carg\w*|sumar|bajar|ubicacion|reporte|proveedor|registr\w*|ingres\w*)\b",
+            t,
+        ):
+            return None
+        if len(t.split()) >= 2 or re.search(r"\bcodigo\s+\S", t):
+            termino = _limpiar_termino_busqueda(t)
+            if len(termino) >= 2:
+                return {"accion": "buscar", "termino": termino}
+        return None
+
+    termino = ""
+    m = re.match(r"^buscar\s+(.+)$", t)
+    if m:
+        termino = m.group(1).strip()
+    else:
+        termino = re.sub(
+            r"^.*?\b(?:busc\w*|consult\w*|stock)\s+(?:el\s+)?(?:codigo\s+)?",
+            "",
+            t,
+            count=1,
+        ).strip()
+
+    termino = re.sub(r"\s+para el\s+", " ", termino)
+    termino = _limpiar_termino_busqueda(termino)
+    if len(termino) < 2:
+        return None
+    return {"accion": "buscar", "termino": termino}
+
+
+def parse_ubicacion_rapido(texto_nl):
+    """Actualizar ubicación de un código."""
+    if not texto_nl:
+        return None
+    t = str(texto_nl).lower()
+    ubi = _extraer_ubicacion_orden(t)
+    if not ubi:
+        return None
+
+    cod_pat = r"([\dA-Za-z]+(?:[-/][\dA-Za-z]+)?)"
+    codigo = None
+    m_cod = re.search(rf"\bcodigo\s+(\d[\dA-Za-z/-]*)", t)
+    if m_cod:
+        codigo = _limpiar_codigo_orden(m_cod.group(1))
+    if not codigo:
+        m_num = re.search(r"\b(\d{2,})\b", t)
+        if m_num:
+            codigo = m_num.group(1)
+    if not codigo:
+        for patron in (
+            rf"{cod_pat}\s+(?:va en|ubicacion)",
+            rf"ubicacion\s+(?:codigo\s+)?{cod_pat}",
+        ):
+            m = re.search(patron, t)
+            if m:
+                candidato = _limpiar_codigo_orden(m.group(1))
+                if candidato.upper() not in ("EL", "LA", "LOS", "LAS", "UN", "UNA"):
+                    codigo = candidato
+                    break
+
+    if not codigo:
+        return None
+
+    out = {
+        "accion": "actualizar_ubicacion",
+        "termino": codigo,
+        "pasillo": ubi.get("pasillo"),
+        "piso": ubi.get("piso"),
+        "modulo": ubi.get("modulo"),
+        "fila": ubi.get("fila"),
+        "fondo": ubi.get("fondo"),
+    }
+    return out
+
+
+def parse_reporte_rapido(texto_nl):
+    """Reporte de stock por cantidad."""
+    if not texto_nl:
+        return None
+    t = str(texto_nl).lower()
+    if not re.search(
+        r"\b(reporte|menos de|mas de|más de|al menos|faltantes|punto|"
+        r"tienen\s+\d+|stock bajo|critico|crítico)\b",
+        t,
+    ):
+        return None
+
+    cant = 3
+    m = re.search(r"(\d{1,4})", t)
+    if m:
+        cant = int(m.group(1))
+
+    operador = "menor_o_igual"
+    if re.search(r"\b(exacto|exactamente|tienen\s+\d+|con\s+\d+)\b", t):
+        operador = "exacto"
+    elif es_consulta_mayor_o_igual(t) or re.search(r"\b(mas de|más de|al menos|mayor)\b", t):
+        operador = "mayor_o_igual"
+
+    return {"accion": "reporte_stock", "operador": operador, "cantidad": cant}
+
+
+def parse_proveedor_rapido(texto_nl):
+    """Filtrar inventario por proveedor."""
+    if not texto_nl:
+        return None
+    t = str(texto_nl).lower().strip()
+    m = re.search(r"\bproveedor\s+(.+)$", t)
+    if not m:
+        m = re.search(r"\b(?:buscar|listar|mostrar)\s+(?:todo\s+)?(?:lo\s+)?(?:de\s+)?(\w[\w\s]{1,40})$", t)
+    if not m:
+        return None
+    prov = _limpiar_termino_busqueda(m.group(1).strip())
+    if len(prov) < 2:
+        return None
+    return {"accion": "filtrar_proveedor", "proveedor": prov}
+
+
+def _parsers_locales_deposito():
+    return (
+        parse_cargar_producto_rapido,
+        parse_alta_baja_rapido,
+        parse_ubicacion_rapido,
+        parse_reporte_rapido,
+        parse_proveedor_rapido,
+        parse_buscar_rapido,
+    )
+
+
 def procesar_orden_voz(texto_usuario, inventario_actual=None):
+    from modulos.orden_asistente_inteligente import (
+        interpretar_orden_groq_deposito,
+        normalizar_accion_asistente,
+    )
+
+    texto_nl = normalizar_orden_voz_deposito(texto_usuario)
+
+    for parser in _parsers_locales_deposito():
+        resultado = parser(texto_nl)
+        if resultado:
+            return normalizar_accion_asistente(resultado, texto_usuario)
+
+    groq = interpretar_orden_groq_deposito(texto_usuario)
+    if groq:
+        return groq
+
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         try:
@@ -269,129 +457,11 @@ def procesar_orden_voz(texto_usuario, inventario_actual=None):
     if not api_key:
         return {"accion": "error", "respuesta": "Falta configurar la GROQ_API_KEY en los secretos."}
 
-    carga_nueva = parse_cargar_producto_rapido(texto_usuario)
-    if carga_nueva:
-        return carga_nueva
+    return {
+        "accion": "error",
+        "respuesta": (
+            "Orden no reconocida. Ejemplos: «fijate si tenés buje de directa para el gol», "
+            "«sumá 3 al código 1491», «cargá el 25412 buje amortiguador gol 4 unidades pasillo 2»."
+        ),
+    }
 
-    rapido = parse_alta_baja_rapido(texto_usuario)
-    if rapido:
-        return rapido
-
-    client = Groq(api_key=api_key)
-    texto_procesado = preprocesar_texto_usuario(texto_usuario)
-
-    prompt = f"""
-    Eres el asistente inteligente del depósito "Hafid Repuestos".
-    TU ÚNICO TRABAJO ES EXTRAER LA INTENCIÓN DEL USUARIO, NORMALIZAR LA BÚSQUEDA Y DEFINIR OPERADORES MATEMÁTICOS.
-
-    ORDEN DEL USUARIO: "{texto_procesado}"
-
-    REGLAS ESTRICTAS PARA ENTENDER LA ORDEN (MUY IMPORTANTE):
-    1. Si el usuario pide buscar, consultar stock, o pregunta "¿cuánto hay de...?", la acción obligatoria es "buscar". NO uses "reporte_stock" a menos que pida un reporte general de cantidades.
-    2. LIMPIEZA DEL TÉRMINO: Extrae SOLO la raíz del repuesto o el código. ELIMINA TOTALMENTE palabras basura como: "buscame", "el", "código", "decime", "stock", "de", "cuanto", "hay", "para", "quiero", "saber".
-       Ejemplo 1: "decime el stock del código 1252t" -> termino: "1252t"
-       Ejemplo 2: "buscame rotula para ranger" -> termino: "rotula ranger"
-    3. REPORTE DE STOCK (MATEMÁTICA ESTRICTA): 
-       - Si pide los que tienen una cantidad específica (ej: "los que tienen 3"), operador: "exacto".
-       - Si pide por debajo de una cantidad, "punto mínimo" o "faltantes", operador: "menor_o_igual".
-       - Si pide "3 o más", "al menos 3" o "más de 3", operador: "mayor_o_igual".
-       - Si no especifica cantidad en un reporte, asume 3.
-    4. RELEVAMIENTO (UBICACIÓN): Si menciona pasillo, piso, módulo, fila o fondo, extrae los números. Lo que no mencione, es null.
-    5. CÓDIGOS ESPECÍFICOS: Para sumar, restar o vender, extrae el código lo más limpio posible.
-    6. PROVEEDORES: Si pide filtrar por proveedor, extrae solo la raíz del nombre (ej: "expoyer", no "EXPOYER S.A." ni "productos de").
-    7. ALTA / BAJA DE STOCK (producto YA EXISTE): Solo si pide sumar/restar unidades a un código existente, SIN dar descripción ni datos de producto nuevo.
-       Usa "alta" o "baja". Extrae código y cantidad.
-       Ejemplo: "sumá 10 al código 1491" -> alta, termino: "1491", cantidad: 10
-       Ejemplo: "cargá 5 unidades del 1252" -> alta, termino: "1252", cantidad: 5
-       NO uses "alta" si el usuario describe un producto nuevo (descripción, vehículo, ubicación).
-    8. BÚSQUEDA FLEXIBLE: El término puede ir en singular o plural (bujes/buje). Extrae la raíz limpia.
-    9. CARGAR PRODUCTO NUEVO: Si pide registrar/cargar/ingresar un código CON descripción (y opcionalmente stock, vehículo, ubicación), usa "cargar_producto".
-       NO confundir con "alta" (sumar stock). Si menciona descripción del repuesto -> cargar_producto.
-       Ejemplo: "cargame el código 25412 con descripción buje amortiguador para gol, 4 unidades, pasillo 2 piso 1 módulo 3 fila 4"
-       -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, pasillo: 2, piso: 1, modulo: 3, fila: 4
-       "Para gol" / "auto gol" -> VOLKSWAGEN. Si no dice vehículo -> ["UNIVERSAL"]. Si no dice stock -> 1. Si no dice marca -> "GENERICO".
-
-    Devuelve ÚNICAMENTE un JSON válido eligiendo UNA de estas opciones:
-
-    OPCIÓN 1 (Búsqueda general o Consulta de Ubicación por palabras clave):
-    {{"accion": "buscar", "termino": "PALABRAS CLAVE LIMPIAS ESPACIADAS"}}
-
-    OPCIÓN 2 (Reporte de Stock Matemático):
-    {{"accion": "reporte_stock", "operador": "exacto" O "menor_o_igual" O "mayor_o_igual", "cantidad": NUMERO}}
-
-    OPCIÓN 3 (Actualizar Ubicación Exacta):
-    {{"accion": "actualizar_ubicacion", "termino": "RAIZ_LIMPIA", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "fondo": NUMERO_O_NULL}}
-
-    OPCIÓN 4 (Alta de Stock / Sumar unidades al inventario):
-    {{"accion": "alta", "termino": "CODIGO_O_NOMBRE_LIMPIO", "cantidad": NUMERO}}
-    Ejemplo: "sumá 10 al 1491" -> termino: "1491", cantidad: 10
-    Ejemplo: "cargá 5 unidades del código 1252t" -> termino: "1252t", cantidad: 5
-
-    OPCIÓN 5 (Baja de Stock / Descontar):
-    {{"accion": "baja", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
-
-    OPCIÓN 6 (Iniciar Presupuesto para Cliente):
-    {{"accion": "set_cliente", "nombre_cliente": "NOMBRE"}}
-
-    OPCIÓN 7 (Añadir producto al carrito/presupuesto):
-    {{"accion": "agregar_carrito", "termino": "RAIZ_LIMPIA", "cantidad": NUMERO}}
-
-    OPCIÓN 8 (Filtrar o listar repuestos por Proveedor):
-    {{"accion": "filtrar_proveedor", "proveedor": "NOMBRE DEL PROVEEDOR LIMPIO"}}
-
-    OPCIÓN 9 (Agregar texto a la descripción de un código):
-    {{"accion": "agregar_descripcion", "codigo": "CODIGO_LIMPIO", "texto": "TEXTO A SUMAR AL FINAL"}}
-    Ejemplo: "al código 1252t agregale a la descripción filtro de aceite" -> codigo: "1252t", texto: "filtro de aceite"
-
-    OPCIÓN 10 (Cambiar la marca de un código con UNA sola variante):
-    {{"accion": "cambiar_marca", "codigo": "CODIGO_LIMPIO", "marca_nueva": "MARCA_NUEVA"}}
-    Ejemplo: "cambiá la marca del código 1491 a SKF" -> codigo: "1491", marca_nueva: "SKF"
-    Ejemplo: "al 1491 poneme marca FRAM" -> codigo: "1491", marca_nueva: "FRAM"
-    Solo usar si el usuario pide cambiar/corregir/renombrar la MARCA de un código. NO confundir con buscar stock.
-
-    OPCIÓN 11 (Cambiar vehículos compatibles de un código maestro):
-    {{"accion": "cambiar_vehiculos", "codigo": "CODIGO_LIMPIO", "modo": "reemplazar" O "agregar" O "quitar", "vehiculos": ["PEUGEOT", "VOLKSWAGEN"]}}
-    Ejemplo: "al 1491 poneme vehículos Peugeot y Volkswagen" -> codigo: "1491", modo: "reemplazar", vehiculos: ["PEUGEOT", "VOLKSWAGEN"]
-    Ejemplo: "al código 1491 agregale Citroën" -> codigo: "1491", modo: "agregar", vehiculos: ["CITROEN"]
-    Ejemplo: "al 1491 sacale Ford" -> codigo: "1491", modo: "quitar", vehiculos: ["FORD"]
-    Vehículos válidos: UNIVERSAL, VOLKSWAGEN, PEUGEOT, CITROEN, FIAT, FORD, RENAULT, CHEVROLET.
-    Si no indica modo, usar "reemplazar". NO confundir con buscar stock ni con cambiar marca.
-
-    OPCIÓN 12 (Registrar producto nuevo en inventario — requiere código y descripción):
-    {{"accion": "cargar_producto", "codigo": "CODIGO_LIMPIO", "descripcion": "DESCRIPCION", "vehiculos": ["VOLKSWAGEN"], "stock": NUMERO, "stock_critico": NUMERO_O_NULL, "marca": "GENERICO", "pasillo": NUMERO_O_NULL, "piso": NUMERO_O_NULL, "modulo": NUMERO_O_NULL, "fila": NUMERO_O_NULL, "fondo": NUMERO_O_NULL, "precio_base": NUMERO_O_NULL}}
-    Ejemplo: "registrame el 25412 buje amortiguador para gol 4 unidades pasillo 2 fondo 1 stock critico 3" -> codigo: "25412", descripcion: "buje amortiguador", vehiculos: ["VOLKSWAGEN"], stock: 4, stock_critico: 3, pasillo: 2, fondo: 1
-    """
-
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.3-70b-versatile", 
-            temperature=0.0,
-            response_format={"type": "json_object"} 
-        )
-        
-        texto = chat_completion.choices[0].message.content.strip() # type: ignore
-        texto = texto.replace("```json", "").replace("```", "").strip()
-        resultado = json.loads(texto)
-
-        if isinstance(resultado, dict) and resultado.get("accion") == "reporte_stock":
-            operador = str(resultado.get("operador", "") or "").strip().lower()
-            if operador not in {"exacto", "menor_o_igual", "mayor_o_igual"}:
-                operador = "menor_o_igual"
-
-            # Corrección del bug: Usamos directamente la validación sin llamar a la función inexistente
-            if operador == "exacto":
-                resultado["operador"] = operador
-            elif es_consulta_mayor_o_igual(texto_usuario):
-                resultado["operador"] = "mayor_o_igual"
-            else:
-                resultado["operador"] = operador
-
-        if isinstance(resultado, dict) and resultado.get("accion") == "cargar_producto":
-            from modulos.normalizar_carga_producto import normalizar_orden_cargar_producto
-            resultado = normalizar_orden_cargar_producto(resultado, texto_usuario)
-
-        return resultado
-        
-    except Exception as e:
-        return {"accion": "error", "respuesta": f"Error en lectura de IA: {str(e)}"}

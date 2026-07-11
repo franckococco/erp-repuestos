@@ -332,6 +332,102 @@ def _unificar_pago(t: str) -> str:
     return t
 
 
+def _unificar_acciones_deposito(t: str) -> str:
+    """Normaliza intenciones del asistente de depósito (sin venta ni clientes)."""
+    t = re.sub(
+        r"\b(fijate si tenes|fijate si tenés|fijate si hay|decime (?:el )?stock(?: de)?|"
+        r"cuanto hay(?: de)?|cuánto hay(?: de)?|cuantos hay|cuántos hay|"
+        r"quedan(?: de)?|tenes(?: de)?|tenés(?: de)?|hay(?: de)?|"
+        r"consultame|consultá|consulta(?:me)?|quiero saber(?: si)? hay|"
+        r"necesito (?:saber )?(?:si )?hay|mostrame|mostrá|mostrar|"
+        r"buscame|buscáme|busca(?:me)?)\b",
+        "buscar ",
+        t,
+    )
+    t = re.sub(
+        r"\b(ubicacion|ubicación|relevamiento|donde esta|dónde está|donde queda|"
+        r"va en|ponelo en|poner en|mover a|pasar a)\b",
+        "ubicacion ",
+        t,
+    )
+    t = re.sub(
+        r"\b(punto minimo|punto mínimo|stock bajo|stock critico|stock crítico|"
+        r"faltantes|por debajo de)\b",
+        "reporte ",
+        t,
+    )
+    t = re.sub(
+        r"\b(lo de|productos de|repuestos de|del proveedor|proveedor)\b",
+        "proveedor ",
+        t,
+    )
+    t = re.sub(
+        r"\b(cargame|cárgame|cargale|cárgale|cargalo|cárgalo|"
+        r"registrame|registráme|registra(?:me)?|ingresame|ingresáme|ingresa(?:me)?)\b",
+        "cargar ",
+        t,
+    )
+    t = re.sub(
+        r"\b(sumame|súmame|sumale|súmale|agregame|agregáme|aumentame|aumentáme)\b",
+        "sumar ",
+        t,
+    )
+    t = re.sub(
+        r"\b(sacame|sacáme|bajame|bajáme|descontame|descontáme|restame|restáme)\b",
+        "bajar ",
+        t,
+    )
+    return t
+
+
+def _expandir_cantidades_deposito(t: str) -> str:
+    """Convierte cantidades sueltas en números (sumar tres al codigo 1491)."""
+    nums_pat = "|".join(
+        p for p in _NUMEROS_VOZ_EXT if p not in ("un", "una", "uno", "cero")
+    )
+    t = re.sub(
+        rf"\b({nums_pat})\b(?=\s*(?:unidades?\s+)?(?:al?\s+)?(?:codigo\b|del?\b))",
+        lambda m: _NUMEROS_VOZ_EXT.get(m.group(1), m.group(1)),
+        t,
+    )
+
+    def _exp_accion(m):
+        verbo = m.group(1)
+        num = _NUMEROS_VOZ_EXT.get(m.group(2), m.group(2))
+        return f"{verbo} {num}"
+
+    t = re.sub(rf"\b(sumar|bajar|cargar)\s+({nums_pat})\b", _exp_accion, t)
+    return t
+
+
+def aplicar_lenguaje_natural_deposito(texto: str) -> str:
+    """
+    Pipeline de lenguaje natural para el asistente de depósito:
+    búsqueda, stock, ubicación, carga de productos (sin venta ni clientes).
+    """
+    if not texto:
+        return ""
+    t = normalizar_texto_basico(str(texto).strip()).lower()
+    t = re.sub(r"\bguion\b", "-", t)
+    t = re.sub(r"\bguión\b", "-", t)
+
+    t = _proteger_de_calificador_producto(t)
+    t = _unificar_acciones_deposito(t)
+    t = _unificar_codigo_y_articulo(t)
+    t = _unificar_vehiculo(t)
+    t = _unificar_unidades_y_cantidades(t)
+    t = _quitar_muletillas_comando(t)
+    t = re.sub(r"\bcargar\b", " cargar ", t)
+    t = _expandir_numeros_en_palabras(t)
+    t = _expandir_cantidades_deposito(t)
+    t = _cantidad_repuesto_en_palabras(t)
+    t = _reordenar_cantidad_repuesto(t)
+    t = _quitar_relleno_suelto(t)
+    t = _restaurar_de_calificador_producto(t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def aplicar_lenguaje_natural_mostrador(texto: str) -> str:
     """
     Pipeline completo: muletillas → sinónimos de acción → cantidades →
@@ -474,4 +570,27 @@ REGLAS DE CANTIDAD:
 NOMBRES DE CLIENTE:
 - Pueden tener 2, 3 o 4 palabras: Juan Guzmán, Carlos Alberto Poccia, Taller San Martín
 - Todo el bloque va en nombre_cliente; ninguna palabra del nombre en items
+"""
+
+
+def instrucciones_groq_deposito() -> str:
+    """Bloque de prompt para el asistente de depósito."""
+    return """
+PALABRAS QUE DEBES IGNORAR (no son parte del término de búsqueda):
+- Muletillas: fijate, che, bueno, dale, por favor, necesito, quiero, a ver
+- Artículos sueltos: un, una, el, la, los, las
+- Verbos de pedido: buscame, decime, consultame, mostrame
+
+PALABRAS QUE DEBES PRESERVAR EN EL TÉRMINO / PRODUCTO:
+- «de» + calificador: buje DE directa, filtro DE aceite, bieleta DE suspension
+- Vehículo en búsqueda: gol, 207, ranger (van en termino, no en cantidad)
+- Códigos tal cual: 1491, 1252T, 1273-BH
+
+REGLAS DE CANTIDAD:
+- «tres unidades», «2 unidades», «un par» → cantidad numérica
+- «207» después de repuesto = vehículo Peugeot 207, NO cantidad 207
+
+ALTA vs CARGAR PRODUCTO NUEVO:
+- alta/baja: sumar o restar unidades a código EXISTENTE (sin descripción larga)
+- cargar_producto: código + descripción del repuesto (y opcional ubicación/vehículo)
 """
