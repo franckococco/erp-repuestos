@@ -66,6 +66,8 @@ def parece_codigo_producto(termino):
 
     if es_palabra_repuesto(t.lower()):
         return False
+    if re.fullmatch(r"[A-Z]+", t):
+        return False
     return bool(re.match(r"^[\dA-Z]+(?:[-/][\dA-Z]+)*$", t)) and len(t) <= 24
 
 

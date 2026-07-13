@@ -15,6 +15,7 @@ class TestVozParser(unittest.TestCase):
         self.assertEqual(corregir_termino_repuesto("bielete"), "bieleta")
         self.assertEqual(corregir_termino_repuesto("biela"), "biela")
         self.assertEqual(corregir_termino_repuesto("ferodo"), "pastilla")
+        self.assertEqual(corregir_termino_repuesto("zapatilla"), "pastilla")
         self.assertEqual(corregir_termino_repuesto("amorti"), "amortiguador")
         self.assertEqual(corregir_termino_repuesto("ruliman"), "ruleman")
         self.assertEqual(corregir_termino_repuesto("homo"), "homocinetica")
@@ -238,6 +239,21 @@ class TestVozParser(unittest.TestCase):
         terminos = [i["termino"] for i in items]
         self.assertNotIn("A 111", terminos)
         self.assertNotIn("JORGE REAL", " ".join(terminos))
+
+    def test_zapatilla_presupuesto_cliente_juan_perez(self):
+        t = (
+            "haceme un presupuesto de zapatilla 3 unidades "
+            "para el cliente juan perez"
+        )
+        self.assertEqual(
+            extraer_cliente_orden_voz(t).get("nombre_cliente"),
+            "JUAN PEREZ",
+        )
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["termino"], "PASTILLA")
+        self.assertEqual(items[0]["cantidad"], 3)
+        self.assertEqual(items[0].get("modo"), "descripcion")
 
 
 if __name__ == "__main__":

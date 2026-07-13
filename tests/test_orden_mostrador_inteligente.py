@@ -58,6 +58,19 @@ class TestOrdenMostradorInteligente(unittest.TestCase):
         self.assertEqual(merged.get("nombre_cliente"), "JUAN GUZAMN")
         self.assertEqual(merged["items"][0]["termino"], "BIELETA SUSPENSION")
 
+    def test_normalizar_zapatilla_como_descripcion(self):
+        raw = parse_flujo_rapido_voz(
+            "haceme un presupuesto de zapatilla 3 unidades para el cliente juan perez"
+        )
+        norm = normalizar_accion_mostrador(
+            raw,
+            "haceme un presupuesto de zapatilla 3 unidades para el cliente juan perez",
+        )
+        self.assertEqual(norm.get("nombre_cliente"), "JUAN PEREZ")
+        self.assertEqual(len(norm.get("items") or []), 1)
+        self.assertEqual(norm["items"][0]["termino"], "PASTILLA")
+        self.assertEqual(norm["items"][0]["modo"], "descripcion")
+
 
 if __name__ == "__main__":
     unittest.main()

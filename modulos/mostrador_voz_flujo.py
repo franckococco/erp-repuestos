@@ -796,8 +796,17 @@ def agregar_termino_voz(
         ok, msj = agregar_al_carrito(str(vendedor), id_limpio, cant)
         if ok:
             return True, msj, None
-        if modo_codigo or parece_codigo_producto(id_limpio):
-            return False, f"No encontré código '{id_limpio}'.", None
+        if modo_codigo:
+            st.session_state[f"manual_add_ctx_{vendedor}"] = {
+                "termino": termino,
+                "vehiculo": veh,
+                "cantidad": cant,
+            }
+            return (
+                False,
+                f"No encontré código '{id_limpio}'. Probá con código o agregá manual.",
+                None,
+            )
 
     encontrados = buscar_en_inventario_con_vehiculo(inventario, termino, veh)
     if len(encontrados) == 1:
