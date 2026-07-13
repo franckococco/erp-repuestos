@@ -489,7 +489,7 @@ def _render_chat_historial(vendedor):
             "Decí **listo** para revisar."
         )
         return
-    for entrada in historial:
+    for i, entrada in enumerate(historial):
         orden = entrada.get("orden", "")
         respuesta = entrada.get("respuesta", "")
         tipo = entrada.get("tipo", "info")
@@ -504,6 +504,14 @@ def _render_chat_historial(vendedor):
                 st.warning(respuesta)
             else:
                 st.markdown(respuesta)
+        if (
+            i == len(historial) - 1
+            and tipo == "error"
+            and st.session_state.get(f"manual_add_ctx_{vendedor}")
+        ):
+            from modulos.ui_mostrador import render_agregar_manual_mostrador
+
+            render_agregar_manual_mostrador(vendedor)
 
 
 def render_venta_chat(
@@ -603,14 +611,10 @@ def render_venta_chat(
         return
 
     if estado == EstadoVenta.ARMANDO:
-        from modulos.ui_mostrador import render_agregar_manual_mostrador
-
         carrito = obtener_carrito(str(vendedor)) or []
         carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
         desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
         _, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
-        if st.session_state.get(f"manual_add_ctx_{vendedor}"):
-            render_agregar_manual_mostrador(vendedor)
         with st.expander(
             f"🛒 Ver carrito · {len(carrito_ui)} ítem(s) · ${total_final:,.2f}",
             expanded=False,
