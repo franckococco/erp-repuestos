@@ -1089,7 +1089,6 @@ def render_agregar_manual_mostrador(vendedor, contexto=None):
 
 
 def render_seccion_cliente_mostrador():
-    render_panel_cliente_pendiente_confirmar()
     st.session_state.cliente_activo = normalizar_cliente_activo(
         st.session_state.get("cliente_activo")
     )
