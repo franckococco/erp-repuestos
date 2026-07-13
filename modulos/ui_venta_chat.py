@@ -535,6 +535,9 @@ def render_venta_chat(
     """UI principal del mostrador (chat + vista por estado)."""
     estado = obtener_estado_venta(vendedor)
     _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
+    from modulos.ui_mostrador import render_panel_cliente_pendiente_confirmar
+
+    render_panel_cliente_pendiente_confirmar()
     _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador)
     render_mostrador_accion_pendiente(vendedor)
     render_presupuesto_pdf_pendiente(vendedor)

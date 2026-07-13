@@ -72,6 +72,16 @@ class TestClienteResolver(unittest.TestCase):
         self.assertTrue(sugs)
         self.assertIn("PABLO", sugs[0][0])
 
+    def test_no_confundir_juan_pablo_con_juan_de_los_palotes(self):
+        db = {
+            "1": {"nombre": "JUAN DE LOS PALOTES", "tipo_cliente": "mecanico"},
+            "2": {"nombre": "JUAN PEREZ", "tipo_cliente": "ocasional"},
+        }
+        cli, score, _ = resolver_cliente_por_nombre("JUAN PABLO CUZZO", db)
+        self.assertIsNone(cli)
+        self.assertLess(score, 0.68)
+        self.assertEqual(corregir_nombre_con_clientes("JUAN PABLO CUZZO", db), "JUAN PABLO CUZZO")
+
 
 if __name__ == "__main__":
     unittest.main()

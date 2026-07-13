@@ -890,6 +890,9 @@ def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_compro
         cli = cliente_consumidor_final()
     elif nombre_cliente:
         from modulos.cliente_resolver import (
+            _UMBRAL_ALTO,
+            _UMBRAL_MEDIO,
+            _tokens_nombre,
             clientes_cache_mostrador,
             corregir_nombre_con_clientes,
             resolver_cliente_por_nombre,
@@ -904,7 +907,12 @@ def activar_cliente_voz(nombre_cliente=None, consumidor_final=False, tipo_compro
             encontrado, score, metodo = resolver_cliente_por_nombre(
                 nombre_cliente, clientes_db
             )
-        if encontrado and score >= 0.68:
+        umbral_auto = (
+            _UMBRAL_ALTO
+            if len(_tokens_nombre(nombre_corregido)) >= 2
+            else _UMBRAL_MEDIO
+        )
+        if encontrado and score >= umbral_auto:
             cli = cliente_db_a_activo(encontrado)
             st.session_state.pop("cliente_pendiente_confirmar", None)
         else:
@@ -976,6 +984,10 @@ def ejecutar_flujo_factura_voz(
         cli["tipo_comprobante"] = "1" if t in ("1", "A") else "6"
         st.session_state.cliente_activo = cli
         pasos_ok.append(f"Factura {'A' if cli['tipo_comprobante'] == '1' else 'B'}")
+
+    intent = flujo.get("intent_sugerido")
+    if intent:
+        st.session_state.mostrador_intent_sugerido = intent
 
     items = flujo.get("items") or []
     if isinstance(items, dict):
@@ -1051,7 +1063,6 @@ def ejecutar_flujo_factura_voz(
         or flujo.get("accion") == "imprimir_ticket"
     )
     ir_verificacion = bool(flujo.get("ir_verificacion") or imprimir)
-    intent = flujo.get("intent_sugerido")
     if intent:
         st.session_state.mostrador_intent_sugerido = intent
 
