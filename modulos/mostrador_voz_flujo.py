@@ -230,10 +230,95 @@ def _normalizar_termino_descripcion(termino: str) -> str:
     ]
     while palabras and palabras[0] in ("Y", "E", "TAMBIEN", "TAMBIÉN", "MAS", "MÁS"):
         palabras.pop(0)
+    while palabras and len(palabras[0]) == 1:
+        palabras.pop(0)
     base = " ".join(palabras).strip()
     if not base:
         return ""
     return corregir_termino_repuesto(base).upper()
+
+
+def _segmentar_orden_items(texto: str) -> list:
+    """Parte órdenes compuestas (código + descripción unidos con «y»)."""
+    raw = str(texto or "").strip()
+    if not raw:
+        return []
+    t = normalizar_texto_basico(raw).lower()
+    if re.search(r"\s+y\s+", t):
+        segs = [s.strip() for s in re.split(r"\s+y\s+", raw, flags=re.I) if s.strip()]
+        if len(segs) > 1:
+            return segs
+    return [raw]
+
+
+def _remover_bloques_codigo_explicito(texto: str) -> str:
+    """Quita del texto los bloques «codigo X N unidades» ya parseados."""
+    cod_pat = r"([\dA-Za-z]+(?:-[\dA-Za-z]+)*)"
+    t = str(texto or "")
+    t = re.sub(
+        rf"(?:codigo|código)\s+{cod_pat}\s+\d{{1,4}}\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+        " ",
+        t,
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _deduplicar_items_orden(items: list) -> list:
+    """Elimina ítems duplicados o basura (p. ej. «A 111» cuando ya hay código 111)."""
+    from modulos.util_busqueda import parece_codigo_producto, _normalizar_codigo_busqueda
+
+    out = []
+    codigos_vistos = set()
+    desc_vistos = set()
+
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        it = dict(raw)
+        term = str(it.get("termino", "")).strip().upper()
+        if not term:
+            continue
+
+        palabras = term.split()
+        if len(palabras) == 1 and len(palabras[0]) == 1:
+            continue
+        if len(palabras) == 2 and len(palabras[0]) == 1 and palabras[1].isdigit():
+            term = palabras[1]
+            it["termino"] = term
+            it["modo"] = "codigo"
+
+        modo = str(it.get("modo") or "").lower()
+        if modo == "descripcion":
+            if term in desc_vistos:
+                continue
+            desc_vistos.add(term)
+            it["modo"] = "descripcion"
+            out.append(it)
+            continue
+        if modo != "codigo" and parece_codigo_producto(term):
+            modo = "codigo"
+            it["modo"] = "codigo"
+
+        if modo == "codigo":
+            cod = _normalizar_codigo_busqueda(term)
+            if not cod or cod in codigos_vistos:
+                continue
+            codigos_vistos.add(cod)
+            it["termino"] = cod
+            it["modo"] = "codigo"
+            out.append(it)
+            continue
+
+        if parece_codigo_producto(term) and _normalizar_codigo_busqueda(term) in codigos_vistos:
+            continue
+        if term in desc_vistos:
+            continue
+        desc_vistos.add(term)
+        it["modo"] = "descripcion"
+        out.append(it)
+
+    return out
 
 
 def extraer_items_orden_voz(texto):
@@ -255,7 +340,7 @@ def extraer_items_orden_voz(texto):
         vehs_frag = extraer_vehiculos_de_texto(fragmento)
         veh_set = {_norm_busq(v) for v in vehs_frag}
 
-        def agregar(termino, cantidad, es_descripcion=False):
+        def agregar(termino, cantidad, es_descripcion=False, es_codigo_explicito=False):
             if es_descripcion:
                 term = _normalizar_termino_descripcion(termino)
             else:
@@ -265,6 +350,7 @@ def extraer_items_orden_voz(texto):
             except (TypeError, ValueError):
                 return
             from modulos.voz_repuestos import es_referencia_vehiculo
+            from modulos.util_busqueda import parece_codigo_producto
 
             if es_referencia_vehiculo(str(cant)):
                 return
@@ -279,24 +365,30 @@ def extraer_items_orden_voz(texto):
                 return
             if not es_descripcion and not re.search(r"\d", term) and len(term) < 4:
                 return
-            clave = (term, cant)
+            clave = (term, cant, "codigo" if es_codigo_explicito else "desc")
             if clave in vistos:
                 return
             vistos.add(clave)
-            acumulado.append({"termino": term, "cantidad": cant})
+            item = {"termino": term, "cantidad": cant}
+            if es_codigo_explicito or (not es_descripcion and parece_codigo_producto(term)):
+                item["modo"] = "codigo"
+            else:
+                item["modo"] = "descripcion"
+            acumulado.append(item)
 
-        patrones_codigo = [
-            (rf"(?:codigo|código)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", False),
-            (rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b", False),
-            (rf"(?:codigo|código)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", False),
-            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
-            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\b", False),
-            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", True),
-            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
+        patrones_codigo_explicito = [
+            rf"(?:codigo|código)\s+{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b",
+            rf"(?:agreg\w*|sum\w*|pon\w*)\s+(?:codigo|código\s+)?{cod_pat}\s+(\d{{1,4}})\s*(?:unidades?|u\.?|unidad)?\b",
+            rf"(?:codigo|código)\s+{cod_pat}\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b",
         ]
         n_antes = len(acumulado)
 
-        resto = _limpiar_texto_para_items_descripcion(fragmento)
+        for patron in patrones_codigo_explicito:
+            for m in re.finditer(patron, t):
+                agregar(m.group(1), m.group(2), es_descripcion=False, es_codigo_explicito=True)
+
+        t_sin_cod = _remover_bloques_codigo_explicito(t)
+        resto = _limpiar_texto_para_items_descripcion(_remover_bloques_codigo_explicito(fragmento))
         pat_repuesto_veh = patron_repuesto_para_vehiculo()
         patrones_desc = [
             pat_repuesto_veh,
@@ -337,15 +429,20 @@ def extraer_items_orden_voz(texto):
             if not encontrado:
                 break
 
-        for patron, es_desc in patrones_codigo:
-            for m in re.finditer(patron, t):
+        patrones_codigo_resto = [
+            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)\b", False),
+            (rf"\b([\dA-Za-z]*\d[\dA-Za-z\-]*)\s+(\d{{1,4}})\b", False),
+            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s+(\d{{1,4}})\s*(?:unidades?|u\.?|uds?|unidad)?\b", True),
+            (rf"(?:descripcion|descripción|desc)\s+(.+?)\s*(?:por|x|\*|con)\s*(\d{{1,4}})\b", True),
+        ]
+        for patron, es_desc in patrones_codigo_resto:
+            for m in re.finditer(patron, t_sin_cod):
                 agregar(m.group(1), m.group(2), es_descripcion=es_desc)
 
         if len(acumulado) == n_antes:
             for m in re.finditer(rf"(?:codigo|código)\s+{cod_pat}\b", t):
-                agregar(m.group(1), 1, es_descripcion=False)
+                agregar(m.group(1), 1, es_descripcion=False, es_codigo_explicito=True)
 
-        resto = _limpiar_texto_para_items_descripcion(fragmento)
         for item in acumulado[n_antes:]:
             resto = _strip_termino_cant_de_resto(
                 resto,
@@ -390,7 +487,8 @@ def extraer_items_orden_voz(texto):
     items = []
     vistos = set()
     raw = str(texto).strip()
-    _extraer_items_de_segmento(raw, items, vistos)
+    for segmento in _segmentar_orden_items(raw):
+        _extraer_items_de_segmento(segmento, items, vistos)
 
     if len(items) <= 1:
         t_full = normalizar_texto_basico(raw).lower()
@@ -425,6 +523,8 @@ def extraer_items_orden_voz(texto):
                 seg = seg.strip()
                 if seg:
                     _extraer_items_de_segmento(seg, items, vistos)
+
+    items = _deduplicar_items_orden(items)
 
     from modulos.voz_repuestos import enriquecer_items_con_vehiculo
 
@@ -651,50 +751,53 @@ def agregar_termino_voz(
     buscar_en_inventario,
     agregar_al_carrito,
     vehiculo=None,
+    modo=None,
 ):
     cant = max(1, int(cantidad or 1))
     termino = str(termino or "").strip()
     if not termino:
         return False, "Sin término de búsqueda.", None
 
-    from modulos.util_busqueda import _limpiar_prefijo_busqueda, buscar_en_inventario_con_vehiculo
+    from modulos.util_busqueda import (
+        _limpiar_prefijo_busqueda,
+        buscar_codigo_exacto_inventario,
+        buscar_en_inventario_con_vehiculo,
+        parece_codigo_producto,
+    )
     from modulos.voz_repuestos import corregir_termino_repuesto
 
+    modo_codigo = str(modo or "").lower() == "codigo"
+    modo_descripcion = str(modo or "").lower() == "descripcion"
     termino = _limpiar_prefijo_busqueda(termino)
-    termino = corregir_termino_repuesto(termino)
+    if not modo_codigo:
+        termino = corregir_termino_repuesto(termino)
+    else:
+        termino = termino.upper()
     if not termino:
         return False, "Sin término de búsqueda.", None
 
     veh = str(vehiculo).strip() if vehiculo else None
     id_limpio = _normalizar_codigo_con_inventario(termino, inventario)
 
-    if _parece_codigo(id_limpio):
-        ok, msj = agregar_al_carrito(str(vendedor), id_limpio, cant)
-        if ok:
-            return True, msj, None
-        coincidencias = _buscar_variantes_por_codigo(inventario, id_limpio)
+    if modo_codigo or (not modo_descripcion and _parece_codigo(id_limpio)):
+        coincidencias = buscar_codigo_exacto_inventario(inventario, id_limpio)
+        if not coincidencias:
+            coincidencias = _buscar_variantes_por_codigo(inventario, id_limpio)
         if len(coincidencias) == 1:
             id_cart = _id_carrito_desde_item(coincidencias[0])
-            ok2, msj2 = agregar_al_carrito(str(vendedor), id_cart, cant)
-            return ok2, msj2, None
+            ok, msj = agregar_al_carrito(str(vendedor), id_cart, cant)
+            return ok, msj, None
         if len(coincidencias) > 1:
             return (
                 False,
                 f"Hay {len(coincidencias)} variantes para '{id_limpio}'. Elegí en la lista.",
                 coincidencias[:10],
             )
-
-    coincidencias_cod = _buscar_variantes_por_codigo(inventario, id_limpio)
-    if len(coincidencias_cod) == 1:
-        id_cart = _id_carrito_desde_item(coincidencias_cod[0])
-        ok, msj = agregar_al_carrito(str(vendedor), id_cart, cant)
-        return ok, msj, None
-    if len(coincidencias_cod) > 1:
-        return (
-            False,
-            f"Hay {len(coincidencias_cod)} variantes para '{id_limpio}'. Decí el código exacto.",
-            coincidencias_cod[:10],
-        )
+        ok, msj = agregar_al_carrito(str(vendedor), id_limpio, cant)
+        if ok:
+            return True, msj, None
+        if modo_codigo or parece_codigo_producto(id_limpio):
+            return False, f"No encontré código '{id_limpio}'.", None
 
     encontrados = buscar_en_inventario_con_vehiculo(inventario, termino, veh)
     if len(encontrados) == 1:
@@ -743,6 +846,7 @@ def continuar_cola_voz_mostrador(
         ok, msj, ambiguos = agregar_termino_voz(
             vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
             vehiculo=veh,
+            modo=item.get("modo"),
         )
         if ok:
             agregados.append(msj)
@@ -881,9 +985,11 @@ def ejecutar_flujo_factura_voz(
         termino = raw.get("termino") or raw.get("codigo") or raw.get("descripcion")
         cant = raw.get("cantidad", 1)
         veh = raw.get("vehiculo")
+        modo = raw.get("modo")
         ok, msj, ambiguos = agregar_termino_voz(
             vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
             vehiculo=veh,
+            modo=modo,
         )
         if ok:
             pasos_ok.append(msj)
@@ -893,6 +999,7 @@ def ejecutar_flujo_factura_voz(
                 "termino": termino,
                 "cantidad": cant,
                 "vehiculo": veh,
+                "modo": modo,
                 "coincidencias": ambiguos,
                 "msj": msj,
             })

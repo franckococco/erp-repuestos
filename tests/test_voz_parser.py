@@ -217,5 +217,28 @@ class TestVozParser(unittest.TestCase):
         self.assertNotIn("GUZAMN", items[0]["termino"])
 
 
+    def test_jorge_real_factura_codigo_y_bieleta(self):
+        t = (
+            "quiero una factura para jorge real codigo 111 3 unidades "
+            "y una bieleta de suspension 3 unidades"
+        )
+        self.assertEqual(
+            extraer_cliente_orden_voz(t).get("nombre_cliente"),
+            "JORGE REAL",
+        )
+        items = extraer_items_orden_voz(t)
+        self.assertEqual(len(items), 2)
+        por_term = {i["termino"]: i for i in items}
+        self.assertEqual(por_term["111"]["cantidad"], 3)
+        self.assertEqual(por_term["111"].get("modo"), "codigo")
+        bieletas = [i for i in items if "BIELETA" in i["termino"]]
+        self.assertEqual(len(bieletas), 1)
+        self.assertEqual(bieletas[0]["cantidad"], 3)
+        self.assertEqual(bieletas[0].get("modo"), "descripcion")
+        terminos = [i["termino"] for i in items]
+        self.assertNotIn("A 111", terminos)
+        self.assertNotIn("JORGE REAL", " ".join(terminos))
+
+
 if __name__ == "__main__":
     unittest.main()
