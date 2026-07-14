@@ -38,12 +38,29 @@ def aplicar_estilos_globales():
 
 
 def aplicar_estilos_mostrador():
-    """PC: más ancho y grilla legible; móvil: columnas apiladas."""
+    """PC: caja full-bleed densa (anula el max-width 1180px global); móvil: apila."""
     st.markdown(
         """
         <style>
-        @media (min-width: 900px) {
-            .main .block-container { max-width: 96rem; padding-left: 1.5rem; padding-right: 1.5rem; }
+        /* Anular el tope de 1180px de estilos globales: usar todo el ancho útil */
+        div[data-testid="stAppViewContainer"] section.main > div.block-container,
+        div[data-testid="stAppViewContainer"] .main .block-container,
+        section.main .block-container,
+        .stMainBlockContainer,
+        .block-container {
+            max-width: 100% !important;
+            width: 100% !important;
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+            padding-top: 0.6rem !important;
+        }
+        @media (min-width: 1200px) {
+            div[data-testid="stAppViewContainer"] section.main > div.block-container,
+            .stMainBlockContainer,
+            .block-container {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
         }
         div[data-testid="stDataEditor"] { width: 100% !important; }
         div[data-testid="stDataEditor"] input[type="number"] { min-width: 4.5rem; font-size: 1rem; }
@@ -55,11 +72,24 @@ def aplicar_estilos_mostrador():
             padding: 0.35rem 0.65rem;
             border-radius: 0.5rem;
         }
+        .mostrador-pos-zona {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.55rem;
+            padding: 0.55rem 0.75rem 0.35rem;
+            margin-bottom: 0.55rem;
+        }
+        .mostrador-pos-zona strong { color: #0f172a; font-size: 0.92rem; }
+        .mostrador-pos-pie {
+            background: #ffffff;
+            border-top: 2px solid #cbd5e1;
+            padding-top: 0.5rem;
+            margin-top: 0.35rem;
+        }
         @media (max-width: 768px) {
-            .main .block-container { padding-left: 0.75rem; padding-right: 0.75rem; }
+            .main .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
             div[data-testid="column"] { min-width: 100% !important; flex: 1 1 100% !important; }
         }
-        /* Select de clientes / facturas: texto completo legible */
         div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
             min-height: 2.75rem;
         }
@@ -89,12 +119,12 @@ def aplicar_estilos_mostrador():
             background: #f8fafc;
             border: 1px solid #cbd5e1;
             border-radius: 0.5rem;
-            padding: 0.65rem 0.85rem 0.35rem;
-            margin-bottom: 0.5rem;
+            padding: 0.45rem 0.75rem 0.2rem;
+            margin-bottom: 0.35rem;
         }
         .mostrador-buscador-box strong {
             color: #0f172a;
-            font-size: 0.95rem;
+            font-size: 0.92rem;
         }
         div[data-testid="stRadio"] label p {
             font-size: 0.88rem !important;

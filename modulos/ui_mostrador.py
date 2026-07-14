@@ -1389,11 +1389,11 @@ def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtra
     from modulos.ia_mostrador import parece_orden_voz_mostrador
 
     st.markdown(
-        '<div class="mostrador-buscador-box"><strong>🔍 Búsqueda manual</strong></div>',
+        '<div class="mostrador-buscador-box"><strong>🔍 Buscar y agregar</strong></div>',
         unsafe_allow_html=True,
     )
     busqueda = st.text_input(
-        "Buscar por código, descripción, vehículo o marca",
+        "Código, descripción, vehículo o marca",
         key=f"busq_most_{vendedor}",
         placeholder="Ej: 111, filtro aceite, bieleta 207…",
     )
@@ -2295,7 +2295,7 @@ def render_panel_cobro_mostrador(
                     else:
                         st.error(msj)
         else:
-            st.caption("Decí **listo** en la orden rápida para cerrar.")
+            st.caption("Agregá ítems por teclado o voz para facturar.")
 
         with st.expander("Más acciones", expanded=False):
             if intent != "presupuesto" or not listo_para_cerrar:

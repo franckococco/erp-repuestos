@@ -1,4 +1,4 @@
-"""Mostrador tipo asistente: chat + pantallas por estado de venta."""
+"""Mostrador tipo caja POS: teclado + voz, grilla e importes siempre visibles."""
 import streamlit as st
 
 from modulos.db_firebase import obtener_carrito
@@ -528,7 +528,10 @@ def render_venta_chat(
     inv_mostrador,
     decodificar_qr_fn=None,
 ):
-    """UI principal del mostrador (chat + vista por estado)."""
+    """UI principal del mostrador: caja POS (teclado + voz) sin romper flujos existentes."""
+    from modulos.ui_mostrador import render_agregar_manual_mostrador
+    from modulos.mostrador_estado import limpiar_mensaje_chat
+
     estado = obtener_estado_venta(vendedor)
     _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
     _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador)
@@ -539,18 +542,53 @@ def render_venta_chat(
         render_factura_arca_exitosa("top")
         if st.button("✅ Nueva venta", type="primary", key=f"nueva_venta_chat_{vendedor}"):
             limpiar_venta_mostrador(vendedor, reset_cliente=True)
-            from modulos.mostrador_estado import limpiar_mensaje_chat
-
             limpiar_mensaje_chat()
             st.rerun()
         return
 
-    with st.expander("Cliente y ARCA", expanded=False):
-        c1, c2 = st.columns(2)
-        with c1:
-            render_seccion_cliente_mostrador()
-        with c2:
-            render_credenciales_arca()
+    carrito = obtener_carrito(str(vendedor)) or []
+    carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
+    desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
+    total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
+
+    if any(isinstance(i, dict) and (i.get("fuera_stock") or i.get("manual")) for i in carrito_ui):
+        st.warning(
+            "Hay ítems **manuales fuera de stock** en el carrito. "
+            "No descontarán inventario al facturar."
+        )
+
+    if st.session_state.get(f"manual_add_ctx_{vendedor}"):
+        render_agregar_manual_mostrador(vendedor)
+
+    # —— Zona superior: teclado (búsqueda) + voz (orden) ——
+    st.markdown(
+        '<div class="mostrador-pos-zona"><strong>⌨️ Teclado · 🎤 Voz</strong></div>',
+        unsafe_allow_html=True,
+    )
+    col_teclado, col_voz = st.columns([1.35, 1], gap="medium")
+    with col_teclado:
+        if inv_mostrador:
+            render_buscador_productos(
+                vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario
+            )
+        else:
+            st.info("Inventario vacío.")
+    with col_voz:
+        st.caption(
+            "Órdenes completas: cliente + ítems. Ej: "
+            "*factura para Franco de una biela y un arranque gol trend*"
+        )
+        _render_entrada_orden(
+            vendedor,
+            "Dictá o escribí la orden…",
+            "pos_voz",
+            obtener_inventario_completo,
+            buscar_en_inventario,
+            agregar_al_carrito,
+            mostrar_atajos=True,
+        )
+        with st.expander("Historial de órdenes", expanded=False):
+            _render_chat_historial(vendedor)
 
     if estado == EstadoVenta.ELEGIR:
         render_panel_coincidencias_mostrador(
@@ -560,103 +598,65 @@ def render_venta_chat(
             buscar_en_inventario=buscar_en_inventario,
             obtener_inventario=obtener_inventario_completo,
         )
-        _render_chat_historial(vendedor)
-        _render_entrada_orden(
-            vendedor,
-            "Corrección o nueva búsqueda…",
-            "elegir",
-            obtener_inventario_completo,
-            buscar_en_inventario,
-            agregar_al_carrito,
-            mostrar_atajos=False,
-        )
-        return
 
-    if estado == EstadoVenta.REVISAR:
-        carrito = obtener_carrito(str(vendedor)) or []
-        carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
-        desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-        total_bruto, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
-        intent = obtener_intent_venta()
-
-        if any(isinstance(i, dict) and (i.get("fuera_stock") or i.get("manual")) for i in carrito_ui):
-            st.warning(
-                "Hay ítems **manuales fuera de stock** en el carrito. "
-                "No descontarán inventario al facturar."
-            )
-
-        st.markdown(f"### Revisar {etiqueta_intent(intent)}")
+    # —— Artículos siempre visibles ——
+    st.markdown("#### Artículos")
+    if carrito_ui:
         render_carrito_grilla(vendedor, carrito_ui)
+    else:
+        st.caption("Sin ítems. Buscá por teclado o dictá la orden.")
+
+    # —— Pie fijo: Cliente | Facturación | Importes ——
+    st.markdown('<div class="mostrador-pos-pie">', unsafe_allow_html=True)
+    pie_cli, pie_fact, pie_imp = st.columns([1.2, 1, 1], gap="medium")
+    with pie_cli:
+        with st.container(border=True):
+            st.markdown("**Cliente**")
+            render_seccion_cliente_mostrador()
+    with pie_fact:
+        with st.container(border=True):
+            st.markdown(f"**Facturación** · {etiqueta_intent()}")
+            render_credenciales_arca()
+            intent_opts = ["factura_b", "factura_a", "presupuesto"]
+            intent_actual = obtener_intent_venta()
+            if intent_actual not in intent_opts:
+                intent_actual = "factura_b"
+            key_intent = f"pos_intent_{vendedor}"
+            if key_intent not in st.session_state:
+                st.session_state[key_intent] = intent_actual
+            nuevo_intent = st.radio(
+                "Comprobante",
+                options=intent_opts,
+                format_func=etiqueta_intent,
+                horizontal=True,
+                key=key_intent,
+            )
+            if nuevo_intent != st.session_state.get("mostrador_intent_sugerido"):
+                st.session_state.mostrador_intent_sugerido = nuevo_intent
+                if carrito_ui:
+                    marcar_verificacion_mostrador(nuevo_intent)
+    with pie_imp:
         render_panel_cobro_mostrador(
             vendedor, carrito_ui, total_bruto, total_final, desc_porc
         )
-        _render_chat_historial(vendedor)
-        _render_entrada_orden(
-            vendedor,
-            "Otra orden o corrección…",
-            "revisar",
-            obtener_inventario_completo,
-            buscar_en_inventario,
-            agregar_al_carrito,
-            mostrar_atajos=False,
-        )
-        return
-
-    if estado == EstadoVenta.ARMANDO:
-        from modulos.ui_mostrador import render_agregar_manual_mostrador
-
-        carrito = obtener_carrito(str(vendedor)) or []
-        carrito_ui = carrito_efectivo_mostrador(vendedor, carrito)
-        desc_porc = float(st.session_state.cliente_activo.get("descuento", 0))
-        _, total_final = calcular_totales_carrito(carrito_ui, desc_porc)
-        if st.session_state.get(f"manual_add_ctx_{vendedor}"):
-            render_agregar_manual_mostrador(vendedor)
-        with st.expander(
-            f"🛒 Ver carrito · {len(carrito_ui)} ítem(s) · ${total_final:,.2f}",
-            expanded=False,
-        ):
-            render_carrito_grilla(vendedor, carrito_ui)
-        st.info("Seguí dictando ítems o decí **listo** para revisar e imprimir.")
-
-    _render_chat_historial(vendedor)
-
-    _render_entrada_orden(
-        vendedor,
-        "Dicte o escriba la orden de venta…",
-        "venta",
-        obtener_inventario_completo,
-        buscar_en_inventario,
-        agregar_al_carrito,
-        mostrar_atajos=True,
-    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
     with st.expander("Más herramientas", expanded=False):
         col_v, col_n = st.columns(2)
         with col_v:
             if st.button("🗑️ Vaciar carrito", key=f"vaciar_chat_{vendedor}", use_container_width=True):
                 limpiar_venta_mostrador(vendedor, reset_cliente=False)
-                from modulos.mostrador_estado import limpiar_mensaje_chat
-
                 limpiar_mensaje_chat()
                 st.rerun()
         with col_n:
             if st.button("✅ Nueva venta", key=f"nueva_chat_{vendedor}", use_container_width=True):
                 limpiar_venta_mostrador(vendedor, reset_cliente=True)
-                from modulos.mostrador_estado import limpiar_mensaje_chat
-
                 limpiar_mensaje_chat()
                 st.rerun()
 
         render_presupuestos_guardados(vendedor)
-        tabs = ["🔍 Buscador", "⌨️ Pistola", "📷 QR"]
-        t_buscar, t_manual, t_qr = st.tabs(tabs)
-        with t_buscar:
-            if inv_mostrador:
-                render_buscador_productos(
-                    vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario
-                )
-            else:
-                st.info("Inventario vacío.")
+        tabs = ["⌨️ Pistola", "📷 QR"]
+        t_manual, t_qr = st.tabs(tabs)
         with t_manual:
             cod = st.text_input("Código variante (CODIGO_MARCA)", key=f"manual_chat_{vendedor}")
             if st.button("➕ Agregar", key=f"manual_add_{vendedor}") and cod:
