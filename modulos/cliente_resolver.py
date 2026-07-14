@@ -90,7 +90,15 @@ def _score_cliente(termino: str, nombre_db: str) -> float:
     if term_tok and nom_tok and term_tok & nom_tok:
         inter = len(term_tok & nom_tok)
         union = len(term_tok | nom_tok)
-        return 0.72 + 0.18 * (inter / union)
+        score = 0.72 + 0.18 * (inter / union)
+        ratio_f = _ratio_similitud(term_f, nom_f)
+        if len(term_tok) >= 2 and inter < len(term_tok) and ratio_f < 0.78:
+            if inter <= 1:
+                return min(score, 0.5)
+            return min(score, 0.62)
+        if ratio_f >= 0.78:
+            return max(score, ratio_f)
+        return score
 
     ratio = _ratio_similitud(term_f, nom_f)
     if ratio >= 0.78:
@@ -168,10 +176,13 @@ def resolver_cliente_por_nombre(
 
 def corregir_nombre_con_clientes(termino: str, clientes_db: Optional[dict] = None) -> str:
     """Si el nombre dictado se parece a un cliente de Firebase, devuelve el nombre oficial."""
-    encontrado, score, _ = resolver_cliente_por_nombre(termino, clientes_db, umbral=_UMBRAL_MEDIO)
-    if encontrado and score >= _UMBRAL_MEDIO:
+    term = str(termino or "").strip()
+    tok_count = len(_tokens_nombre(term))
+    umbral = _UMBRAL_ALTO if tok_count >= 2 else _UMBRAL_MEDIO
+    encontrado, score, _ = resolver_cliente_por_nombre(termino, clientes_db, umbral=umbral)
+    if encontrado and score >= umbral:
         return str(encontrado.get("nombre", termino)).strip().upper()
-    return str(termino or "").strip().upper()
+    return term.upper()
 
 
 def sugerencias_clientes(termino: str, max_resultados: int = 5) -> list[tuple[str, dict, float]]:

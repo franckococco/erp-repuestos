@@ -120,6 +120,7 @@ Devolvé SOLO JSON válido, sin markdown.
 
 
 def _normalizar_items(items: Any) -> list[dict]:
+    from modulos.util_busqueda import parece_codigo_producto
     from modulos.voz_repuestos import corregir_termino_repuesto
 
     if not isinstance(items, list):
@@ -136,7 +137,10 @@ def _normalizar_items(items: Any) -> list[dict]:
             cant = max(1, int(raw.get("cantidad", 1)))
         except (TypeError, ValueError):
             cant = 1
-        item = {"termino": term, "cantidad": cant}
+        modo = str(raw.get("modo") or "").lower()
+        if modo not in ("codigo", "descripcion"):
+            modo = "codigo" if parece_codigo_producto(term) else "descripcion"
+        item = {"termino": term, "cantidad": cant, "modo": modo}
         veh = raw.get("vehiculo")
         if veh:
             item["vehiculo"] = str(veh).strip()

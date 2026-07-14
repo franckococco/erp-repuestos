@@ -47,7 +47,8 @@ _SINONIMOS_DICTADO = {
     "shocks": "amortiguadores", "amortiguadores": "amortiguador",
     # Frenos
     "ferodo": "pastilla", "ferodos": "pastillas", "pastillas": "pastilla",
-    "pastilla": "pastilla", "disco": "disco", "discos": "discos",
+    "pastilla": "pastilla", "zapatilla": "pastilla", "zapatillas": "pastillas",
+    "disco": "disco", "discos": "discos",
     "zapata": "zapata", "zapatas": "zapatas", "cilindro": "cilindro",
     "latiguillo": "latiguillo", "flexible": "flexible",
     # Filtros

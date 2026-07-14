@@ -749,6 +749,7 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
         ok, msj, ambiguos = agregar_termino_voz(
             vendedor, termino, cant, inventario, buscar_en_inventario, agregar_al_carrito,
             vehiculo=raw.get("vehiculo"),
+            modo=raw.get("modo"),
         )
         if ok:
             ok_count += 1
@@ -758,6 +759,7 @@ def _agregar_items_voz(vendedor, items, inventario, buscar_en_inventario, agrega
                 "termino": termino,
                 "cantidad": cant,
                 "vehiculo": raw.get("vehiculo"),
+                "modo": raw.get("modo"),
                 "coincidencias": ambiguos,
                 "msj": msj,
             })
@@ -1087,7 +1089,6 @@ def render_agregar_manual_mostrador(vendedor, contexto=None):
 
 
 def render_seccion_cliente_mostrador():
-    render_panel_cliente_pendiente_confirmar()
     st.session_state.cliente_activo = normalizar_cliente_activo(
         st.session_state.get("cliente_activo")
     )

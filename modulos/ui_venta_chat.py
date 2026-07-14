@@ -489,7 +489,7 @@ def _render_chat_historial(vendedor):
             "Decí **listo** para revisar."
         )
         return
-    for entrada in historial:
+    for i, entrada in enumerate(historial):
         orden = entrada.get("orden", "")
         respuesta = entrada.get("respuesta", "")
         tipo = entrada.get("tipo", "info")
@@ -504,6 +504,10 @@ def _render_chat_historial(vendedor):
                 st.warning(respuesta)
             else:
                 st.markdown(respuesta)
+    if st.session_state.get(f"manual_add_ctx_{vendedor}"):
+        from modulos.ui_mostrador import render_agregar_manual_mostrador
+
+        render_agregar_manual_mostrador(vendedor)
 
 
 def render_venta_chat(
@@ -534,6 +538,9 @@ def render_venta_chat(
 
     estado = obtener_estado_venta(vendedor)
     _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito)
+    from modulos.ui_mostrador import render_panel_cliente_pendiente_confirmar
+
+    render_panel_cliente_pendiente_confirmar()
     _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador)
     render_mostrador_accion_pendiente(vendedor)
     render_presupuesto_pdf_pendiente(vendedor)
