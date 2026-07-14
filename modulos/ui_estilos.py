@@ -90,6 +90,25 @@ def aplicar_estilos_mostrador():
             padding-top: 0.65rem;
             margin-top: 0.65rem;
         }
+        .mostrador-resumen-chip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem 1rem;
+            align-items: center;
+            background: #f8fafc;
+            border: 2px solid #475569;
+            border-radius: 0.45rem;
+            padding: 0.4rem 0.75rem;
+            margin: 0.25rem 0 0.55rem;
+            font-size: 0.9rem;
+            width: fit-content;
+            max-width: 100%;
+        }
+        .mostrador-resumen-chip span { white-space: nowrap; color: #0f172a; }
+        .mostrador-cobro-panel div[role="radiogroup"] {
+            gap: 0.35rem 0.65rem !important;
+            flex-wrap: wrap !important;
+        }
         /* Bordes de bloques (teclado, artículos, pie) bien visibles */
         div[data-testid="stVerticalBlockBorderWrapper"] {
             border: 2px solid #475569 !important;

@@ -689,19 +689,20 @@ elif pagina == "mostrador":
     from modulos.mostrador_voz_flujo import inventario_cache_mostrador
 
     aplicar_estilos_mostrador()
-    titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
-
-    vista_mostrador = st.radio(
-        "Vista mostrador",
-        ["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="mostrador_vista_principal",
-    )
-
-    if vista_mostrador.startswith("🧾"):
-        render_historial_facturas_arca()
-    else:
+    c_tit, c_vista, c_vend = st.columns([2.2, 2.2, 1.6], gap="small")
+    with c_tit:
+        titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
+    with c_vista:
+        st.write("")  # alinea con título
+        vista_mostrador = st.radio(
+            "Vista mostrador",
+            ["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="mostrador_vista_principal",
+        )
+    with c_vend:
+        st.write("")
         vendedor = vendedor_id_sesion()
         if es_admin():
             from modulos.puntos_vendedor import listar_vendedores
@@ -709,13 +710,22 @@ elif pagina == "mostrador":
             if vends:
                 opciones_v = {f"{v.get('nombre', v['id'])}": v["id"] for v in vends}
                 sel_v = st.selectbox(
-                    "Vendedor de la venta",
+                    "Vendedor",
                     options=list(opciones_v.keys()),
                     key="sel_vendedor_admin_mostrador",
+                    label_visibility="collapsed",
                 )
                 vendedor = opciones_v.get(sel_v, vendedor)
                 st.session_state.vendedor_mostrador_sel = vendedor
+                st.caption("Vendedor")
+            else:
+                st.caption("Vendedor: sesión")
+        else:
+            st.caption(f"Vendedor: {vendedor}")
 
+    if vista_mostrador.startswith("🧾"):
+        render_historial_facturas_arca()
+    else:
         inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
         render_venta_chat(
             vendedor,

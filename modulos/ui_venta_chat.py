@@ -465,20 +465,24 @@ def _render_barra_cancelar_mostrador(vendedor, carrito_efectivo_mostrador):
 def _render_header_venta(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito):
     cli = st.session_state.get("cliente_activo") or {}
     nombre = cli.get("nombre", "CONSUMIDOR FINAL")
+    if len(nombre) > 28:
+        nombre = nombre[:26] + "…"
     intent = etiqueta_intent()
     carrito = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
     n_items = len(carrito)
     estado = obtener_estado_venta(vendedor)
     desc_porc = float(cli.get("descuento", 0))
     _, total = calcular_totales_carrito(carrito, desc_porc)
-
-    c1, c2, c3, c4, c5 = st.columns([2.5, 1.5, 1.2, 1.2, 1.5])
-    c1.markdown(f"**Cliente:** {nombre}")
-    c2.markdown(f"**{intent}**")
-    c3.markdown(f"**{n_items}** ítems")
-    c4.markdown(f"**${total:,.2f}**")
-    c5.markdown(f"**Estado:** {estado.replace('_', ' ').title()}")
-
+    st.markdown(
+        f"<div class='mostrador-resumen-chip'>"
+        f"<span><b>Cliente</b> {nombre}</span>"
+        f"<span><b>{intent}</b></span>"
+        f"<span><b>{n_items}</b> ítems</span>"
+        f"<span><b>${total:,.2f}</b></span>"
+        f"<span>{estado.replace('_', ' ').title()}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 def _render_chat_historial(vendedor):
     historial = obtener_historial_chat()

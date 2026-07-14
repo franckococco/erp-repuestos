@@ -948,45 +948,48 @@ def render_panel_cliente_pendiente_confirmar():
         return
 
     nombre_dictado = (pend or {}).get("nombre_dictado") or cli.get("nombre", "")
-    with st.container(border=True):
-        st.warning(
-            f"**Cliente no confirmado en la base:** «{nombre_dictado}». "
-            "Elegí un cliente registrado o confirmá el nombre dictado."
-        )
-        sugerencias = (pend or {}).get("sugerencias") or []
-        if sugerencias:
-            st.caption("Clientes similares en Firebase:")
-            cols = st.columns(min(3, len(sugerencias)))
-            for i, (nombre, datos, score) in enumerate(sugerencias[:3]):
-                with cols[i % len(cols)]:
-                    if st.button(
-                        f"{nombre[:28]}",
-                        key=f"cli_pend_sel_{i}",
-                        use_container_width=True,
-                        help=f"Coincidencia {int(score * 100)}%",
-                    ):
-                        descartar_panels_operacion_anterior()
-                        _invalidar_pdf_presupuesto_mostrador()
-                        st.session_state.cliente_activo = normalizar_cliente_activo(
-                            cliente_db_a_activo(datos)
-                        )
-                        st.session_state.pop("cliente_pendiente_confirmar", None)
-                        st.rerun()
+    # Compacto: no estirar a todo el ancho
+    _, col_mid, _ = st.columns([0.8, 2.4, 0.8])
+    with col_mid:
+        with st.container(border=True):
+            st.warning(
+                f"**Cliente no confirmado:** «{nombre_dictado}». "
+                "Elegí uno registrado o confirmá el dictado."
+            )
+            sugerencias = (pend or {}).get("sugerencias") or []
+            if sugerencias:
+                st.caption("Similares en Firebase:")
+                cols = st.columns(min(3, len(sugerencias)))
+                for i, (nombre, datos, score) in enumerate(sugerencias[:3]):
+                    with cols[i % len(cols)]:
+                        if st.button(
+                            f"{nombre[:28]}",
+                            key=f"cli_pend_sel_{i}",
+                            use_container_width=True,
+                            help=f"Coincidencia {int(score * 100)}%",
+                        ):
+                            descartar_panels_operacion_anterior()
+                            _invalidar_pdf_presupuesto_mostrador()
+                            st.session_state.cliente_activo = normalizar_cliente_activo(
+                                cliente_db_a_activo(datos)
+                            )
+                            st.session_state.pop("cliente_pendiente_confirmar", None)
+                            st.rerun()
 
-        c1, c2 = st.columns(2)
-        if c1.button("Usar nombre dictado", use_container_width=True, key="cli_pend_usar_dictado"):
-            cli_act = normalizar_cliente_activo({
-                **cli,
-                "nombre": str(nombre_dictado).upper(),
-                "pendiente_confirmar": False,
-            })
-            st.session_state.cliente_activo = cli_act
-            st.session_state.pop("cliente_pendiente_confirmar", None)
-            st.rerun()
-        if c2.button("Consumidor final", use_container_width=True, key="cli_pend_cf"):
-            st.session_state.cliente_activo = cliente_consumidor_final()
-            st.session_state.pop("cliente_pendiente_confirmar", None)
-            st.rerun()
+            c1, c2 = st.columns(2)
+            if c1.button("Usar nombre dictado", use_container_width=True, key="cli_pend_usar_dictado"):
+                cli_act = normalizar_cliente_activo({
+                    **cli,
+                    "nombre": str(nombre_dictado).upper(),
+                    "pendiente_confirmar": False,
+                })
+                st.session_state.cliente_activo = cli_act
+                st.session_state.pop("cliente_pendiente_confirmar", None)
+                st.rerun()
+            if c2.button("Consumidor final", use_container_width=True, key="cli_pend_cf"):
+                st.session_state.cliente_activo = cliente_consumidor_final()
+                st.session_state.pop("cliente_pendiente_confirmar", None)
+                st.rerun()
 
 
 def render_agregar_manual_mostrador(vendedor, contexto=None):
@@ -1921,6 +1924,40 @@ def _set_forma_pago(vendedor, forma):
     return fp
 
 
+def _leer_pago_tarjeta(vendedor):
+    """Cuotas e interés (%) cargados a mano cuando la forma es Tarjeta."""
+    cuotas = int(st.session_state.get(f"mostrador_cuotas_{vendedor}", 1) or 1)
+    interes = float(st.session_state.get(f"mostrador_interes_{vendedor}", 0.0) or 0.0)
+    return max(1, cuotas), max(0.0, interes)
+
+
+def _etiqueta_forma_pago(vendedor, forma_pago):
+    if forma_pago != "Tarjeta":
+        return forma_pago
+    cuotas, interes = _leer_pago_tarjeta(vendedor)
+    etq = f"Tarjeta · {cuotas} cuota(s)"
+    if interes > 0:
+        etq += f" · interés {interes:g}%"
+    return etq
+
+
+def _total_con_interes(total_final, interes_pct):
+    return float(total_final) * (1.0 + float(interes_pct) / 100.0)
+
+
+def _aplicar_interes_a_items_factura(items_fc, interes_pct):
+    """Ajusta precios de líneas para que el CAE coincida con el total con interés."""
+    if not items_fc or float(interes_pct or 0) <= 0:
+        return items_fc
+    factor = 1.0 + float(interes_pct) / 100.0
+    out = []
+    for it in items_fc:
+        nuevo = dict(it)
+        nuevo["precio"] = round(float(it.get("precio", 0)) * factor, 2)
+        out.append(nuevo)
+    return out
+
+
 def ejecutar_emitir_factura_arca(
     vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
 ):
@@ -1945,6 +1982,12 @@ def ejecutar_emitir_factura_arca(
         "cbte_tipo": cli["tipo_comprobante"],
     }
     items_fc = carrito_a_items_factura(carrito, desc_porc)
+    interes_pct = 0.0
+    if str(forma_pago).startswith("Tarjeta") or forma_pago == "Tarjeta":
+        _, interes_pct = _leer_pago_tarjeta(vendedor)
+        items_fc = _aplicar_interes_a_items_factura(items_fc, interes_pct)
+        forma_pago = _etiqueta_forma_pago(vendedor, "Tarjeta")
+        total_final = _total_con_interes(total_final, interes_pct)
     if not items_fc or sum(i["precio"] for i in items_fc) <= 0:
         return False, (
             "El total a facturar debe ser mayor a cero. "
@@ -2255,7 +2298,7 @@ def render_carrito_grilla(vendedor, carrito):
 def render_panel_cobro_mostrador(
     vendedor, carrito, total_bruto, total_final, desc_porc
 ):
-    """Totales, pago y botones de facturación (columna lateral)."""
+    """Totales, pago en tarjetas (tiles) y botones de facturación."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
     intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
     listo_para_cerrar = listo_ticket or (
@@ -2275,13 +2318,51 @@ def render_panel_cobro_mostrador(
             if intent == "presupuesto":
                 _render_cierre_presupuesto_mostrador(vendedor, carrito, desc_porc)
             else:
-                forma_pago = st.selectbox(
+                st.caption("Forma de pago")
+                actual = _forma_pago_actual(vendedor)
+                if actual not in FORMAS_PAGO:
+                    actual = "Contado"
+                forma_pago = st.radio(
                     "Forma de pago",
                     list(FORMAS_PAGO),
-                    index=list(FORMAS_PAGO).index(_forma_pago_actual(vendedor)),
+                    index=list(FORMAS_PAGO).index(actual),
+                    horizontal=True,
+                    label_visibility="collapsed",
                     key=f"pago_arca_{vendedor}",
                 )
                 _set_forma_pago(vendedor, forma_pago)
+
+                total_a_cobrar = float(total_final)
+                if forma_pago == "Tarjeta":
+                    st.markdown("**Tarjeta — completar**")
+                    c_cuo, c_int = st.columns(2)
+                    if f"mostrador_cuotas_{vendedor}" not in st.session_state:
+                        st.session_state[f"mostrador_cuotas_{vendedor}"] = 1
+                    if f"mostrador_interes_{vendedor}" not in st.session_state:
+                        st.session_state[f"mostrador_interes_{vendedor}"] = 0.0
+                    cuotas = c_cuo.number_input(
+                        "Cuotas",
+                        min_value=1,
+                        max_value=48,
+                        step=1,
+                        key=f"mostrador_cuotas_{vendedor}",
+                    )
+                    interes = c_int.number_input(
+                        "Interés %",
+                        min_value=0.0,
+                        max_value=100.0,
+                        step=0.5,
+                        format="%.1f",
+                        key=f"mostrador_interes_{vendedor}",
+                    )
+                    total_a_cobrar = _total_con_interes(total_final, interes)
+                    if interes > 0 or cuotas > 1:
+                        st.caption(
+                            f"{int(cuotas)} cuota(s)"
+                            + (f" · interés {interes:g}%" if interes else "")
+                            + f" → cobranza **${total_a_cobrar:,.2f}**"
+                        )
+
                 if st.button(
                     "🧾 FACTURAR E IMPRIMIR",
                     type="primary",
@@ -2289,7 +2370,12 @@ def render_panel_cobro_mostrador(
                     key=f"btn_verif_arca_{vendedor}",
                 ):
                     ok, msj = _facturar_desde_carrito(
-                        vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False
+                        vendedor,
+                        carrito,
+                        total_final,
+                        desc_porc,
+                        forma_pago,
+                        solo_ticket=False,
                     )
                     if ok:
                         st.rerun()
