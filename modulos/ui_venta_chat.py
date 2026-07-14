@@ -569,51 +569,67 @@ def render_venta_chat(
 
     # —— Zona superior: teclado (búsqueda) + voz (orden) ——
     st.markdown(
-        '<div class="mostrador-pos-zona"><strong>⌨️ Teclado · 🎤 Voz</strong></div>',
+        '<div class="mostrador-pos-zona">1 · ⌨️ Teclado · 🎤 Voz</div>',
         unsafe_allow_html=True,
     )
-    col_teclado, col_voz = st.columns([1.35, 1], gap="medium")
-    with col_teclado:
-        if inv_mostrador:
-            render_buscador_productos(
-                vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario
+    with st.container(border=True):
+        col_teclado, col_voz = st.columns([1.35, 1], gap="medium")
+        with col_teclado:
+            if inv_mostrador:
+                render_buscador_productos(
+                    vendedor, inv_mostrador, agregar_al_carrito, filtrar_inventario
+                )
+            else:
+                st.info("Inventario vacío.")
+        with col_voz:
+            st.caption(
+                "Órdenes completas: cliente + ítems. Ej: "
+                "*factura para Franco de una biela y un arranque gol trend*"
             )
-        else:
-            st.info("Inventario vacío.")
-    with col_voz:
-        st.caption(
-            "Órdenes completas: cliente + ítems. Ej: "
-            "*factura para Franco de una biela y un arranque gol trend*"
-        )
-        _render_entrada_orden(
-            vendedor,
-            "Dictá o escribí la orden…",
-            "pos_voz",
-            obtener_inventario_completo,
-            buscar_en_inventario,
-            agregar_al_carrito,
-            mostrar_atajos=True,
-        )
-        with st.expander("Historial de órdenes", expanded=False):
-            _render_chat_historial(vendedor)
+            _render_entrada_orden(
+                vendedor,
+                "Dictá o escribí la orden…",
+                "pos_voz",
+                obtener_inventario_completo,
+                buscar_en_inventario,
+                agregar_al_carrito,
+                mostrar_atajos=True,
+            )
+            with st.expander("Historial de órdenes", expanded=False):
+                _render_chat_historial(vendedor)
 
     if estado == EstadoVenta.ELEGIR:
-        render_panel_coincidencias_mostrador(
-            vendedor,
-            agrupar_por_maestro,
-            agregar_al_carrito,
-            buscar_en_inventario=buscar_en_inventario,
-            obtener_inventario=obtener_inventario_completo,
+        st.markdown(
+            '<div class="mostrador-pos-zona">Elegí coincidencia</div>',
+            unsafe_allow_html=True,
         )
+        with st.container(border=True):
+            render_panel_coincidencias_mostrador(
+                vendedor,
+                agrupar_por_maestro,
+                agregar_al_carrito,
+                buscar_en_inventario=buscar_en_inventario,
+                obtener_inventario=obtener_inventario_completo,
+            )
 
+    st.divider()
     # —— Artículos siempre visibles ——
-    st.markdown("#### Artículos")
-    if carrito_ui:
-        render_carrito_grilla(vendedor, carrito_ui)
-    else:
-        st.caption("Sin ítems. Buscá por teclado o dictá la orden.")
+    st.markdown(
+        '<div class="mostrador-pos-zona">2 · Artículos</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        if carrito_ui:
+            render_carrito_grilla(vendedor, carrito_ui)
+        else:
+            st.caption("Sin ítems. Buscá por teclado o dictá la orden.")
 
+    st.divider()
     # —— Pie fijo: Cliente | Facturación | Importes ——
+    st.markdown(
+        '<div class="mostrador-pos-zona">3 · Cliente · Facturación · Importes</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="mostrador-pos-pie">', unsafe_allow_html=True)
     pie_cli, pie_fact, pie_imp = st.columns([1.2, 1, 1], gap="medium")
     with pie_cli:

@@ -69,6 +69,21 @@ class TestFrasesRealesMostrador(unittest.TestCase):
         for it in items:
             self.assertEqual(it.get("vehiculo"), "gol trend")
 
+    def test_factura_codigo_y_rotula_no_pierde_111(self):
+        frase = (
+            "haceme una factura para juan picazo codigo 111 2 unidades "
+            "y una rotula para el 207 2 unidades"
+        )
+        cli = extraer_cliente_orden_voz(frase)
+        self.assertEqual(cli.get("nombre_cliente"), "JUAN PICAZO")
+        items = extraer_items_orden_voz(frase)
+        terminos = {str(i["termino"]).upper() for i in items}
+        self.assertIn("111", terminos)
+        self.assertTrue(any("ROTULA" in t for t in terminos))
+        self.assertEqual(len(items), 2)
+        cod = next(i for i in items if str(i["termino"]) == "111")
+        self.assertEqual(cod["cantidad"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

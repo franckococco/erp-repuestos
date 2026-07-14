@@ -271,23 +271,28 @@ def _unificar_separadores_items(t: str) -> str:
 
 def _reordenar_cantidad_repuesto(t: str) -> str:
     """«de 2 bieletas de suspension 207» → «bieletas de suspension 2 unidades 207»."""
+    # Producto: no absorber «para el», «y», «unidades» (rompe «codigo 111 2 unidades y …»).
+    prod = (
+        r"([a-záéíóúñ]+(?:\s+(?!para\b|el\b|la\b|los\b|las\b|y\b|unidades\b|"
+        r"codigo\b|código\b|factura\b|presupuesto\b)[a-záéíóúñ]+){0,4})"
+    )
     t = re.sub(
-        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=\d{3,4}\s*$)",
+        rf"\bde\s+(\d{{1,2}})\s+(?!unidades\b){prod}\s+(?=\d{{3,4}}\s*$)",
         r"\2 \1 unidades ",
         t,
     )
     t = re.sub(
-        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=para\s+el\s+)",
+        rf"\bde\s+(\d{{1,2}})\s+(?!unidades\b){prod}\s+(?=para\s+el\s+)",
         r"\2 \1 unidades ",
         t,
     )
     t = re.sub(
-        r"\bde\s+(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=(?:codigo|código)\b)",
+        rf"\bde\s+(\d{{1,2}})\s+(?!unidades\b){prod}\s+(?=(?:codigo|código)\b)",
         r"\2 \1 unidades ",
         t,
     )
     t = re.sub(
-        r"\b(\d{1,2})\s+((?:[a-záéíóúñ]+\s+)*[a-záéíóúñ]+)\s+(?=para\s+el\s+)",
+        rf"\b(\d{{1,2}})\s+(?!unidades\b){prod}\s+(?=para\s+el\s+)",
         r"\2 \1 unidades ",
         t,
     )

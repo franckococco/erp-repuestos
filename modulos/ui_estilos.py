@@ -73,18 +73,34 @@ def aplicar_estilos_mostrador():
             border-radius: 0.5rem;
         }
         .mostrador-pos-zona {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 0.55rem;
-            padding: 0.55rem 0.75rem 0.35rem;
-            margin-bottom: 0.55rem;
+            background: #f1f5f9;
+            border: 2px solid #334155;
+            border-left: 6px solid #1d4ed8;
+            border-radius: 0.45rem;
+            padding: 0.45rem 0.75rem;
+            margin: 0.65rem 0 0.45rem;
+            font-weight: 700;
+            color: #0f172a;
+            font-size: 0.95rem;
         }
-        .mostrador-pos-zona strong { color: #0f172a; font-size: 0.92rem; }
+        .mostrador-pos-zona strong { color: #0f172a; font-size: 0.95rem; }
         .mostrador-pos-pie {
             background: #ffffff;
-            border-top: 2px solid #cbd5e1;
-            padding-top: 0.5rem;
-            margin-top: 0.35rem;
+            border-top: 3px solid #1e293b;
+            padding-top: 0.65rem;
+            margin-top: 0.65rem;
+        }
+        /* Bordes de bloques (teclado, artículos, pie) bien visibles */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 2px solid #475569 !important;
+            border-radius: 0.5rem !important;
+            background: #ffffff;
+        }
+        hr {
+            border: none !important;
+            border-top: 3px solid #1e293b !important;
+            margin: 0.85rem 0 !important;
+            opacity: 1 !important;
         }
         @media (max-width: 768px) {
             .main .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
