@@ -21,10 +21,12 @@ def test_ticket_html_incluye_descripcion_completa():
     assert "BIELETA SUSPENSION DELANTERA LARGA DESCRIPCION" in html
     assert "FACTURA B" in html
     assert "font-weight: 700" in html or "font-weight:700" in html.replace(" ", "")
-    assert "border-bottom: 2px solid #000" in html
+    assert "border-bottom: 2px solid #000" in html or 'class="ticket"' in html
     assert "qr-wrap" in html
     assert "Escaneá para verificar en ARCA" in html
     assert "data:image/png;base64," in html
+    assert 'class="bloque"' in html
+    assert 'class="ticket"' in html
 
 
 def test_ticket_html_sin_cae_no_rompe():

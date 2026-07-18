@@ -1703,12 +1703,12 @@ def regenerar_pdfs_comprobante(comp):
 
 
 def _ticket_html_esta_desactualizado(html_ticket: str) -> bool:
-    """Detecta HTML generado antes del diseño v3 (QR + barras)."""
+    """Detecta HTML generado antes del diseño actual (recuadros + QR)."""
     if not html_ticket:
         return True
     if f"ticket-design:{TICKET_DISENO_VERSION}" in html_ticket:
         return False
-    if "qr-wrap" in html_ticket and 'class="bar"' in html_ticket:
+    if 'class="ticket"' in html_ticket and "qr-wrap" in html_ticket:
         return False
     return True
 
@@ -1785,8 +1785,8 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: logo claro · barras negras · QR ARCA · total grande. "
-        "Si no ves QR/barras, esperá el redeploy de Streamlit y recargá (F5)."
+        f"Diseño {TICKET_DISENO_VERSION}: contorno · recuadros · logo claro · QR ARCA. "
+        "Si no ves los recuadros, esperá el redeploy de Streamlit y recargá (F5)."
     )
     import streamlit.components.v1 as components
     components.html(html_ticket, height=560, scrolling=True)

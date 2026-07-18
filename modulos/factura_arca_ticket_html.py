@@ -13,7 +13,7 @@ from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
 # Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
-TICKET_DISENO_VERSION = "v3-qr-barras"
+TICKET_DISENO_VERSION = "v4-recuadros"
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -262,8 +262,8 @@ def crear_ticket_html(
     )
 
     obs = str(observacion or "").strip()
-    linea_obs = (
-        f'<div class="bar"></div><div class="obs"><strong>Obs.:</strong> {esc(obs)}</div>'
+    bloque_obs = (
+        f'<div class="bloque"><div class="obs"><strong>Obs.:</strong> {esc(obs)}</div></div>'
         if obs
         else ""
     )
@@ -304,7 +304,7 @@ def crear_ticket_html(
     width: {ancho_mm - 4}mm;
     max-width: {ancho_mm - 4}mm;
     margin: 0 auto;
-    padding: 2mm 2.5mm 3mm;
+    padding: 1.5mm;
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
     font-size: 11px;
@@ -312,29 +312,30 @@ def crear_ticket_html(
     color: #000;
     background: #fff;
   }}
+  .ticket {{
+    border: 2.5px solid #000;
+    padding: 2mm;
+    background: #fff;
+  }}
+  .bloque {{
+    border: 1.25px solid #000;
+    padding: 2.5mm 2mm;
+    margin: 0 0 2mm;
+  }}
+  .bloque:last-child {{
+    margin-bottom: 0;
+  }}
   .center {{ text-align: center; }}
   .logo-wrap {{
     text-align: center;
     margin: 0 0 2px;
   }}
   .logo {{
-    max-width: 52mm;
-    max-height: 26mm;
+    max-width: 54mm;
+    max-height: 28mm;
     width: auto;
     height: auto;
     object-fit: contain;
-  }}
-  .bar {{
-    height: 2.5px;
-    background: #000;
-    border: none;
-    margin: 5px 0;
-  }}
-  .bar-thin {{
-    height: 1.5px;
-    background: #000;
-    border: none;
-    margin: 4px 0;
   }}
   h1 {{
     font-family: Arial, Helvetica, sans-serif;
@@ -358,12 +359,13 @@ def crear_ticket_html(
     font-size: 12px;
     font-weight: 700;
     text-align: center;
-    margin: 3px 0 2px;
+    margin: 0 0 2px;
     letter-spacing: 0.2px;
   }}
   .cliente {{
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
+    text-align: center;
     word-wrap: break-word;
     overflow-wrap: anywhere;
   }}
@@ -372,17 +374,18 @@ def crear_ticket_html(
     letter-spacing: 1px;
     text-transform: uppercase;
     margin-bottom: 2px;
+    text-align: center;
   }}
   table.items {{
     width: 100%;
     border-collapse: collapse;
-    margin: 2px 0 0;
+    margin: 0;
     font-size: 10px;
     font-family: Arial, Helvetica, sans-serif;
   }}
   table.items thead td {{
-    border-bottom: 2.5px solid #000;
-    padding: 2px 0 3px;
+    border-bottom: 2px solid #000;
+    padding: 1px 0 3px;
     font-size: 9px;
     letter-spacing: 0.4px;
     text-transform: uppercase;
@@ -391,7 +394,11 @@ def crear_ticket_html(
     vertical-align: top;
     padding: 4px 0;
     font-weight: 700;
-    border-bottom: 2px solid #000;
+    border-bottom: 1.5px solid #000;
+  }}
+  table.items tr.item:last-child td {{
+    border-bottom: none;
+    padding-bottom: 0;
   }}
   td.cant {{
     width: 9mm;
@@ -430,10 +437,8 @@ def crear_ticket_html(
   }}
   .total-box {{
     text-align: center;
-    margin: 6px 0 4px;
-    padding: 6px 0;
-    border-top: 2.5px solid #000;
-    border-bottom: 2.5px solid #000;
+    margin: 0;
+    padding: 0;
   }}
   .total-label {{
     font-family: Arial, Helvetica, sans-serif;
@@ -462,11 +467,11 @@ def crear_ticket_html(
     text-align: left;
     word-wrap: break-word;
     overflow-wrap: anywhere;
-    margin: 2px 0;
+    margin: 0;
   }}
   .qr-wrap {{
     text-align: center;
-    margin: 6px 0 2px;
+    margin: 3px 0 0;
   }}
   .qr {{
     width: 28mm;
@@ -484,7 +489,7 @@ def crear_ticket_html(
     font-size: 10px;
     font-weight: 700;
     font-family: Arial, Helvetica, sans-serif;
-    margin-top: 4px;
+    margin-top: 3px;
   }}
   .noprint {{
     margin: 8px 0;
@@ -504,52 +509,63 @@ def crear_ticket_html(
 </style>
 </head>
 <body>
-  {logo_html}
-  <h1>{esc(emisor.get("nombre_fantasia"))}</h1>
-  <div class="sub">{esc(emisor.get("domicilio_comercial"))}</div>
-  <div class="sub">CUIT: {esc(emisor.get("cuit"))}</div>
-  <div class="sub">{esc(emisor.get("iibb"))}</div>
-  <div class="sub">Inicio act.: {esc(emisor.get("inicio_actividades"))}</div>
-  <div class="sub">{esc(emisor.get("condicion_iva"))}</div>
-
-  <div class="bar"></div>
-  <div class="factura">FACTURA {comp["tipo_letra"]} Nº {esc(nro_fc)}</div>
-  <div class="sub">{fecha_hora}</div>
-  {linea_operario}
-
-  <div class="bar-thin"></div>
-  <div class="sec-label">Cliente</div>
-  <div class="cliente">{esc(cli.get("nombre", "CONSUMIDOR FINAL"))}</div>
-  <div class="sub">CUIT/DNI: {esc(cli.get("cuit", "00000000000"))}</div>
-  {linea_cond}
-
-  <div class="bar-thin"></div>
-  <table class="items">
-    <thead>
-      <tr>
-        <td class="cant">Cant</td>
-        <td class="desc">Descripción</td>
-        <td class="imp">Importe</td>
-      </tr>
-    </thead>
-    <tbody>
-      {items_body}
-    </tbody>
-  </table>
-
-  {desglose_html}
-  <div class="total-box">
-    <div class="total-label">TOTAL</div>
-    <div class="total-monto">{total_txt}</div>
+<div class="ticket">
+  <div class="bloque">
+    {logo_html}
+    <h1>{esc(emisor.get("nombre_fantasia"))}</h1>
+    <div class="sub">{esc(emisor.get("domicilio_comercial"))}</div>
+    <div class="sub">CUIT: {esc(emisor.get("cuit"))}</div>
+    <div class="sub">{esc(emisor.get("iibb"))}</div>
+    <div class="sub">Inicio act.: {esc(emisor.get("inicio_actividades"))}</div>
+    <div class="sub">{esc(emisor.get("condicion_iva"))}</div>
   </div>
-  <div class="sub center">Pago: {esc(cli.get("condicion_venta", forma_pago))}</div>
-  {linea_obs}
 
-  <div class="bar"></div>
-  <div class="cae">CAE: {esc(cae.get("numero"))}</div>
-  <div class="cae">Vto CAE: {esc(cae.get("vencimiento"))}</div>
-  {qr_html}
-  <div class="pie">{leyenda}</div>
+  <div class="bloque">
+    <div class="factura">FACTURA {comp["tipo_letra"]} Nº {esc(nro_fc)}</div>
+    <div class="sub">{fecha_hora}</div>
+    {linea_operario}
+  </div>
+
+  <div class="bloque">
+    <div class="sec-label">Cliente</div>
+    <div class="cliente">{esc(cli.get("nombre", "CONSUMIDOR FINAL"))}</div>
+    <div class="sub">CUIT/DNI: {esc(cli.get("cuit", "00000000000"))}</div>
+    {linea_cond}
+  </div>
+
+  <div class="bloque">
+    <table class="items">
+      <thead>
+        <tr>
+          <td class="cant">Cant</td>
+          <td class="desc">Descripción</td>
+          <td class="imp">Importe</td>
+        </tr>
+      </thead>
+      <tbody>
+        {items_body}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="bloque">
+    {desglose_html}
+    <div class="total-box">
+      <div class="total-label">TOTAL</div>
+      <div class="total-monto">{total_txt}</div>
+    </div>
+    <div class="sub center">Pago: {esc(cli.get("condicion_venta", forma_pago))}</div>
+  </div>
+
+  {bloque_obs}
+
+  <div class="bloque">
+    <div class="cae">CAE: {esc(cae.get("numero"))}</div>
+    <div class="cae">Vto CAE: {esc(cae.get("vencimiento"))}</div>
+    {qr_html}
+    <div class="pie">{leyenda}</div>
+  </div>
+</div>
 
   <div class="noprint">
     <button type="button" onclick="window.print()">🖨️ Imprimir ticket</button>
