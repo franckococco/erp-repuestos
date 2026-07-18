@@ -1126,19 +1126,17 @@ def render_seccion_cliente_mostrador():
         + (f" · Descuento: {cli['descuento']}%" if cli["descuento"] > 0 else "")
         + (f" · {_label_tipo_cliente_negocio(cli.get('tipo_cliente'))}" if cli.get("tipo_cliente") else "")
     )
-    col_cf, col_lim = st.columns(2)
-    with col_cf:
-        if st.button("Consumidor final", use_container_width=True, key="cli_btn_cf"):
-            descartar_panels_operacion_anterior()
-            _invalidar_pdf_presupuesto_mostrador()
-            st.session_state.cliente_activo = cliente_consumidor_final()
-            st.rerun()
-    with col_lim:
-        if st.button("Limpiar cliente", use_container_width=True, key="cli_btn_limpiar"):
-            descartar_panels_operacion_anterior()
-            _invalidar_pdf_presupuesto_mostrador()
-            st.session_state.cliente_activo = cliente_consumidor_final()
-            st.rerun()
+    # Apilados: esta sección vive en 1/3 del layout POS; columns(2) deja botones ilegibles.
+    if st.button("Consumidor final", use_container_width=True, key="cli_btn_cf"):
+        descartar_panels_operacion_anterior()
+        _invalidar_pdf_presupuesto_mostrador()
+        st.session_state.cliente_activo = cliente_consumidor_final()
+        st.rerun()
+    if st.button("Limpiar cliente", use_container_width=True, key="cli_btn_limpiar"):
+        descartar_panels_operacion_anterior()
+        _invalidar_pdf_presupuesto_mostrador()
+        st.session_state.cliente_activo = cliente_consumidor_final()
+        st.rerun()
 
     with st.expander("🔍 Buscar o cargar cliente", expanded=False):
         if clientes_db:
