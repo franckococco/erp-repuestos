@@ -1674,6 +1674,10 @@ def _respuesta_para_pdf(comp):
     }
 
 
+def _observacion_ticket(vendedor) -> str:
+    return str(st.session_state.get(f"mostrador_obs_ticket_{vendedor}") or "").strip()
+
+
 def regenerar_comprobantes_arca(comp):
     _, _, cfg = _leer_secrets_facturador()
     datos_resp = _respuesta_para_pdf(comp)
@@ -1681,7 +1685,13 @@ def regenerar_comprobantes_arca(comp):
     items = comp.get("items") or []
     forma_pago = str(comp.get("forma_pago") or "Contado")
     html_ticket = crear_ticket_html(
-        datos_resp, datos_cliente, items, cfg, forma_pago=forma_pago
+        datos_resp,
+        datos_cliente,
+        items,
+        cfg,
+        forma_pago=forma_pago,
+        vendedor=str(comp.get("vendedor") or ""),
+        observacion=str(comp.get("observacion") or ""),
     )
     a4 = crear_a4(datos_resp, datos_cliente, items, cfg)
     return html_ticket, a4, datos_resp
@@ -2057,7 +2067,13 @@ def ejecutar_emitir_factura_arca(
         if cuit_fact:
             cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
         html_ticket = crear_ticket_html(
-            datos_resp, datos_cliente, items_fc, cfg, forma_pago=forma_pago
+            datos_resp,
+            datos_cliente,
+            items_fc,
+            cfg,
+            forma_pago=forma_pago,
+            vendedor=str(vendedor),
+            observacion=_observacion_ticket(vendedor),
         )
         _auto_imprimir_ticket(html_ticket)
         st.write("Generando factura A4…")
@@ -2074,9 +2090,12 @@ def ejecutar_emitir_factura_arca(
     from modulos.mostrador_voz_flujo import invalidar_cache_inventario_mostrador
     invalidar_cache_inventario_mostrador()
 
+    obs_ticket = _observacion_ticket(vendedor)
     comp_id = guardar_comprobante_arca(
-        vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final
+        vendedor, datos_cliente, datos_resp, items_fc, forma_pago, total_final,
+        observacion=obs_ticket,
     )
+    st.session_state.pop(f"mostrador_obs_ticket_{vendedor}", None)
     nro = _formato_nro_comprobante(datos_resp)
     try:
         from modulos.puntos_vendedor import registrar_venta_puntos, asegurar_vendedor
@@ -2387,6 +2406,13 @@ def render_panel_cobro_mostrador(
                     key=f"pago_arca_{vendedor}",
                 )
                 _set_forma_pago(vendedor, forma_pago)
+
+                st.text_area(
+                    "Observación (opcional, sale en el ticket)",
+                    key=f"mostrador_obs_ticket_{vendedor}",
+                    height=68,
+                    placeholder="Ej: Garantía 30 días · Retira mañana · Dejar en mostrador…",
+                )
 
                 total_a_cobrar = float(total_final)
                 if forma_pago == "Tarjeta":

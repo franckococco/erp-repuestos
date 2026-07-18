@@ -1,11 +1,15 @@
 """Ticket fiscal térmico en HTML (58/80 mm). La factura A4 sigue en PDF."""
 from __future__ import annotations
 
+import base64
 import html
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from modulos.comprobante_contexto import armar_contexto_comprobante
 from modulos.util_fechas import ahora_ar
+
+_LOGO_CACHE_B64: Optional[str] = None
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -13,6 +17,36 @@ def _f(val, default: float = 0.0) -> float:
         return float(val)
     except (TypeError, ValueError):
         return default
+
+
+def _fmt_money(val: float) -> str:
+    return f"${val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _logo_hafid_data_uri() -> str:
+    """Logo embebido en base64 para preview e impresión."""
+    global _LOGO_CACHE_B64
+    if _LOGO_CACHE_B64 is not None:
+        return _LOGO_CACHE_B64
+
+    raiz = Path(__file__).resolve().parent.parent
+    candidatos = [
+        Path(__file__).resolve().parent / "logo_hafid.jpeg",
+        raiz / "logo_hafid.jpeg",
+        Path(__file__).resolve().parent / "logo_hafid.jpg",
+        raiz / "logo_hafid.jpg",
+    ]
+    for path in candidatos:
+        try:
+            if path.is_file():
+                raw = path.read_bytes()
+                b64 = base64.b64encode(raw).decode("ascii")
+                _LOGO_CACHE_B64 = f"data:image/jpeg;base64,{b64}"
+                return _LOGO_CACHE_B64
+        except Exception:
+            continue
+    _LOGO_CACHE_B64 = ""
+    return ""
 
 
 def _lineas_items_ticket(items: List[Dict[str, Any]], es_factura_a: bool) -> List[Dict[str, Any]]:
@@ -40,8 +74,10 @@ def crear_ticket_html(
     config: Optional[Dict[str, Any]] = None,
     forma_pago: str = "Contado",
     ancho_mm: int = 80,
+    vendedor: str = "",
+    observacion: str = "",
 ) -> str:
-    """HTML optimizado para impresora térmica: negrita, texto completo, sin cortes rígidos."""
+    """HTML térmico: logo HAFID, Arial negrita, total grande, operario y observación."""
     cfg = dict(config or {})
     ctx = armar_contexto_comprobante(datos_respuesta, datos_cliente, cfg, forma_pago=forma_pago)
     emisor = ctx["emisor"]
@@ -58,8 +94,8 @@ def crear_ticket_html(
     for f in filas:
         cant_txt = str(f["cantidad"])
         desc_txt = html.escape(f["descripcion"])
-        imp_txt = f"${f['importe']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        pu_txt = f"${f['precio_unitario']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        imp_txt = _fmt_money(f["importe"])
+        pu_txt = _fmt_money(f["precio_unitario"])
         filas_html.append(
             f'<tr class="item">'
             f'<td class="cant">{cant_txt}</td>'
@@ -75,28 +111,48 @@ def crear_ticket_html(
     if es_a:
         neto = total / 1.21
         iva = total - neto
-        totales_html = f"""
-        <div class="row"><span>Neto gravado</span><span>${neto:,.2f}</span></div>
-        <div class="row"><span>IVA 21%</span><span>${iva:,.2f}</span></div>
-        <div class="row total"><span>TOTAL</span><span>${total:,.2f}</span></div>
+        desglose_html = f"""
+        <div class="row"><span>Neto gravado</span><span>{_fmt_money(neto)}</span></div>
+        <div class="row"><span>IVA 21%</span><span>{_fmt_money(iva)}</span></div>
         """
     else:
-        totales_html = f'<div class="row total"><span>TOTAL</span><span>${total:,.2f}</span></div>'
+        desglose_html = ""
 
     def esc(s):
         return html.escape(str(s or ""))
 
     fecha_hora = ahora_ar().strftime("%d/%m/%Y %H:%M")
     leyenda = esc(ctx.get("leyenda_extra", "Gracias por su compra"))
+    total_txt = _fmt_money(total)
 
     nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL") or "")
     cond_cli = str(cli.get("condicion_iva") or "").strip()
-    # Evitar «Consumidor Final» duplicado debajo del nombre
     mostrar_cond = bool(cond_cli) and not (
         cond_cli.lower() in ("consumidor final", "consumidorfinal")
         and "consumidor final" in nombre_cli.lower()
     )
     linea_cond = f'<div class="sub">{esc(cond_cli)}</div>' if mostrar_cond else ""
+
+    logo_uri = _logo_hafid_data_uri()
+    logo_html = (
+        f'<div class="logo-wrap"><img class="logo" src="{logo_uri}" alt="HAFID"></div>'
+        if logo_uri
+        else ""
+    )
+
+    operario = str(vendedor or "").strip()
+    linea_operario = (
+        f'<div class="sub">Atendido por: <strong>{esc(operario.upper())}</strong></div>'
+        if operario
+        else ""
+    )
+
+    obs = str(observacion or "").strip()
+    linea_obs = (
+        f'<hr class="sep"><div class="obs"><strong>Obs.:</strong> {esc(obs)}</div>'
+        if obs
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -115,7 +171,7 @@ def crear_ticket_html(
     max-width: {ancho_mm - 4}mm;
     margin: 0 auto;
     padding: 2mm;
-    font-family: "Courier New", Courier, monospace;
+    font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
     font-size: 11px;
     line-height: 1.3;
@@ -123,19 +179,32 @@ def crear_ticket_html(
     background: #fff;
   }}
   .center {{ text-align: center; }}
+  .logo-wrap {{
+    text-align: center;
+    margin: 0 0 3px;
+  }}
+  .logo {{
+    max-width: 42mm;
+    max-height: 18mm;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }}
   .sep {{
     border: none;
     border-top: 1px dashed #000;
     margin: 3px 0;
   }}
   h1 {{
+    font-family: Arial, Helvetica, sans-serif;
     font-size: 13px;
-    font-weight: 900;
+    font-weight: 700;
     margin: 0 0 2px;
     text-align: center;
     word-wrap: break-word;
   }}
   .sub {{
+    font-family: Arial, Helvetica, sans-serif;
     font-size: 10px;
     font-weight: 700;
     text-align: center;
@@ -143,13 +212,15 @@ def crear_ticket_html(
     word-wrap: break-word;
   }}
   .factura {{
+    font-family: Arial, Helvetica, sans-serif;
     font-size: 12px;
-    font-weight: 900;
+    font-weight: 700;
     text-align: center;
     margin: 4px 0;
   }}
   .cliente {{
-    font-weight: 800;
+    font-family: Arial, Helvetica, sans-serif;
+    font-weight: 700;
     word-wrap: break-word;
     overflow-wrap: anywhere;
   }}
@@ -158,6 +229,7 @@ def crear_ticket_html(
     border-collapse: collapse;
     margin: 4px 0;
     font-size: 10px;
+    font-family: Arial, Helvetica, sans-serif;
   }}
   table.items td {{
     vertical-align: top;
@@ -175,7 +247,7 @@ def crear_ticket_html(
   }}
   td.desc .d {{
     display: block;
-    font-weight: 800;
+    font-weight: 700;
     word-wrap: break-word;
     overflow-wrap: anywhere;
     white-space: normal;
@@ -183,7 +255,7 @@ def crear_ticket_html(
   td.desc .pu {{
     display: block;
     font-size: 9px;
-    font-weight: 600;
+    font-weight: 700;
     margin-top: 1px;
   }}
   td.imp {{
@@ -194,24 +266,50 @@ def crear_ticket_html(
   .row {{
     display: flex;
     justify-content: space-between;
-    font-weight: 800;
+    font-weight: 700;
+    font-family: Arial, Helvetica, sans-serif;
     margin: 2px 0;
+    font-size: 10px;
   }}
-  .row.total {{
-    font-size: 13px;
-    font-weight: 900;
-    margin-top: 4px;
+  .total-box {{
+    text-align: center;
+    margin: 6px 0 4px;
+    padding: 4px 0;
+  }}
+  .total-label {{
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }}
+  .total-monto {{
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    margin-top: 2px;
+    line-height: 1.15;
   }}
   .cae {{
     text-align: center;
     font-size: 10px;
-    font-weight: 800;
+    font-weight: 700;
+    font-family: Arial, Helvetica, sans-serif;
     word-wrap: break-word;
+  }}
+  .obs {{
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    margin: 2px 0;
   }}
   .pie {{
     text-align: center;
     font-size: 10px;
     font-weight: 700;
+    font-family: Arial, Helvetica, sans-serif;
     margin-top: 4px;
   }}
   .noprint {{
@@ -219,7 +317,8 @@ def crear_ticket_html(
     text-align: center;
   }}
   .noprint button {{
-    font-weight: 800;
+    font-family: Arial, Helvetica, sans-serif;
+    font-weight: 700;
     padding: 8px 16px;
     font-size: 13px;
     cursor: pointer;
@@ -231,6 +330,7 @@ def crear_ticket_html(
 </style>
 </head>
 <body>
+  {logo_html}
   <h1>{esc(emisor.get("nombre_fantasia"))}</h1>
   <div class="sub">{esc(emisor.get("domicilio_comercial"))}</div>
   <div class="sub">CUIT: {esc(emisor.get("cuit"))}</div>
@@ -241,6 +341,7 @@ def crear_ticket_html(
   <hr class="sep">
   <div class="factura">FACTURA {comp["tipo_letra"]} Nº {esc(nro_fc)}</div>
   <div class="sub">{fecha_hora}</div>
+  {linea_operario}
 
   <hr class="sep">
   <div><strong>CLIENTE:</strong></div>
@@ -263,8 +364,13 @@ def crear_ticket_html(
   </table>
 
   <hr class="sep">
-  {totales_html}
+  {desglose_html}
+  <div class="total-box">
+    <div class="total-label">TOTAL</div>
+    <div class="total-monto">{total_txt}</div>
+  </div>
   <div class="sub center">Pago: {esc(cli.get("condicion_venta", forma_pago))}</div>
+  {linea_obs}
 
   <hr class="sep">
   <div class="cae">CAE: {esc(cae.get("numero"))}</div>

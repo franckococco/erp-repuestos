@@ -374,7 +374,9 @@ def cliente_db_a_activo(datos: dict) -> dict:
     }
 
 
-def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pago, total):
+def guardar_comprobante_arca(
+    vendedor, cliente, respuesta_arca, items, forma_pago, total, observacion=""
+):
     ref = get_db().collection("comprobantes_arca").document()
     ref.set({
         "vendedor": str(vendedor),
@@ -388,6 +390,7 @@ def guardar_comprobante_arca(vendedor, cliente, respuesta_arca, items, forma_pag
         "items": items,
         "forma_pago": forma_pago,
         "total": float(total),
+        "observacion": str(observacion or "").strip(),
         "fecha": datetime.now(timezone.utc),
     })
     return ref.id
