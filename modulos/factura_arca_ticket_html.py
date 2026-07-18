@@ -12,6 +12,8 @@ from modulos.comprobante_contexto import armar_contexto_comprobante
 from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
+# Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
+TICKET_DISENO_VERSION = "v3-qr-barras"
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -291,6 +293,7 @@ def crear_ticket_html(
 <meta charset="utf-8">
 <meta name="viewport" content="width={ancho_mm}mm, initial-scale=1">
 <title>Ticket {esc(nro_fc)}</title>
+<!-- ticket-design:{TICKET_DISENO_VERSION} -->
 <style>
   @page {{
     size: {ancho_mm}mm auto;

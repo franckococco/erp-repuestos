@@ -34,7 +34,7 @@ from modulos.db_firebase import (
 from modulos.presupuesto_pdf import crear_pdf_presupuesto, VALIDEZ_PRESUPUESTO_DIAS
 from modulos.factura_arca_client import generar_factura, cargar_datos_nube
 from modulos.factura_arca_pdf import crear_a4
-from modulos.factura_arca_ticket_html import crear_ticket_html
+from modulos.factura_arca_ticket_html import TICKET_DISENO_VERSION, crear_ticket_html
 from modulos.util_fechas import formatear_fecha_ar, rango_fechas_ar_a_utc, fecha_hoy_ar
 from modulos.ia_mostrador import (
     FORMAS_PAGO,
@@ -1702,6 +1702,66 @@ def regenerar_pdfs_comprobante(comp):
     return regenerar_comprobantes_arca(comp)
 
 
+def _ticket_html_esta_desactualizado(html_ticket: str) -> bool:
+    """Detecta HTML generado antes del diseño v3 (QR + barras)."""
+    if not html_ticket:
+        return True
+    if f"ticket-design:{TICKET_DISENO_VERSION}" in html_ticket:
+        return False
+    if "qr-wrap" in html_ticket and 'class="bar"' in html_ticket:
+        return False
+    return True
+
+
+def _html_ticket_fresco_desde_rec(rec: dict):
+    """Regenera el ticket con el código actual (evita HTML viejo en sesión)."""
+    if not isinstance(rec, dict):
+        return ""
+
+    html_actual = str(rec.get("html_ticket") or "")
+    if html_actual and not _ticket_html_esta_desactualizado(html_actual):
+        return html_actual
+
+    cid = rec.get("comprobante_id")
+    if cid:
+        try:
+            from modulos.db_firebase import obtener_comprobante_arca
+            comp = obtener_comprobante_arca(cid)
+            if comp:
+                html_t, a4, _ = regenerar_comprobantes_arca(comp)
+                rec["html_ticket"] = html_t
+                rec["pdf_a4"] = a4
+                return html_t
+        except Exception:
+            pass
+
+    # Fallback: payload embebido en sesión (emisión reciente)
+    items = rec.get("items")
+    cliente = rec.get("cliente_ticket") or rec.get("cliente")
+    respuesta = rec.get("respuesta")
+    if items is not None and cliente and isinstance(respuesta, dict):
+        try:
+            _, _, cfg = _leer_secrets_facturador()
+            datos_cli = dict(cliente)
+            if "cbte_tipo" not in datos_cli and "tipo_comprobante" in datos_cli:
+                datos_cli["cbte_tipo"] = datos_cli.get("tipo_comprobante")
+            html_t = crear_ticket_html(
+                respuesta,
+                datos_cli,
+                items,
+                cfg,
+                forma_pago=str(rec.get("forma_pago") or "Contado"),
+                vendedor=str(rec.get("vendedor") or ""),
+                observacion=str(rec.get("observacion") or ""),
+            )
+            rec["html_ticket"] = html_t
+            return html_t
+        except Exception:
+            pass
+
+    return html_actual
+
+
 def _html_con_auto_print(html_ticket: str) -> str:
     """Inyecta disparo de window.print al cargar (para impresión 1 clic)."""
     if not html_ticket:
@@ -1725,8 +1785,8 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        "Diseño actual: logo HAFID · Arial negrita · TOTAL grande · operario · observación. "
-        "Emití una factura nueva después del deploy para verlo (un ticket viejo en pantalla no se regenera solo)."
+        f"Diseño {TICKET_DISENO_VERSION}: logo claro · barras negras · QR ARCA · total grande. "
+        "Si no ves QR/barras, esperá el redeploy de Streamlit y recargá (F5)."
     )
     import streamlit.components.v1 as components
     components.html(html_ticket, height=560, scrolling=True)
@@ -1844,14 +1904,15 @@ def render_factura_arca_exitosa(key_suffix=""):
         c3.caption("Comprobante")
         c3.write(nro)
 
+        html_ticket = _html_ticket_fresco_desde_rec(rec)
         _render_acciones_comprobante(
             nro,
-            rec.get("html_ticket"),
+            html_ticket,
             rec.get("pdf_a4"),
             f"fact_{ks}",
             solo_ticket=solo_ticket,
         )
-        _render_vista_previa_ticket_html(rec.get("html_ticket"), f"fact_{ks}")
+        _render_vista_previa_ticket_html(html_ticket, f"fact_{ks}")
     return True
 
 
@@ -1966,13 +2027,14 @@ def render_historial_facturas_arca():
     preview = st.session_state.get("hist_arca_preview")
     if preview and preview.get("comprobante_id") == sel_id:
         st.caption(f"Comprobante {preview.get('nro', '—')}")
+        html_ticket = _html_ticket_fresco_desde_rec(preview)
         _render_acciones_comprobante(
             preview.get("nro", "—"),
-            preview.get("html_ticket"),
+            html_ticket,
             preview.get("pdf_a4"),
             f"hist_{sel_id[:8]}",
         )
-        _render_vista_previa_ticket_html(preview.get("html_ticket"), f"hist_{sel_id[:8]}")
+        _render_vista_previa_ticket_html(html_ticket, f"hist_{sel_id[:8]}")
 
 
 def _forma_pago_actual(vendedor):
@@ -2138,6 +2200,12 @@ def ejecutar_emitir_factura_arca(
         "total": total_final,
         "comprobante_id": comp_id,
         "nro": nro,
+        "items": items_fc,
+        "cliente_ticket": datos_cliente,
+        "forma_pago": forma_pago,
+        "vendedor": str(vendedor),
+        "observacion": obs_ticket,
+        "ticket_diseno": TICKET_DISENO_VERSION,
     }
     _cerrar_presupuesto_cargado("facturado")
     limpiar_venta_mostrador(vendedor, reset_cliente=True)
