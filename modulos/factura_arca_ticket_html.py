@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import base64
 import html
+import json
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from modulos.comprobante_contexto import armar_contexto_comprobante
 from modulos.util_fechas import ahora_ar
@@ -24,7 +26,7 @@ def _fmt_money(val: float) -> str:
 
 
 def _logo_hafid_data_uri() -> str:
-    """Logo embebido en base64 para preview e impresión."""
+    """Logo aclarado y embebido (fondo oscuro → printable en térmico)."""
     global _LOGO_CACHE_B64
     if _LOGO_CACHE_B64 is not None:
         return _LOGO_CACHE_B64
@@ -38,15 +40,122 @@ def _logo_hafid_data_uri() -> str:
     ]
     for path in candidatos:
         try:
-            if path.is_file():
-                raw = path.read_bytes()
-                b64 = base64.b64encode(raw).decode("ascii")
-                _LOGO_CACHE_B64 = f"data:image/jpeg;base64,{b64}"
-                return _LOGO_CACHE_B64
+            if not path.is_file():
+                continue
+            raw = _procesar_logo_ticket(path.read_bytes())
+            b64 = base64.b64encode(raw).decode("ascii")
+            _LOGO_CACHE_B64 = f"data:image/png;base64,{b64}"
+            return _LOGO_CACHE_B64
         except Exception:
             continue
     _LOGO_CACHE_B64 = ""
     return ""
+
+
+def _procesar_logo_ticket(raw: bytes) -> bytes:
+    """Aclara fondo oscuro y realza el cromado para que se lea en ticket térmico."""
+    from PIL import Image, ImageEnhance, ImageOps
+    import numpy as np
+
+    img = Image.open(BytesIO(raw)).convert("RGB")
+    # Más grande en origen → más nitidez al escalar en CSS
+    w, h = img.size
+    if max(w, h) < 480:
+        scale = 480 / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+
+    arr = np.asarray(img.convert("L"), dtype=np.float32)
+    # Fondo carbón → blanco; cromado claro → negro imprimible
+    if float(arr.mean()) < 110:
+        # Invertir y empujar contraste: plata → oscuro, negro → blanco
+        inv = 255.0 - arr
+        # Suavizar grises bajos (fondo) hacia blanco
+        out = np.clip(inv * 1.35 - 40, 0, 255).astype(np.uint8)
+        img = Image.fromarray(out, mode="L").convert("RGB")
+    else:
+        img = ImageEnhance.Brightness(img).enhance(1.55)
+        img = ImageEnhance.Contrast(img).enhance(1.35)
+
+    img = ImageOps.autocontrast(img, cutoff=2)
+    buf = BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _digitos(val: Any) -> str:
+    return "".join(c for c in str(val or "") if c.isdigit())
+
+
+def _tipo_doc_receptor(cuit_cli: str) -> Tuple[int, int]:
+    """Código AFIP tipoDocRec + nroDocRec para el QR."""
+    dig = _digitos(cuit_cli)
+    if not dig or dig == "0" * len(dig) or dig in ("00000000000", "0"):
+        return 99, 0
+    if len(dig) == 11:
+        return 80, int(dig)
+    if 7 <= len(dig) <= 8:
+        return 96, int(dig)
+    try:
+        return 99, int(dig) if dig else 0
+    except ValueError:
+        return 99, 0
+
+
+def _qr_arca_data_uri(
+    *,
+    cuit_emisor: str,
+    punto_venta: int,
+    tipo_cmp: int,
+    nro_cmp: int,
+    importe: float,
+    cuit_cliente: str,
+    cae: str,
+    fecha_iso: str,
+) -> str:
+    """Genera PNG del QR oficial ARCA/AFIP (URL con JSON en base64)."""
+    dig_cuit = _digitos(cuit_emisor)
+    dig_cae = _digitos(cae)
+    if len(dig_cuit) != 11 or not dig_cae or nro_cmp <= 0:
+        return ""
+
+    tipo_doc, nro_doc = _tipo_doc_receptor(cuit_cliente)
+    payload = {
+        "ver": 1,
+        "fecha": fecha_iso,
+        "cuit": int(dig_cuit),
+        "ptoVta": int(punto_venta),
+        "tipoCmp": int(tipo_cmp),
+        "nroCmp": int(nro_cmp),
+        "importe": round(float(importe), 2),
+        "moneda": "PES",
+        "ctz": 1,
+        "tipoDocRec": int(tipo_doc),
+        "nroDocRec": int(nro_doc),
+        "tipoCodAut": "E",
+        "codAut": int(dig_cae),
+    }
+    raw_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    p_b64 = base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+    url = f"https://www.arca.gob.ar/fe/qr/?p={p_b64}"
+
+    try:
+        import qrcode
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=4,
+            border=1,
+        )
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except Exception:
+        return ""
 
 
 def _lineas_items_ticket(items: List[Dict[str, Any]], es_factura_a: bool) -> List[Dict[str, Any]]:
@@ -77,7 +186,7 @@ def crear_ticket_html(
     vendedor: str = "",
     observacion: str = "",
 ) -> str:
-    """HTML térmico: logo HAFID, Arial negrita, total grande, operario y observación."""
+    """HTML térmico: logo HAFID, Arial negrita, total grande, QR ARCA, operario y obs."""
     cfg = dict(config or {})
     ctx = armar_contexto_comprobante(datos_respuesta, datos_cliente, cfg, forma_pago=forma_pago)
     emisor = ctx["emisor"]
@@ -86,6 +195,7 @@ def crear_ticket_html(
     cae = ctx["cae"]
 
     es_a = comp["tipo_letra"] == "A"
+    tipo_cmp = 1 if es_a else 6
     nro_fc = f"{int(comp['punto_venta']):04d}-{int(comp['numero']):08d}"
     filas = _lineas_items_ticket(items, es_a)
     total = sum(f["importe"] for f in filas)
@@ -121,7 +231,9 @@ def crear_ticket_html(
     def esc(s):
         return html.escape(str(s or ""))
 
-    fecha_hora = ahora_ar().strftime("%d/%m/%Y %H:%M")
+    ahora = ahora_ar()
+    fecha_hora = ahora.strftime("%d/%m/%Y %H:%M")
+    fecha_iso = ahora.strftime("%Y-%m-%d")
     leyenda = esc(ctx.get("leyenda_extra", "Gracias por su compra"))
     total_txt = _fmt_money(total)
 
@@ -149,8 +261,27 @@ def crear_ticket_html(
 
     obs = str(observacion or "").strip()
     linea_obs = (
-        f'<hr class="sep"><div class="obs"><strong>Obs.:</strong> {esc(obs)}</div>'
+        f'<div class="bar"></div><div class="obs"><strong>Obs.:</strong> {esc(obs)}</div>'
         if obs
+        else ""
+    )
+
+    qr_uri = _qr_arca_data_uri(
+        cuit_emisor=str(emisor.get("cuit") or ""),
+        punto_venta=int(comp["punto_venta"]),
+        tipo_cmp=tipo_cmp,
+        nro_cmp=int(comp["numero"]),
+        importe=total,
+        cuit_cliente=str(cli.get("cuit") or ""),
+        cae=str(cae.get("numero") or ""),
+        fecha_iso=fecha_iso,
+    )
+    qr_html = (
+        f'<div class="qr-wrap">'
+        f'<img class="qr" src="{qr_uri}" alt="QR ARCA">'
+        f'<div class="qr-cap">Escaneá para verificar en ARCA</div>'
+        f"</div>"
+        if qr_uri
         else ""
     )
 
@@ -170,37 +301,45 @@ def crear_ticket_html(
     width: {ancho_mm - 4}mm;
     max-width: {ancho_mm - 4}mm;
     margin: 0 auto;
-    padding: 2mm;
+    padding: 2mm 2.5mm 3mm;
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
     font-size: 11px;
-    line-height: 1.3;
+    line-height: 1.28;
     color: #000;
     background: #fff;
   }}
   .center {{ text-align: center; }}
   .logo-wrap {{
     text-align: center;
-    margin: 0 0 3px;
+    margin: 0 0 2px;
   }}
   .logo {{
-    max-width: 42mm;
-    max-height: 18mm;
+    max-width: 52mm;
+    max-height: 26mm;
     width: auto;
     height: auto;
     object-fit: contain;
   }}
-  .sep {{
+  .bar {{
+    height: 2.5px;
+    background: #000;
     border: none;
-    border-top: 1px dashed #000;
-    margin: 3px 0;
+    margin: 5px 0;
+  }}
+  .bar-thin {{
+    height: 1.5px;
+    background: #000;
+    border: none;
+    margin: 4px 0;
   }}
   h1 {{
     font-family: Arial, Helvetica, sans-serif;
     font-size: 13px;
     font-weight: 700;
-    margin: 0 0 2px;
+    margin: 2px 0 2px;
     text-align: center;
+    letter-spacing: 0.3px;
     word-wrap: break-word;
   }}
   .sub {{
@@ -216,7 +355,8 @@ def crear_ticket_html(
     font-size: 12px;
     font-weight: 700;
     text-align: center;
-    margin: 4px 0;
+    margin: 3px 0 2px;
+    letter-spacing: 0.2px;
   }}
   .cliente {{
     font-family: Arial, Helvetica, sans-serif;
@@ -224,17 +364,31 @@ def crear_ticket_html(
     word-wrap: break-word;
     overflow-wrap: anywhere;
   }}
+  .sec-label {{
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }}
   table.items {{
     width: 100%;
     border-collapse: collapse;
-    margin: 4px 0;
+    margin: 2px 0 0;
     font-size: 10px;
     font-family: Arial, Helvetica, sans-serif;
   }}
-  table.items td {{
+  table.items thead td {{
+    border-bottom: 2.5px solid #000;
+    padding: 2px 0 3px;
+    font-size: 9px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }}
+  table.items tr.item td {{
     vertical-align: top;
-    padding: 2px 0;
+    padding: 4px 0;
     font-weight: 700;
+    border-bottom: 2px solid #000;
   }}
   td.cant {{
     width: 9mm;
@@ -274,20 +428,22 @@ def crear_ticket_html(
   .total-box {{
     text-align: center;
     margin: 6px 0 4px;
-    padding: 4px 0;
+    padding: 6px 0;
+    border-top: 2.5px solid #000;
+    border-bottom: 2.5px solid #000;
   }}
   .total-label {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.5px;
+    letter-spacing: 2px;
   }}
   .total-monto {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 700;
     margin-top: 2px;
-    line-height: 1.15;
+    line-height: 1.1;
   }}
   .cae {{
     text-align: center;
@@ -304,6 +460,21 @@ def crear_ticket_html(
     word-wrap: break-word;
     overflow-wrap: anywhere;
     margin: 2px 0;
+  }}
+  .qr-wrap {{
+    text-align: center;
+    margin: 6px 0 2px;
+  }}
+  .qr {{
+    width: 28mm;
+    height: 28mm;
+    image-rendering: pixelated;
+  }}
+  .qr-cap {{
+    font-size: 8px;
+    font-weight: 700;
+    margin-top: 2px;
+    letter-spacing: 0.2px;
   }}
   .pie {{
     text-align: center;
@@ -338,18 +509,18 @@ def crear_ticket_html(
   <div class="sub">Inicio act.: {esc(emisor.get("inicio_actividades"))}</div>
   <div class="sub">{esc(emisor.get("condicion_iva"))}</div>
 
-  <hr class="sep">
+  <div class="bar"></div>
   <div class="factura">FACTURA {comp["tipo_letra"]} Nº {esc(nro_fc)}</div>
   <div class="sub">{fecha_hora}</div>
   {linea_operario}
 
-  <hr class="sep">
-  <div><strong>CLIENTE:</strong></div>
+  <div class="bar-thin"></div>
+  <div class="sec-label">Cliente</div>
   <div class="cliente">{esc(cli.get("nombre", "CONSUMIDOR FINAL"))}</div>
   <div class="sub">CUIT/DNI: {esc(cli.get("cuit", "00000000000"))}</div>
   {linea_cond}
 
-  <hr class="sep">
+  <div class="bar-thin"></div>
   <table class="items">
     <thead>
       <tr>
@@ -363,7 +534,6 @@ def crear_ticket_html(
     </tbody>
   </table>
 
-  <hr class="sep">
   {desglose_html}
   <div class="total-box">
     <div class="total-label">TOTAL</div>
@@ -372,9 +542,10 @@ def crear_ticket_html(
   <div class="sub center">Pago: {esc(cli.get("condicion_venta", forma_pago))}</div>
   {linea_obs}
 
-  <hr class="sep">
+  <div class="bar"></div>
   <div class="cae">CAE: {esc(cae.get("numero"))}</div>
   <div class="cae">Vto CAE: {esc(cae.get("vencimiento"))}</div>
+  {qr_html}
   <div class="pie">{leyenda}</div>
 
   <div class="noprint">
