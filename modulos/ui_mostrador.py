@@ -1724,9 +1724,12 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
     if not html_ticket:
         return
     st.markdown("**Vista previa del ticket**")
-    st.caption("Así se ve el ticket (sin necesitar impresora). Sirve para revisar y retocar el diseño después.")
+    st.caption(
+        "Diseño actual: logo HAFID · Arial negrita · TOTAL grande · operario · observación. "
+        "Emití una factura nueva después del deploy para verlo (un ticket viejo en pantalla no se regenera solo)."
+    )
     import streamlit.components.v1 as components
-    components.html(html_ticket, height=520, scrolling=True)
+    components.html(html_ticket, height=560, scrolling=True)
 
 
 def _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
