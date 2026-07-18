@@ -89,6 +89,15 @@ def crear_ticket_html(
     fecha_hora = ahora_ar().strftime("%d/%m/%Y %H:%M")
     leyenda = esc(ctx.get("leyenda_extra", "Gracias por su compra"))
 
+    nombre_cli = str(cli.get("nombre", "CONSUMIDOR FINAL") or "")
+    cond_cli = str(cli.get("condicion_iva") or "").strip()
+    # Evitar «Consumidor Final» duplicado debajo del nombre
+    mostrar_cond = bool(cond_cli) and not (
+        cond_cli.lower() in ("consumidor final", "consumidorfinal")
+        and "consumidor final" in nombre_cli.lower()
+    )
+    linea_cond = f'<div class="sub">{esc(cond_cli)}</div>' if mostrar_cond else ""
+
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -237,7 +246,7 @@ def crear_ticket_html(
   <div><strong>CLIENTE:</strong></div>
   <div class="cliente">{esc(cli.get("nombre", "CONSUMIDOR FINAL"))}</div>
   <div class="sub">CUIT/DNI: {esc(cli.get("cuit", "00000000000"))}</div>
-  <div class="sub">{esc(cli.get("condicion_iva"))}</div>
+  {linea_cond}
 
   <hr class="sep">
   <table class="items">

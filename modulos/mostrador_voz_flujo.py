@@ -701,7 +701,7 @@ def _finalizar_cola_voz_mostrador(vendedor):
     return intent
 
 
-def inventario_cache_mostrador(obtener_inventario_fn, ttl_seg=120):
+def inventario_cache_mostrador(obtener_inventario_fn, ttl_seg=300):
     ahora = time.time()
     if (
         "_inv_cache_mostrador" in st.session_state

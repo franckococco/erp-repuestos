@@ -10,7 +10,6 @@ import streamlit as st
 from modulos.util_busqueda import normalizar_para_busqueda
 
 from modulos.db_firebase import (
-    obtener_clientes,
     configurar_cliente,
     cliente_consumidor_final,
     cliente_db_a_activo,
@@ -76,7 +75,7 @@ CONFIG_TICKET_DEFAULT = {
     "iibb": "Ingresos Brutos: A-76154",
     "inicio_act": "Inicio de Actividades: 02/05/2023",
     "leyenda_extra": "¡Gracias por su compra!",
-    "impresora_modo": "navegador",
+    "impresora_modo": "instalada",
     "impresora_nombre": "",
     "impresora_ip": "",
     "impresora_puerto": 9100,
@@ -159,6 +158,10 @@ def init_config_ticket_session():
     cfg = _cargar_config_ticket_persistida()
     for k, v in cfg.items():
         st.session_state[f"ticket_cfg_{k}"] = v
+    # Migrar valor legacy
+    modo = str(st.session_state.get("ticket_cfg_impresora_modo") or "")
+    if modo == "navegador":
+        st.session_state.ticket_cfg_impresora_modo = "instalada"
     st.session_state._ticket_cfg_inited = True
 
 
@@ -256,46 +259,63 @@ def render_config_ticket_mostrador(en_pagina_config=False):
             )
 
             st.markdown("**Impresora**")
+            st.caption(
+                "Configurá una sola vez. Al facturar se usa esta impresora sin volver a elegir. "
+                "Si aún no tenés impresora, igual podés guardar el tipo y ver el ticket en pantalla."
+            )
             if en_nube:
                 st.info(
-                    "La app en la nube **no puede ver las impresoras de tu PC**. "
-                    "Al imprimir se abre el diálogo del navegador y elegís la impresora ahí. "
-                    "Podés guardar acá el nombre o la IP para referencia."
+                    "La app en la nube no lista las impresoras de tu PC. "
+                    "Dejá la térmica como **predeterminada en Windows** (una sola vez) "
+                    "para que «Imprimir» vaya directo a esa cola."
                 )
             else:
                 st.success("Impresoras detectadas en esta PC.")
 
-            modo_opts = {
-                "navegador": "Diálogo del navegador (recomendado)",
-                "red": "Impresora térmica por red (IP)",
+            tipo_opts = {
+                "instalada": "Instalada en esta PC",
+                "compartida": "Compartida en red (Windows)",
+                "red": "Por red (IP / puerto)",
             }
+            # Compatibilidad con configs viejas
+            modo_actual = str(st.session_state.get("ticket_cfg_impresora_modo") or "instalada")
+            if modo_actual == "navegador":
+                st.session_state.ticket_cfg_impresora_modo = "instalada"
+                modo_actual = "instalada"
             st.radio(
-                "Modo de impresión",
-                ["navegador", "red"],
-                format_func=lambda x: modo_opts[x],
+                "Tipo de impresora",
+                ["instalada", "compartida", "red"],
+                format_func=lambda x: tipo_opts[x],
                 key="ticket_cfg_impresora_modo",
                 horizontal=True,
             )
-            modo = st.session_state.get("ticket_cfg_impresora_modo", "navegador")
+            modo = str(st.session_state.get("ticket_cfg_impresora_modo") or "instalada")
 
-            if modo == "navegador":
+            if modo == "instalada":
                 if impresoras:
                     nombre_guardado = str(st.session_state.get("ticket_cfg_impresora_nombre", "") or "")
                     opciones = list(impresoras)
                     if nombre_guardado and nombre_guardado not in opciones:
                         opciones = [nombre_guardado] + opciones
                     st.selectbox(
-                        "Impresora instalada en esta PC",
-                        opciones,
+                        "Impresora instalada",
+                        opciones or ["(ninguna detectada)"],
                         key="ticket_cfg_impresora_nombre",
                     )
                 else:
                     st.text_input(
-                        "Nombre de impresora (referencia)",
+                        "Nombre de la impresora",
                         key="ticket_cfg_impresora_nombre",
                         placeholder="Ej: EPSON TM-T20",
-                        help="Configurala como predeterminada en Windows. Al imprimir, elegila en el diálogo del navegador.",
+                        help="Dejala como predeterminada en Windows cuando la tengas.",
                     )
+            elif modo == "compartida":
+                st.text_input(
+                    "Cola compartida",
+                    key="ticket_cfg_impresora_nombre",
+                    placeholder=r"\\SERVIDOR\TermicaCaja",
+                    help="Nombre UNC de la impresora compartida en la red.",
+                )
             else:
                 col_ip, col_puerto = st.columns([2, 1])
                 with col_ip:
@@ -313,13 +333,13 @@ def render_config_ticket_mostrador(en_pagina_config=False):
                         step=1,
                     )
                 st.text_input(
-                    "Nombre (opcional)",
+                    "Nombre (referencia)",
                     key="ticket_cfg_impresora_nombre",
-                    placeholder="Caja 1 — térmica depósito",
+                    placeholder="Caja 1 — térmica",
                 )
                 st.caption(
-                    "Impresión directa por red estará disponible en una próxima versión. "
-                    "Por ahora usá el modo navegador."
+                    "La impresión directa por IP funciona cuando la app corre en la PC de caja. "
+                    "En la nube se usa el diálogo del navegador con la impresora predeterminada."
                 )
 
             guardar = st.form_submit_button("💾 Guardar configuración del ticket", type="primary")
@@ -1092,28 +1112,29 @@ def render_agregar_manual_mostrador(vendedor, contexto=None):
 
 
 def render_seccion_cliente_mostrador():
+    from modulos.cliente_resolver import clientes_cache_mostrador
+
     st.session_state.cliente_activo = normalizar_cliente_activo(
         st.session_state.get("cliente_activo")
     )
     cli = st.session_state.cliente_activo
-    clientes_db = obtener_clientes() or {}
+    clientes_db = clientes_cache_mostrador() or {}
 
-    col_info, col_cf, col_lim = st.columns([4, 1, 1])
-    with col_info:
-        st.markdown(f"**Cliente:** {cli['nombre']}")
-        st.caption(
-            f"CUIT/DNI: {cli['cuit']} · {_tipo_comprobante_label_largo(cli['tipo_comprobante'])}"
-            + (f" · Descuento: {cli['descuento']}%" if cli["descuento"] > 0 else "")
-            + (f" · {_label_tipo_cliente_negocio(cli.get('tipo_cliente'))}" if cli.get("tipo_cliente") else "")
-        )
+    st.markdown(f"**Cliente:** {cli['nombre']}")
+    st.caption(
+        f"CUIT/DNI: {cli['cuit']} · {_tipo_comprobante_label_largo(cli['tipo_comprobante'])}"
+        + (f" · Descuento: {cli['descuento']}%" if cli["descuento"] > 0 else "")
+        + (f" · {_label_tipo_cliente_negocio(cli.get('tipo_cliente'))}" if cli.get("tipo_cliente") else "")
+    )
+    col_cf, col_lim = st.columns(2)
     with col_cf:
-        if st.button("Consumidor final", use_container_width=True):
+        if st.button("Consumidor final", use_container_width=True, key="cli_btn_cf"):
             descartar_panels_operacion_anterior()
             _invalidar_pdf_presupuesto_mostrador()
             st.session_state.cliente_activo = cliente_consumidor_final()
             st.rerun()
     with col_lim:
-        if st.button("Limpiar cliente", use_container_width=True):
+        if st.button("Limpiar cliente", use_container_width=True, key="cli_btn_limpiar"):
             descartar_panels_operacion_anterior()
             _invalidar_pdf_presupuesto_mostrador()
             st.session_state.cliente_activo = cliente_consumidor_final()
@@ -1673,63 +1694,100 @@ def regenerar_pdfs_comprobante(comp):
     return regenerar_comprobantes_arca(comp)
 
 
+def _html_con_auto_print(html_ticket: str) -> str:
+    """Inyecta disparo de window.print al cargar (para impresión 1 clic)."""
+    if not html_ticket:
+        return ""
+    if "window.print()" in html_ticket and "onload" in html_ticket.lower():
+        return html_ticket
+    script = (
+        "<script>"
+        "window.addEventListener('load',function(){"
+        "setTimeout(function(){try{window.print();}catch(e){}},400);"
+        "});"
+        "</script>"
+    )
+    if "</body>" in html_ticket:
+        return html_ticket.replace("</body>", script + "</body>")
+    return html_ticket + script
+
+
 def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
     if not html_ticket:
         return
-    with st.expander("Vista previa ticket", expanded=False):
-        import streamlit.components.v1 as components
-        components.html(html_ticket, height=420, scrolling=True)
+    st.markdown("**Vista previa del ticket**")
+    st.caption("Así se ve el ticket (sin necesitar impresora). Sirve para revisar y retocar el diseño después.")
+    import streamlit.components.v1 as components
+    components.html(html_ticket, height=520, scrolling=True)
 
 
 def _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
-    """Ticket HTML imprimible + factura A4 en PDF."""
-    n_cols = 3 if (pdf_a4 and not solo_ticket and html_ticket) else 2
-    cols = st.columns(n_cols)
-    idx = 0
+    """Imprimir ticket HTML (primario) + A4 opcional."""
+    cfg = _config_ticket_desde_session()
+    nombre_imp = str(cfg.get("impresora_nombre") or "").strip()
+    modo_imp = str(cfg.get("impresora_modo") or "instalada")
+    if modo_imp == "navegador":
+        modo_imp = "instalada"
+
     if html_ticket:
-        html_bytes = html_ticket.encode("utf-8")
-        with cols[idx]:
+        if nombre_imp:
+            st.caption(f"Impresora configurada: **{nombre_imp}** ({modo_imp})")
+        else:
+            st.caption(
+                "No hay impresora nombrada en config. "
+                "Al imprimir se usa la predeterminada de Windows."
+            )
+        if pdf_a4 and not solo_ticket:
+            c_print, c_a4 = st.columns([2, 1])
+        else:
+            c_print, c_a4 = st.columns([1, 0.01])
+        with c_print:
+            if st.button(
+                "🖨️ Imprimir ticket",
+                type="primary",
+                use_container_width=True,
+                key=f"{key_prefix}_ticket_print",
+            ):
+                st.session_state[f"{key_prefix}_ticket_print_html"] = html_ticket
+        if pdf_a4 and not solo_ticket:
+            with c_a4:
+                st.download_button(
+                    "↓ Factura A4",
+                    pdf_a4,
+                    file_name=f"Factura_{nro}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"{key_prefix}_a4",
+                )
+        with st.expander("Más opciones del comprobante", expanded=False):
             st.download_button(
-                "🖨️ Ticket HTML",
-                html_bytes,
+                "Descargar ticket HTML",
+                html_ticket.encode("utf-8"),
                 file_name=f"Ticket_{nro}.html",
                 mime="text/html",
-                use_container_width=True,
                 key=f"{key_prefix}_ticket_html",
             )
-        idx += 1
-        if idx < len(cols):
-            with cols[idx]:
-                if st.button(
-                    "🖨️ Imprimir ticket",
-                    use_container_width=True,
-                    key=f"{key_prefix}_ticket_print",
-                ):
-                    st.session_state[f"{key_prefix}_ticket_print_html"] = html_ticket
-        idx += 1
-    if pdf_a4 and not solo_ticket and idx < len(cols):
-        with cols[idx]:
-            st.download_button(
-                "↓ Factura A4",
-                pdf_a4,
-                file_name=f"Factura_{nro}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"{key_prefix}_a4",
-            )
-    elif solo_ticket and pdf_a4:
+            if solo_ticket and pdf_a4:
+                st.download_button(
+                    "↓ A4 (opcional)",
+                    pdf_a4,
+                    file_name=f"Factura_{nro}.pdf",
+                    mime="application/pdf",
+                    key=f"{key_prefix}_a4_opt",
+                )
+    elif pdf_a4:
         st.download_button(
-            "↓ A4 (opcional)",
+            "↓ Factura A4",
             pdf_a4,
             file_name=f"Factura_{nro}.pdf",
             mime="application/pdf",
-            key=f"{key_prefix}_a4_opt",
+            key=f"{key_prefix}_a4_only",
         )
 
     print_html = st.session_state.pop(f"{key_prefix}_ticket_print_html", None)
     if print_html:
         import streamlit.components.v1 as components
-        components.html(print_html, height=0, scrolling=False)
+        components.html(_html_con_auto_print(print_html), height=0, scrolling=False)
 
 
 def _render_acciones_pdf_compactas(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
@@ -1744,7 +1802,7 @@ def render_factura_arca_exitosa(key_suffix=""):
     auto_print = st.session_state.pop("_ticket_auto_print_html", None)
     if auto_print:
         import streamlit.components.v1 as components
-        components.html(auto_print, height=0, scrolling=False)
+        components.html(_html_con_auto_print(auto_print), height=0, scrolling=False)
 
     datos = rec.get("respuesta", {})
     nro = _formato_nro_comprobante(datos)
@@ -1782,11 +1840,6 @@ def render_factura_arca_exitosa(key_suffix=""):
             f"fact_{ks}",
             solo_ticket=solo_ticket,
         )
-        if rec.get("html_ticket"):
-            st.caption(
-                "El ticket para impresora térmica es **HTML** (botón «Ticket HTML»). "
-                "El PDF es solo la factura A4."
-            )
         _render_vista_previa_ticket_html(rec.get("html_ticket"), f"fact_{ks}")
     return True
 
@@ -1994,18 +2047,24 @@ def ejecutar_emitir_factura_arca(
             "Revisá el precio unitario en la grilla."
         ), None
 
-    resultado = generar_factura(cuit_fact, clave_fact, datos_cliente, items_fc, forma_pago)
-    if not resultado.get("success"):
-        return False, f"Error ARCA: {resultado.get('error', 'Desconocido')}", None
-
-    datos_resp = resultado["data"]
-    cfg = dict(config_ticket)
-    if cuit_fact:
-        cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
-    html_ticket = crear_ticket_html(
-        datos_resp, datos_cliente, items_fc, cfg, forma_pago=forma_pago
-    )
-    pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
+    with st.status("Obteniendo CAE en ARCA…", expanded=True) as status:
+        st.write("Enviando comprobante a AFIP/ARCA…")
+        resultado = generar_factura(cuit_fact, clave_fact, datos_cliente, items_fc, forma_pago)
+        if not resultado.get("success"):
+            status.update(label="Error al obtener CAE", state="error")
+            return False, f"Error ARCA: {resultado.get('error', 'Desconocido')}", None
+        st.write("CAE recibido. Armando ticket…")
+        datos_resp = resultado["data"]
+        cfg = dict(config_ticket)
+        if cuit_fact:
+            cfg["cuit_emisor"] = cfg.get("cuit_emisor") or cuit_fact
+        html_ticket = crear_ticket_html(
+            datos_resp, datos_cliente, items_fc, cfg, forma_pago=forma_pago
+        )
+        _auto_imprimir_ticket(html_ticket)
+        st.write("Generando factura A4…")
+        pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
+        status.update(label="CAE otorgado", state="complete")
 
     exito_stock, msj_stock = confirmar_venta(str(vendedor))
     if not exito_stock:
@@ -2068,10 +2127,9 @@ def ejecutar_emitir_factura_arca(
 
 
 def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=False):
-    with st.spinner("Solicitando CAE a AFIP…"):
-        ok, msj, datos = ejecutar_emitir_factura_arca(
-            vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
-        )
+    ok, msj, datos = ejecutar_emitir_factura_arca(
+        vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
+    )
     if ok and datos:
         _auto_imprimir_ticket(datos.get("html_ticket"))
     return ok, msj
