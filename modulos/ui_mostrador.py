@@ -1785,7 +1785,7 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: contorno · recuadros · logo claro · QR ARCA. "
+        f"Diseño {TICKET_DISENO_VERSION}: contorno · recuadros · logo color · espacios compactos · QR ARCA. "
         "Si no ves los recuadros, esperá el redeploy de Streamlit y recargá (F5)."
     )
     import streamlit.components.v1 as components

@@ -24,7 +24,8 @@ def test_ticket_html_incluye_descripcion_completa():
     assert "border-bottom: 2px solid #000" in html or 'class="ticket"' in html
     assert "qr-wrap" in html
     assert "Escaneá para verificar en ARCA" in html
-    assert "data:image/png;base64," in html
+    assert "data:image/" in html and "base64," in html
+    assert "v5-logo-color-compacto" in html
     assert 'class="bloque"' in html
     assert 'class="ticket"' in html
 
