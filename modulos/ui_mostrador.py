@@ -1771,7 +1771,7 @@ def _html_con_auto_print(html_ticket: str) -> str:
     script = (
         "<script>"
         "window.addEventListener('load',function(){"
-        "setTimeout(function(){try{window.print();}catch(e){}},400);"
+        "setTimeout(function(){try{window.print();}catch(e){}},450);"
         "});"
         "</script>"
     )
@@ -1780,13 +1780,30 @@ def _html_con_auto_print(html_ticket: str) -> str:
     return html_ticket + script
 
 
+def _disparar_impresion_ticket(html_ticket: str, key_suffix: str = "print"):
+    """
+    Abre el diálogo de impresión con un iframe con altura real.
+    (height=0 suele bloquearse en Chrome/Edge y el usuario no ve botón.)
+    """
+    if not html_ticket:
+        return
+    import streamlit.components.v1 as components
+
+    st.caption("Si no se abrió el diálogo, volvé a pulsar **IMPRIMIR TICKET**.")
+    components.html(
+        _html_con_auto_print(html_ticket),
+        height=720,
+        scrolling=True,
+    )
+
+
 def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
     if not html_ticket:
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: contorno · recuadros · logo color · espacios compactos · QR ARCA. "
-        "Si no ves los recuadros, esperá el redeploy de Streamlit y recargá (F5)."
+        f"Diseño {TICKET_DISENO_VERSION}: 80 mm sin márgenes · logo aclarado · tipografía reforzada · QR ARCA. "
+        "Si no ves el cambio, esperá el redeploy y recargá (F5)."
     )
     import streamlit.components.v1 as components
     components.html(html_ticket, height=560, scrolling=True)
@@ -1857,8 +1874,7 @@ def _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_tick
 
     print_html = st.session_state.pop(f"{key_prefix}_ticket_print_html", None)
     if print_html:
-        import streamlit.components.v1 as components
-        components.html(_html_con_auto_print(print_html), height=0, scrolling=False)
+        _disparar_impresion_ticket(print_html, key_suffix=f"{key_prefix}_manual")
 
 
 def _render_acciones_pdf_compactas(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
@@ -1870,11 +1886,6 @@ def render_factura_arca_exitosa(key_suffix=""):
     if not rec:
         return False
 
-    auto_print = st.session_state.pop("_ticket_auto_print_html", None)
-    if auto_print:
-        import streamlit.components.v1 as components
-        components.html(_html_con_auto_print(auto_print), height=0, scrolling=False)
-
     datos = rec.get("respuesta", {})
     nro = _formato_nro_comprobante(datos)
     cae = datos.get("cae", "")
@@ -1882,6 +1893,7 @@ def render_factura_arca_exitosa(key_suffix=""):
     total = rec.get("total")
     ks = key_suffix or "panel"
     solo_ticket = bool(st.session_state.get("mostrador_voz_solo_ticket"))
+    html_ticket = _html_ticket_fresco_desde_rec(rec)
 
     with st.container(border=True):
         hdr, btn_cerrar = st.columns([5, 1])
@@ -1894,7 +1906,19 @@ def render_factura_arca_exitosa(key_suffix=""):
             if st.button("✕", key=f"cerrar_factura_arca_{ks}", help="Cerrar"):
                 st.session_state.factura_arca_reciente = None
                 st.session_state.mostrador_voz_solo_ticket = False
+                st.session_state.pop("_ticket_auto_print_html", None)
                 st.rerun()
+
+        # Botón primario YA visible apenas llega el CAE (sin ir a Facturas ARCA)
+        if html_ticket and cae:
+            st.markdown("### 🖨️ Imprimir ahora")
+            if st.button(
+                "🖨️ IMPRIMIR TICKET",
+                type="primary",
+                use_container_width=True,
+                key=f"fact_{ks}_imprimir_inmediato",
+            ):
+                st.session_state[f"fact_{ks}_ticket_print_html"] = html_ticket
 
         c1, c2, c3 = st.columns(3)
         c1.caption("CAE")
@@ -1904,15 +1928,45 @@ def render_factura_arca_exitosa(key_suffix=""):
         c3.caption("Comprobante")
         c3.write(nro)
 
-        html_ticket = _html_ticket_fresco_desde_rec(rec)
-        _render_acciones_comprobante(
-            nro,
-            html_ticket,
-            rec.get("pdf_a4"),
-            f"fact_{ks}",
-            solo_ticket=solo_ticket,
-        )
-        _render_vista_previa_ticket_html(html_ticket, f"fact_{ks}")
+        # Disparo manual (botón de arriba) — mismo key que acciones
+        print_manual = st.session_state.pop(f"fact_{ks}_ticket_print_html", None)
+        auto_print = st.session_state.pop("_ticket_auto_print_html", None)
+        html_a_imprimir = print_manual or auto_print
+        if html_a_imprimir:
+            if auto_print and not print_manual:
+                st.info("Abriendo diálogo de impresión…")
+            _disparar_impresion_ticket(html_a_imprimir, key_suffix=f"fact_{ks}_auto")
+        else:
+            _render_vista_previa_ticket_html(html_ticket, f"fact_{ks}")
+
+        # A4 y extras (sin segundo botón Imprimir primario)
+        pdf_a4 = rec.get("pdf_a4")
+        if pdf_a4 and not solo_ticket:
+            st.download_button(
+                "↓ Factura A4 (opcional)",
+                pdf_a4,
+                file_name=f"Factura_{nro}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"fact_{ks}_a4_post",
+            )
+        with st.expander("Más opciones del comprobante", expanded=False):
+            if html_ticket:
+                st.download_button(
+                    "Descargar ticket HTML",
+                    html_ticket.encode("utf-8"),
+                    file_name=f"Ticket_{nro}.html",
+                    mime="text/html",
+                    key=f"fact_{ks}_ticket_html_post",
+                )
+            if solo_ticket and pdf_a4:
+                st.download_button(
+                    "↓ A4 (opcional)",
+                    pdf_a4,
+                    file_name=f"Factura_{nro}.pdf",
+                    mime="application/pdf",
+                    key=f"fact_{ks}_a4_opt_post",
+                )
     return True
 
 
