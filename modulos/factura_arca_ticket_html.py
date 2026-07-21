@@ -13,7 +13,7 @@ from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
 # Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
-TICKET_DISENO_VERSION = "v6-ancho-completo-claro"
+TICKET_DISENO_VERSION = "v7-logo-bn-fullbleed"
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -27,35 +27,64 @@ def _fmt_money(val: float) -> str:
     return f"${val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _logo_aclarado_png_b64(path: Path) -> Optional[str]:
-    """Aclara el logo (brillo/contraste) para que no salga negro en térmica."""
+def _logo_termico_png_b64(path: Path) -> Optional[str]:
+    """
+    Convierte el logo (fondo casi negro) a B/N para térmica:
+    fondo blanco + trazo negro, sin márgenes vacíos, ancho útil máximo.
+    """
     try:
-        from PIL import Image, ImageEnhance
+        from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 
         im = Image.open(path)
         if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
             rgba = im.convert("RGBA")
             fondo = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-            im = Image.alpha_composite(fondo, rgba).convert("RGB")
+            rgb = Image.alpha_composite(fondo, rgba).convert("RGB")
         else:
-            im = im.convert("RGB")
+            rgb = im.convert("RGB")
 
-        # Reducir tamaño de embed (ticket 80 mm)
+        gray = ImageOps.grayscale(rgb)
+        # Logo HAFID: fondo oscuro + letras plateadas → invertir para fondo blanco
+        hist = gray.histogram()
+        total = sum(hist) or 1
+        luminancia_media = sum(i * hist[i] for i in range(256)) / total
+        if luminancia_media < 140:
+            gray = ImageOps.invert(gray)
+
+        gray = ImageOps.autocontrast(gray, cutoff=1)
+        gray = ImageEnhance.Contrast(gray).enhance(2.4)
+        gray = gray.filter(ImageFilter.SHARPEN)
+        # Umbral duro: solo negro o blanco (ideal térmica)
+        bw = gray.point(lambda p: 0 if p < 175 else 255, mode="L")
+
+        # Recortar bordes blancos para que no “sobren” márgenes alrededor del logo
+        inv = ImageOps.invert(bw)
+        bbox = inv.getbbox()
+        if bbox:
+            pad = 4
+            left = max(0, bbox[0] - pad)
+            top = max(0, bbox[1] - pad)
+            right = min(bw.width, bbox[2] + pad)
+            bottom = min(bw.height, bbox[3] + pad)
+            bw = bw.crop((left, top, right, bottom))
+
         resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-        im.thumbnail((520, 240), resample)
-        im = ImageEnhance.Brightness(im).enhance(1.45)
-        im = ImageEnhance.Contrast(im).enhance(1.35)
-        im = ImageEnhance.Color(im).enhance(1.15)
+        # Ancho ~80mm a ~8 px/mm ≈ 640 px
+        target_w = 640
+        ratio = target_w / max(bw.width, 1)
+        target_h = max(40, int(bw.height * ratio))
+        bw = bw.resize((target_w, target_h), resample)
 
+        out = Image.merge("RGB", (bw, bw, bw))
         buf = BytesIO()
-        im.save(buf, format="PNG", optimize=True)
+        out.save(buf, format="PNG", optimize=True)
         return base64.b64encode(buf.getvalue()).decode("ascii")
     except Exception:
         return None
 
 
 def _logo_hafid_data_uri() -> str:
-    """Logo HAFID embebido, aclarado para impresión térmica legible."""
+    """Logo HAFID embebido en B/N térmico (fondo blanco)."""
     global _LOGO_CACHE_B64
     if _LOGO_CACHE_B64 is not None:
         return _LOGO_CACHE_B64
@@ -71,24 +100,14 @@ def _logo_hafid_data_uri() -> str:
         Path(__file__).resolve().parent / "logo_hafid.webp",
         raiz / "logo_hafid.webp",
     ]
-    mime_por_ext = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".webp": "image/webp",
-    }
     for path in candidatos:
         try:
             if not path.is_file():
                 continue
-            aclarado = _logo_aclarado_png_b64(path)
-            if aclarado:
-                _LOGO_CACHE_B64 = f"data:image/png;base64,{aclarado}"
+            termico = _logo_termico_png_b64(path)
+            if termico:
+                _LOGO_CACHE_B64 = f"data:image/png;base64,{termico}"
                 return _LOGO_CACHE_B64
-            mime = mime_por_ext.get(path.suffix.lower(), "image/jpeg")
-            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-            _LOGO_CACHE_B64 = f"data:{mime};base64,{b64}"
-            return _LOGO_CACHE_B64
         except Exception:
             continue
     _LOGO_CACHE_B64 = ""
@@ -260,7 +279,7 @@ def crear_ticket_html(
 
     logo_uri = _logo_hafid_data_uri()
     logo_html = (
-        f'<div class="logo-wrap"><img class="logo" src="{logo_uri}" alt="HAFID"></div>'
+        f'<div class="logo-bleed"><img class="logo" src="{logo_uri}" alt="HAFID"></div>'
         if logo_uri
         else ""
     )
@@ -308,18 +327,18 @@ def crear_ticket_html(
 <style>
   @page {{
     size: {ancho_mm}mm auto;
-    margin: 0;
+    margin: 0 !important;
   }}
   * {{ box-sizing: border-box; }}
   html, body {{
-    margin: 0;
-    padding: 0;
+    margin: 0 !important;
+    padding: 0 !important;
   }}
   body {{
     width: {ancho_mm}mm;
     max-width: {ancho_mm}mm;
-    margin: 0;
-    padding: 0;
+    margin: 0 !important;
+    padding: 0 !important;
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
     font-size: 12px;
@@ -332,35 +351,41 @@ def crear_ticket_html(
   .ticket {{
     width: 100%;
     border: none;
-    padding: 0.4mm 0.8mm;
+    padding: 0;
+    margin: 0;
     background: #fff;
+  }}
+  .logo-bleed {{
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    line-height: 0;
+    text-align: center;
+    background: #fff;
+  }}
+  .logo {{
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    object-fit: contain;
   }}
   .bloque {{
     border: 1.5px solid #000;
-    padding: 1mm 1.2mm;
-    margin: 0 0 1mm;
+    padding: 1mm 1.5mm;
+    margin: 0.8mm 0 0;
   }}
-  .bloque:last-child {{
-    margin-bottom: 0;
+  .bloque:first-of-type {{
+    margin-top: 0.6mm;
   }}
   .center {{ text-align: center; }}
-  .logo-wrap {{
-    text-align: center;
-    margin: 0;
-    line-height: 0;
-  }}
-  .logo {{
-    max-width: 72mm;
-    max-height: 26mm;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-  }}
   h1 {{
     font-family: Arial, Helvetica, sans-serif;
     font-size: 14px;
     font-weight: 700;
-    margin: 2px 0 0;
+    margin: 0 0 1px;
     text-align: center;
     letter-spacing: 0.3px;
     word-wrap: break-word;
@@ -543,22 +568,24 @@ def crear_ticket_html(
   }}
   @media print {{
     .noprint {{ display: none !important; }}
+    @page {{ margin: 0 !important; }}
     html, body {{
       width: {ancho_mm}mm !important;
       max-width: {ancho_mm}mm !important;
       margin: 0 !important;
       padding: 0 !important;
     }}
-    .ticket {{
-      padding: 0.2mm 0.5mm !important;
+    .ticket, .logo-bleed, .logo {{
+      margin: 0 !important;
+      padding: 0 !important;
     }}
   }}
 </style>
 </head>
 <body>
 <div class="ticket">
+  {logo_html}
   <div class="bloque">
-    {logo_html}
     <h1>{esc(emisor.get("nombre_fantasia"))}</h1>
     <div class="sub">{esc(emisor.get("domicilio_comercial"))}</div>
     <div class="sub">CUIT: {esc(emisor.get("cuit"))}</div>

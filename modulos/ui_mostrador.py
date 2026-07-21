@@ -1703,14 +1703,10 @@ def regenerar_pdfs_comprobante(comp):
 
 
 def _ticket_html_esta_desactualizado(html_ticket: str) -> bool:
-    """Detecta HTML generado antes del diseño actual (recuadros + QR)."""
+    """Solo el marcador de versión actual cuenta como ticket fresco."""
     if not html_ticket:
         return True
-    if f"ticket-design:{TICKET_DISENO_VERSION}" in html_ticket:
-        return False
-    if 'class="ticket"' in html_ticket and "qr-wrap" in html_ticket:
-        return False
-    return True
+    return f"ticket-design:{TICKET_DISENO_VERSION}" not in html_ticket
 
 
 def _html_ticket_fresco_desde_rec(rec: dict):
@@ -1802,8 +1798,8 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: 80 mm sin márgenes · logo aclarado · tipografía reforzada · QR ARCA. "
-        "Si no ves el cambio, esperá el redeploy y recargá (F5)."
+        f"Diseño {TICKET_DISENO_VERSION}: logo B/N full-bleed · 80 mm sin márgenes · QR ARCA. "
+        "Si no ves el logo claro a todo el ancho, esperá el redeploy y recargá (F5)."
     )
     import streamlit.components.v1 as components
     components.html(html_ticket, height=560, scrolling=True)
