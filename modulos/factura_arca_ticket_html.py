@@ -13,7 +13,7 @@ from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
 # Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
-TICKET_DISENO_VERSION = "v10-centrado-logo-termico"
+TICKET_DISENO_VERSION = "v11-logo-marcas-termico"
 
 
 def _f(val, default: float = 0.0) -> float:
