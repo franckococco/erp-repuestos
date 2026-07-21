@@ -1798,8 +1798,8 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: logo B/N full-bleed · 80 mm sin márgenes · QR ARCA. "
-        "Si no ves el logo claro a todo el ancho, esperá el redeploy y recargá (F5)."
+        f"Diseño {TICKET_DISENO_VERSION}: logo B/N nítido · texto más grande · ancho útil 78 mm. "
+        "Si no ves el cambio, esperá el redeploy y recargá (F5)."
     )
     import streamlit.components.v1 as components
     components.html(html_ticket, height=560, scrolling=True)

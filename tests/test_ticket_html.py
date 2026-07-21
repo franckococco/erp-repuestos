@@ -25,12 +25,12 @@ def test_ticket_html_incluye_descripcion_completa():
     assert "qr-wrap" in html
     assert "Escaneá para verificar en ARCA" in html
     assert "data:image/" in html and "base64," in html
-    assert "v7-logo-bn-fullbleed" in html
+    assert "v8-logo-nitido-78mm" in html
     assert 'class="bloque"' in html
     assert 'class="ticket"' in html
     assert "logo-bleed" in html
     assert "margin: 0" in html or "margin:0" in html.replace(" ", "")
-    assert f"width: {80}mm" in html or "width: 80mm" in html
+    assert "width: 78mm" in html
 
 
 def test_ticket_html_sin_cae_no_rompe():

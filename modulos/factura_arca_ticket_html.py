@@ -13,7 +13,7 @@ from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
 # Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
-TICKET_DISENO_VERSION = "v7-logo-bn-fullbleed"
+TICKET_DISENO_VERSION = "v8-logo-nitido-78mm"
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -29,8 +29,8 @@ def _fmt_money(val: float) -> str:
 
 def _logo_termico_png_b64(path: Path) -> Optional[str]:
     """
-    Convierte el logo (fondo casi negro) a B/N para térmica:
-    fondo blanco + trazo negro, sin márgenes vacíos, ancho útil máximo.
+    Convierte el logo (fondo casi negro) a B/N nítido para térmica HTML.
+    No es PDF: el ticket se imprime desde HTML; el borroso venía del resize suave.
     """
     try:
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -43,37 +43,46 @@ def _logo_termico_png_b64(path: Path) -> Optional[str]:
         else:
             rgb = im.convert("RGB")
 
+        # Trabajar en resolución alta antes del umbral
+        resample_hq = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+        resample_crisp = getattr(getattr(Image, "Resampling", Image), "NEAREST", Image.NEAREST)
+        max_side = 900
+        if max(rgb.size) < max_side:
+            scale = max_side / max(rgb.size)
+            rgb = rgb.resize(
+                (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))),
+                resample_hq,
+            )
+
         gray = ImageOps.grayscale(rgb)
-        # Logo HAFID: fondo oscuro + letras plateadas → invertir para fondo blanco
         hist = gray.histogram()
         total = sum(hist) or 1
         luminancia_media = sum(i * hist[i] for i in range(256)) / total
         if luminancia_media < 140:
             gray = ImageOps.invert(gray)
 
-        gray = ImageOps.autocontrast(gray, cutoff=1)
-        gray = ImageEnhance.Contrast(gray).enhance(2.4)
-        gray = gray.filter(ImageFilter.SHARPEN)
-        # Umbral duro: solo negro o blanco (ideal térmica)
-        bw = gray.point(lambda p: 0 if p < 175 else 255, mode="L")
+        gray = ImageOps.autocontrast(gray, cutoff=2)
+        gray = ImageEnhance.Contrast(gray).enhance(2.8)
+        gray = gray.filter(ImageFilter.UnsharpMask(radius=1.2, percent=160, threshold=2))
+        # Umbral más agresivo: menos grises → menos “borroso” en térmica
+        bw = gray.point(lambda p: 0 if p < 155 else 255, mode="L")
 
-        # Recortar bordes blancos para que no “sobren” márgenes alrededor del logo
         inv = ImageOps.invert(bw)
         bbox = inv.getbbox()
         if bbox:
-            pad = 4
+            pad = 6
             left = max(0, bbox[0] - pad)
             top = max(0, bbox[1] - pad)
             right = min(bw.width, bbox[2] + pad)
             bottom = min(bw.height, bbox[3] + pad)
             bw = bw.crop((left, top, right, bottom))
 
-        resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-        # Ancho ~80mm a ~8 px/mm ≈ 640 px
-        target_w = 640
+        # ~52 mm útiles (logo un poco más chico) a ~8 px/mm
+        target_w = 420
         ratio = target_w / max(bw.width, 1)
-        target_h = max(40, int(bw.height * ratio))
-        bw = bw.resize((target_w, target_h), resample)
+        target_h = max(36, int(bw.height * ratio))
+        # NEAREST conserva bordes nítidos en B/N (LANCZOS lo suaviza/borra)
+        bw = bw.resize((target_w, target_h), resample_crisp)
 
         out = Image.merge("RGB", (bw, bw, bw))
         buf = BytesIO()
@@ -214,7 +223,7 @@ def crear_ticket_html(
     items: List[Dict[str, Any]],
     config: Optional[Dict[str, Any]] = None,
     forma_pago: str = "Contado",
-    ancho_mm: int = 80,
+    ancho_mm: int = 78,
     vendedor: str = "",
     observacion: str = "",
 ) -> str:
@@ -337,12 +346,12 @@ def crear_ticket_html(
   body {{
     width: {ancho_mm}mm;
     max-width: {ancho_mm}mm;
-    margin: 0 !important;
+    margin: 0 auto !important;
     padding: 0 !important;
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
-    font-size: 12px;
-    line-height: 1.2;
+    font-size: 13px;
+    line-height: 1.22;
     color: #000;
     background: #fff;
     -webkit-print-color-adjust: exact;
@@ -358,23 +367,25 @@ def crear_ticket_html(
   .logo-bleed {{
     width: 100%;
     margin: 0;
-    padding: 0;
+    padding: 0.6mm 0 0.4mm;
     line-height: 0;
     text-align: center;
     background: #fff;
   }}
   .logo {{
-    display: block;
-    width: 100%;
-    max-width: 100%;
+    display: inline-block;
+    width: 52mm;
+    max-width: 70%;
     height: auto;
-    margin: 0;
+    margin: 0 auto;
     padding: 0;
     object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
   }}
   .bloque {{
     border: 1.5px solid #000;
-    padding: 1mm 1.5mm;
+    padding: 1.2mm 1.6mm;
     margin: 0.8mm 0 0;
   }}
   .bloque:first-of-type {{
@@ -383,7 +394,7 @@ def crear_ticket_html(
   .center {{ text-align: center; }}
   h1 {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 700;
     margin: 0 0 1px;
     text-align: center;
@@ -393,7 +404,7 @@ def crear_ticket_html(
   }}
   .sub {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-align: center;
     margin: 0;
@@ -402,7 +413,7 @@ def crear_ticket_html(
   }}
   .factura {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 700;
     text-align: center;
     margin: 0;
@@ -411,7 +422,7 @@ def crear_ticket_html(
   }}
   .cliente {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     text-align: center;
     word-wrap: break-word;
@@ -419,7 +430,7 @@ def crear_ticket_html(
     color: #000;
   }}
   .sec-label {{
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 1px;
     text-transform: uppercase;
     margin-bottom: 1px;
@@ -430,13 +441,13 @@ def crear_ticket_html(
     width: 100%;
     border-collapse: collapse;
     margin: 0;
-    font-size: 11px;
+    font-size: 12px;
     font-family: Arial, Helvetica, sans-serif;
   }}
   table.items thead td {{
     border-bottom: 2px solid #000;
     padding: 0 0 2px;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.4px;
     text-transform: uppercase;
     color: #000;
@@ -470,7 +481,7 @@ def crear_ticket_html(
   }}
   td.desc .pu {{
     display: block;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     margin-top: 0;
   }}
@@ -485,7 +496,7 @@ def crear_ticket_html(
     font-weight: 700;
     font-family: Arial, Helvetica, sans-serif;
     margin: 1px 0;
-    font-size: 11px;
+    font-size: 12px;
     color: #000;
   }}
   .total-box {{
@@ -495,14 +506,14 @@ def crear_ticket_html(
   }}
   .total-label {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 2px;
     color: #000;
   }}
   .total-monto {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 26px;
+    font-size: 28px;
     font-weight: 700;
     margin-top: 1px;
     line-height: 1.05;
@@ -510,7 +521,7 @@ def crear_ticket_html(
   }}
   .cae {{
     text-align: center;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     font-family: Arial, Helvetica, sans-serif;
     word-wrap: break-word;
@@ -518,7 +529,7 @@ def crear_ticket_html(
   }}
   .obs {{
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-align: left;
     word-wrap: break-word;
@@ -536,7 +547,7 @@ def crear_ticket_html(
     image-rendering: pixelated;
   }}
   .qr-cap {{
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     margin-top: 1px;
     letter-spacing: 0.2px;
@@ -544,7 +555,7 @@ def crear_ticket_html(
   }}
   .pie {{
     text-align: center;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     font-family: Arial, Helvetica, sans-serif;
     margin-top: 2px;
@@ -568,16 +579,24 @@ def crear_ticket_html(
   }}
   @media print {{
     .noprint {{ display: none !important; }}
-    @page {{ margin: 0 !important; }}
+    @page {{
+      size: {ancho_mm}mm auto;
+      margin: 0 !important;
+    }}
     html, body {{
       width: {ancho_mm}mm !important;
       max-width: {ancho_mm}mm !important;
+      margin: 0 auto !important;
+      padding: 0 !important;
+    }}
+    .ticket {{
       margin: 0 !important;
       padding: 0 !important;
     }}
-    .ticket, .logo-bleed, .logo {{
-      margin: 0 !important;
-      padding: 0 !important;
+    .logo {{
+      width: 52mm !important;
+      max-width: 70% !important;
+      image-rendering: crisp-edges !important;
     }}
   }}
 </style>
