@@ -13,7 +13,7 @@ from modulos.util_fechas import ahora_ar
 
 _LOGO_CACHE_B64: Optional[str] = None
 # Marcador visible en caption / HTML para confirmar deploy en Streamlit Cloud
-TICKET_DISENO_VERSION = "v9-qr-legible-logo-suave"
+TICKET_DISENO_VERSION = "v10-centrado-logo-termico"
 
 
 def _f(val, default: float = 0.0) -> float:
@@ -27,10 +27,10 @@ def _fmt_money(val: float) -> str:
     return f"${val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
-def _logo_termico_png_b64(path: Path) -> Optional[str]:
+def _logo_termico_png_b64(path: Path, *, ya_es_termico: bool = False) -> Optional[str]:
     """
-    Logo B/N limpio para térmica HTML.
-    Suaviza la textura del JPEG (evita puntitos) y re-umbraliza tras el resize.
+    Prepara logo B/N para térmica HTML.
+    Si ya_es_termico=True (logo_hafid_termico.png), solo recorta/escala sin filtros agresivos.
     """
     try:
         from PIL import Image, ImageOps, ImageEnhance, ImageFilter
@@ -44,46 +44,45 @@ def _logo_termico_png_b64(path: Path) -> Optional[str]:
             rgb = im.convert("RGB")
 
         resample_hq = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
-
-        # Subir un poco la resolución de trabajo
-        if max(rgb.size) < 700:
-            scale = 700 / max(rgb.size)
-            rgb = rgb.resize(
-                (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))),
-                resample_hq,
-            )
-
         gray = ImageOps.grayscale(rgb)
-        # Matar textura carbon fiber / ruido → evita “puntitos negros”
-        gray = gray.filter(ImageFilter.MedianFilter(size=5))
-        gray = gray.filter(ImageFilter.GaussianBlur(radius=1.4))
 
-        hist = gray.histogram()
-        total = sum(hist) or 1
-        luminancia_media = sum(i * hist[i] for i in range(256)) / total
-        if luminancia_media < 140:
-            gray = ImageOps.invert(gray)
-
-        gray = ImageOps.autocontrast(gray, cutoff=3)
-        gray = ImageEnhance.Contrast(gray).enhance(2.2)
-        bw = gray.point(lambda p: 0 if p < 150 else 255, mode="L")
+        if not ya_es_termico:
+            # JPEG metálico original: suavizar textura y convertir
+            if max(rgb.size) < 700:
+                scale = 700 / max(rgb.size)
+                rgb = rgb.resize(
+                    (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))),
+                    resample_hq,
+                )
+                gray = ImageOps.grayscale(rgb)
+            gray = gray.filter(ImageFilter.MedianFilter(size=5))
+            gray = gray.filter(ImageFilter.GaussianBlur(radius=1.4))
+            hist = gray.histogram()
+            total = sum(hist) or 1
+            luminancia_media = sum(i * hist[i] for i in range(256)) / total
+            if luminancia_media < 140:
+                gray = ImageOps.invert(gray)
+            gray = ImageOps.autocontrast(gray, cutoff=3)
+            gray = ImageEnhance.Contrast(gray).enhance(2.2)
+            bw = gray.point(lambda p: 0 if p < 150 else 255, mode="L")
+        else:
+            # Ya es blanco/negro limpio: umbral suave para puro B/N
+            bw = gray.point(lambda p: 0 if p < 160 else 255, mode="L")
 
         inv = ImageOps.invert(bw)
         bbox = inv.getbbox()
         if bbox:
-            pad = 8
+            pad = 10
             left = max(0, bbox[0] - pad)
             top = max(0, bbox[1] - pad)
             right = min(bw.width, bbox[2] + pad)
             bottom = min(bw.height, bbox[3] + pad)
             bw = bw.crop((left, top, right, bottom))
 
-        # ~48 mm a buena densidad, sin NEAREST (pixelaba)
-        target_w = 380
+        target_w = 360
         ratio = target_w / max(bw.width, 1)
         target_h = max(32, int(bw.height * ratio))
         bw = bw.resize((target_w, target_h), resample_hq)
-        # Segunda pasada: limpia grises del resize
         bw = bw.point(lambda p: 0 if p < 140 else 255, mode="L")
 
         out = Image.merge("RGB", (bw, bw, bw))
@@ -95,12 +94,28 @@ def _logo_termico_png_b64(path: Path) -> Optional[str]:
 
 
 def _logo_hafid_data_uri() -> str:
-    """Logo HAFID embebido en B/N térmico (fondo blanco)."""
+    """Prioriza logo térmico B/N (fondo blanco); fallback al JPEG original."""
     global _LOGO_CACHE_B64
     if _LOGO_CACHE_B64 is not None:
         return _LOGO_CACHE_B64
 
     raiz = Path(__file__).resolve().parent.parent
+    # Primero el logo pensado para térmica (fondo blanco, trazo negro)
+    termicos = [
+        Path(__file__).resolve().parent / "logo_hafid_termico.png",
+        raiz / "logo_hafid_termico.png",
+    ]
+    for path in termicos:
+        try:
+            if not path.is_file():
+                continue
+            termico = _logo_termico_png_b64(path, ya_es_termico=True)
+            if termico:
+                _LOGO_CACHE_B64 = f"data:image/png;base64,{termico}"
+                return _LOGO_CACHE_B64
+        except Exception:
+            continue
+
     candidatos = [
         Path(__file__).resolve().parent / "logo_hafid.jpeg",
         raiz / "logo_hafid.jpeg",
@@ -115,7 +130,7 @@ def _logo_hafid_data_uri() -> str:
         try:
             if not path.is_file():
                 continue
-            termico = _logo_termico_png_b64(path)
+            termico = _logo_termico_png_b64(path, ya_es_termico=False)
             if termico:
                 _LOGO_CACHE_B64 = f"data:image/png;base64,{termico}"
                 return _LOGO_CACHE_B64
@@ -353,18 +368,19 @@ def crear_ticket_html(
 <style>
   @page {{
     size: 80mm auto;
-    margin: 0 !important;
+    margin: 0 4mm !important;
   }}
   * {{ box-sizing: border-box; }}
-  html, body {{
+  html {{
     margin: 0 !important;
     padding: 0 !important;
+    width: 100%;
   }}
   body {{
-    width: {ancho_mm}mm;
-    max-width: {ancho_mm}mm;
+    width: 100% !important;
+    max-width: 100% !important;
     margin: 0 auto !important;
-    padding: 0 1.5mm !important;
+    padding: 0 !important;
     font-family: Arial, Helvetica, sans-serif;
     font-weight: 700;
     font-size: 14px;
@@ -376,23 +392,24 @@ def crear_ticket_html(
   }}
   .ticket {{
     width: 100%;
+    max-width: {ancho_mm}mm;
     border: none;
     padding: 0;
-    margin: 0;
+    margin: 0 auto;
     background: #fff;
   }}
   .logo-bleed {{
     width: 100%;
-    margin: 0;
+    margin: 0 auto;
     padding: 1mm 0 0.8mm;
     line-height: 0;
     text-align: center;
     background: #fff;
   }}
   .logo {{
-    display: inline-block;
-    width: 46mm;
-    max-width: 64%;
+    display: block;
+    width: 44mm;
+    max-width: 62%;
     height: auto;
     margin: 0 auto;
     padding: 0;
@@ -401,7 +418,7 @@ def crear_ticket_html(
   .bloque {{
     border: 1.25px solid #000;
     padding: 1.4mm 1.8mm;
-    margin: 1mm 0 0;
+    margin: 1mm auto 0;
   }}
   .bloque:first-of-type {{
     margin-top: 0.6mm;
@@ -409,7 +426,7 @@ def crear_ticket_html(
   .bloque-qr {{
     border: 1.25px solid #000;
     padding: 2.5mm 2mm;
-    margin: 1mm 0 0;
+    margin: 1mm auto 0;
     text-align: center;
   }}
   .center {{ text-align: center; }}
@@ -608,25 +625,29 @@ def crear_ticket_html(
     .noprint {{ display: none !important; }}
     @page {{
       size: 80mm auto;
-      margin: 0 !important;
+      margin: 0 4mm !important;
     }}
     html, body {{
-      width: {ancho_mm}mm !important;
-      max-width: {ancho_mm}mm !important;
+      width: 100% !important;
+      max-width: 100% !important;
       margin: 0 auto !important;
-      padding: 0 1.5mm !important;
+      padding: 0 !important;
     }}
     .ticket {{
-      margin: 0 !important;
+      width: 100% !important;
+      max-width: {ancho_mm}mm !important;
+      margin: 0 auto !important;
       padding: 0 !important;
     }}
     .logo {{
-      width: 46mm !important;
-      max-width: 64% !important;
+      width: 44mm !important;
+      max-width: 62% !important;
+      margin: 0 auto !important;
     }}
     .qr {{
       width: 36mm !important;
       height: 36mm !important;
+      margin: 0 auto !important;
     }}
   }}
 </style>

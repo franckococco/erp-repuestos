@@ -1798,7 +1798,7 @@ def _render_vista_previa_ticket_html(html_ticket: str, key_prefix: str):
         return
     st.markdown("**Vista previa del ticket**")
     st.caption(
-        f"Diseño {TICKET_DISENO_VERSION}: QR legible · logo sin puntitos · márgenes laterales · texto grande. "
+        f"Diseño {TICKET_DISENO_VERSION}: ticket centrado · logo térmico fondo blanco · QR legible. "
         "Si no ves el cambio, esperá el redeploy y recargá (F5)."
     )
     import streamlit.components.v1 as components
