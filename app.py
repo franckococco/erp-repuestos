@@ -39,6 +39,8 @@ _ARCHIVOS_MODULOS = (
     "mostrador_voz_flujo.py",
     "mostrador_session.py",
     "util_pdf.py",
+    "relevamientos_db.py",
+    "ui_relevamientos.py",
 )
 
 _modulos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modulos")
@@ -1085,6 +1087,12 @@ elif pagina == "asistente":
 
             if st.session_state.get("df_reporte") is not None:
                 st.dataframe(st.session_state.df_reporte, hide_index=True, use_container_width=True)
+
+# --- RELEVAMIENTOS (módulo nuevo, aislado) ---
+elif pagina == "relevamientos":
+    titulo_seccion("Relevamientos", "R")
+    from modulos.ui_relevamientos import render_relevamientos
+    render_relevamientos()
 
 # --- CONFIGURACIÓN ---
 elif pagina == "config":

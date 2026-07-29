@@ -194,10 +194,11 @@ def render_sidebar(cliente_activo, rol="admin", nombre_usuario=""):
             "📸 Carga Stock",
             "📦 Inventario",
             "🛒 Mostrador",
+            "📋 Relevamientos",
             "🤖 Asistente",
             "⚙️ Configuración",
         ]
-        nav_keys = ["carga", "inventario", "mostrador", "asistente", "config"]
+        nav_keys = ["carga", "inventario", "mostrador", "relevamientos", "asistente", "config"]
         idx = nav_keys.index(st.session_state.get("pagina", "carga")) if st.session_state.get("pagina") in nav_keys else 0
         elegido = st.radio(
             "Menú",

@@ -1021,7 +1021,8 @@ def registrar_ingreso_inteligente(datos_ia, condicion_pago, imagen_url=None):
                     "precio_interno": calculos['precio_interno'],
                     "precio_venta": calculos['precio_venta'],
                     "proveedor": proveedor,
-                    "cuit_proveedor": cuit_proveedor
+                    "cuit_proveedor": cuit_proveedor,
+                    "last_ingreso_at": ahora,
                 }
         if not datos_existentes or marca_rep not in (datos_existentes.get("variantes") or {}):
             variant_data["stock_critico"] = STOCK_CRITICO_DEFAULT
@@ -1686,8 +1687,13 @@ def registrar_aumento_stock(id_producto, cantidad):
     variantes = datos.get("variantes", {})
     
     if not variantes:
+        ahora_ing = datetime.now(timezone.utc)
         batch = get_db().batch()
-        batch.update(ref_prod, {"stock": firestore.Increment(int(cantidad)), "ultima_actualizacion": datetime.now(timezone.utc)}) # type: ignore
+        batch.update(ref_prod, {
+            "stock": firestore.Increment(int(cantidad)),  # type: ignore
+            "last_ingreso_at": ahora_ing,
+            "ultima_actualizacion": ahora_ing,
+        })
         batch.commit()
         invalidar_cache_datos()
         return True, f"Aumento de {cantidad} unidades registrado."
@@ -1701,10 +1707,12 @@ def registrar_aumento_stock(id_producto, cantidad):
     if marca_req not in variantes:
         return False, f"La marca '{marca_req}' no se encontró en este repuesto."
         
+    ahora_ing = datetime.now(timezone.utc)
     batch = get_db().batch()
     batch.update(ref_prod, {
-        f"variantes.{marca_req}.stock": firestore.Increment(int(cantidad)), # type: ignore
-        "ultima_actualizacion": datetime.now(timezone.utc)
+        f"variantes.{marca_req}.stock": firestore.Increment(int(cantidad)),  # type: ignore
+        f"variantes.{marca_req}.last_ingreso_at": ahora_ing,
+        "ultima_actualizacion": ahora_ing,
     })
     
     ref_alta = get_db().collection("auditoria_ingresos").document()
@@ -1712,7 +1720,7 @@ def registrar_aumento_stock(id_producto, cantidad):
         "id_producto": id_m,
         "marca": marca_req,
         "cantidad_ingreso": int(cantidad),
-        "fecha": datetime.now(timezone.utc),
+        "fecha": ahora_ing,
         "motivo": "Ingreso manual vía Asistente de Voz"
     })
     
@@ -1752,6 +1760,8 @@ def obtener_inventario_completo() -> list:
                 "proveedor": master.get("proveedor", "DESCONOCIDO"),
                 "cuit_proveedor": master.get("cuit_proveedor", "0"),
                 "ubicacion": master.get("ubicacion", ubicacion_default()),
+                "last_sale_at": master.get("last_sale_at"),
+                "last_ingreso_at": master.get("last_ingreso_at"),
                 "usa_variantes_fs": False,
             }
             inventario.append(item)
@@ -1775,6 +1785,8 @@ def obtener_inventario_completo() -> list:
                     "proveedor": v_data.get("proveedor", ""),
                     "cuit_proveedor": v_data.get("cuit_proveedor", ""),
                     "ubicacion": master.get("ubicacion", ubicacion_default()),
+                    "last_sale_at": v_data.get("last_sale_at"),
+                    "last_ingreso_at": v_data.get("last_ingreso_at"),
                     "usa_variantes_fs": True,
                 }
                 inventario.append(item)
@@ -1965,13 +1977,18 @@ def _descontar_stock_lineas_carrito(vendedor, lineas_ok):
         marca = linea["marca"]
         cant = linea["cantidad"]
 
+        ahora_mov = datetime.now(timezone.utc)
         if linea.get("usa_variantes_fs", True):
             batch.update(ref_prod, {
-                f"variantes.{marca}.stock": firestore.Increment(-cant)  # type: ignore
+                f"variantes.{marca}.stock": firestore.Increment(-cant),  # type: ignore
+                f"variantes.{marca}.last_sale_at": ahora_mov,
+                "ultima_actualizacion": ahora_mov,
             })
         else:
             batch.update(ref_prod, {
-                "stock": firestore.Increment(-cant)  # type: ignore
+                "stock": firestore.Increment(-cant),  # type: ignore
+                "last_sale_at": ahora_mov,
+                "ultima_actualizacion": ahora_mov,
             })
 
         batch.delete(ref_item)
