@@ -42,3 +42,26 @@ def test_ticket_html_sin_cae_no_rompe():
     )
     assert "FACTURA B" in html
     assert "TOTAL" in html
+
+
+def test_ticket_html_ocultar_cuit_generico():
+    html = crear_ticket_html(
+        {"punto_venta": 1, "numero_factura": 2, "cae": "1", "vencimiento_cae": "2026-12-31"},
+        {"nombre": "CONSUMIDOR FINAL", "cuit": "00000000000", "cbte_tipo": "6"},
+        [{"descripcion": "ITEM", "cantidad": 1, "precio": 100.0}],
+        {"nombre_empresa": "HAFID", "cuit_emisor": "20265010505"},
+    )
+    assert "CONSUMIDOR FINAL" in html
+    assert "CUIT/DNI:" not in html
+    assert "00000000000" not in html
+
+
+def test_ticket_html_muestra_cuit_real():
+    html = crear_ticket_html(
+        {"punto_venta": 1, "numero_factura": 3, "cae": "1", "vencimiento_cae": "2026-12-31"},
+        {"nombre": "JUAN PEREZ", "cuit": "20123456789", "cbte_tipo": "6"},
+        [{"descripcion": "ITEM", "cantidad": 1, "precio": 100.0}],
+        {"nombre_empresa": "HAFID", "cuit_emisor": "20265010505"},
+    )
+    assert "CUIT/DNI: 20123456789" in html
+    assert "JUAN PEREZ" in html

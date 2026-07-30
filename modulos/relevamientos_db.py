@@ -165,6 +165,47 @@ def vincular_articulo_familia(
     return True, f"Artículo {mid} vinculado a «{fam.get('nombre')}»."
 
 
+def vincular_articulos_familia(
+    familia_id: str, articulos: List[Dict[str, Any]]
+) -> Tuple[bool, str, int]:
+    """Vincula varios artículos de una vez (1 artículo → 1 familia)."""
+    if not familia_id:
+        return False, "Falta módulo.", 0
+    fam = obtener_familia(familia_id)
+    if not fam:
+        return False, "Módulo no encontrado.", 0
+    lista = [a for a in (articulos or []) if isinstance(a, dict) and a.get("id_maestro")]
+    if not lista:
+        return False, "No hay artículos seleccionados.", 0
+
+    ok_n = 0
+    ahora = ahora_utc()
+    for art in lista:
+        mid = str(art.get("id_maestro") or art.get("codigo") or "").strip()
+        if not mid:
+            continue
+        mrc = sanitizar_clave_marca(art.get("marca") or "") if art.get("marca") else ""
+        art_id = _id_articulo_familia(mid, mrc)
+        try:
+            _quitar_articulo_de_otras_familias(mid, mrc, familia_id)
+            get_db().collection(COL_FAMILIAS).document(familia_id).collection(
+                "articulos"
+            ).document(art_id).set({
+                "id_maestro": mid,
+                "marca": mrc,
+                "descripcion": str(art.get("descripcion") or "").strip().upper(),
+                "agregado": ahora,
+            })
+            ok_n += 1
+        except Exception:
+            continue
+
+    if ok_n:
+        _recontar_articulos_familia(familia_id)
+        return True, f"{ok_n} artículo(s) vinculados a «{fam.get('nombre')}».", ok_n
+    return False, "No se pudo vincular ningún artículo.", 0
+
+
 def desvincular_articulo_familia(
     familia_id: str, id_maestro: str, marca: str = ""
 ) -> Tuple[bool, str]:
@@ -180,6 +221,31 @@ def desvincular_articulo_familia(
     ref.delete()
     _recontar_articulos_familia(familia_id)
     return True, "Artículo quitado del módulo."
+
+
+def desvincular_articulos_familia(
+    familia_id: str, articulos: List[Dict[str, Any]]
+) -> Tuple[bool, str, int]:
+    if not familia_id:
+        return False, "Falta módulo.", 0
+    lista = [a for a in (articulos or []) if isinstance(a, dict) and a.get("id_maestro")]
+    if not lista:
+        return False, "No hay artículos seleccionados.", 0
+    ok_n = 0
+    for art in lista:
+        mid = str(art.get("id_maestro") or "").strip()
+        mrc = str(art.get("marca") or "")
+        if not mid:
+            continue
+        try:
+            ok, _ = desvincular_articulo_familia(familia_id, mid, mrc)
+            if ok:
+                ok_n += 1
+        except Exception:
+            continue
+    if ok_n:
+        return True, f"{ok_n} artículo(s) quitados del módulo.", ok_n
+    return False, "No se pudo quitar ningún artículo.", 0
 
 
 def mapa_familia_por_articulo() -> Dict[str, str]:

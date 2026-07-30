@@ -9,7 +9,7 @@ from modulos.puntos_vendedor import listar_vendedores
 from modulos.relevamientos_db import (
     asignar_familia_a_vendedor,
     crear_familia,
-    desvincular_articulo_familia,
+    desvincular_articulos_familia,
     enriquecer_inventario_con_movimiento,
     familias_sin_asignar,
     guardar_conteo,
@@ -21,7 +21,7 @@ from modulos.relevamientos_db import (
     obtener_familia,
     reporte_sin_movimiento,
     sembrar_tarjetas_iniciales,
-    vincular_articulo_familia,
+    vincular_articulos_familia,
 )
 from modulos.util_fechas import formatear_fecha_ar
 
@@ -143,9 +143,9 @@ def _tab_catalogo():
     else:
         st.warning("Este módulo aún no tiene artículos vinculados.")
 
-    st.markdown("**Vincular artículo del inventario**")
+    st.markdown("**Vincular artículos del inventario**")
+    st.caption("Buscá, tildá varios y enviá todos de una al módulo.")
     busq = st.text_input("Buscar por código o descripción", key="rel_vinc_busq")
-    candidatos = inv
     if busq.strip():
         t = busq.strip().upper()
         candidatos = [
@@ -153,39 +153,65 @@ def _tab_catalogo():
             if t in str(x.get("codigo", "")).upper()
             or t in str(x.get("descripcion", "")).upper()
             or t in str(x.get("id_maestro", "")).upper()
+            or t in str(x.get("marca", "")).upper()
         ][:80]
     else:
         candidatos = inv[:80]
 
-    labels = {
-        f"{x.get('codigo')} · {x.get('marca')} · {x.get('descripcion', '')[:40]}": x
-        for x in candidatos
-    }
+    labels = {}
+    for x in candidatos:
+        lab = f"{x.get('codigo')} · {x.get('marca')} · {str(x.get('descripcion', '') or '')[:40]}"
+        # Evitar claves duplicadas en multiselect
+        if lab in labels:
+            lab = f"{lab} [{x.get('id')}]"
+        labels[lab] = x
+
     if labels:
-        pick = st.selectbox("Artículo", list(labels.keys()), key="rel_vinc_pick")
-        if st.button("Vincular a este módulo", key="rel_vinc_ok"):
-            x = labels[pick]
-            ok, msg = vincular_articulo_familia(
-                fid,
-                str(x.get("id_maestro") or x.get("codigo")),
-                str(x.get("marca") or ""),
-                str(x.get("descripcion") or ""),
-            )
+        picks = st.multiselect(
+            "Seleccioná uno o más artículos",
+            list(labels.keys()),
+            key="rel_vinc_multi",
+        )
+        if st.button(
+            "➕ Vincular seleccionados",
+            type="primary",
+            key="rel_vinc_ok",
+            disabled=not picks,
+            use_container_width=True,
+        ):
+            arts_sel = []
+            for p in picks:
+                x = labels[p]
+                arts_sel.append({
+                    "id_maestro": str(x.get("id_maestro") or x.get("codigo") or ""),
+                    "marca": str(x.get("marca") or ""),
+                    "descripcion": str(x.get("descripcion") or ""),
+                })
+            ok, msg, _ = vincular_articulos_familia(fid, arts_sel)
             (st.success if ok else st.error)(msg)
             if ok:
                 st.rerun()
+    else:
+        st.info("No hay resultados para esa búsqueda.")
 
     if arts:
-        with st.expander("Quitar artículo del módulo"):
+        with st.expander("Quitar artículos del módulo"):
             quitar_opts = {
-                f"{a.get('id_maestro')} · {a.get('marca') or 'TODAS'}": a for a in arts
+                f"{a.get('id_maestro')} · {a.get('marca') or 'TODAS'} · {str(a.get('descripcion') or '')[:30]}": a
+                for a in arts
             }
-            q = st.selectbox("Artículo a quitar", list(quitar_opts.keys()), key="rel_quit_sel")
-            if st.button("Quitar", key="rel_quit_ok"):
-                a = quitar_opts[q]
-                ok, msg = desvincular_articulo_familia(
-                    fid, a.get("id_maestro"), a.get("marca") or ""
-                )
+            q_picks = st.multiselect(
+                "Seleccioná los que querés quitar",
+                list(quitar_opts.keys()),
+                key="rel_quit_multi",
+            )
+            if st.button(
+                "Quitar seleccionados",
+                key="rel_quit_ok",
+                disabled=not q_picks,
+            ):
+                arts_q = [quitar_opts[p] for p in q_picks]
+                ok, msg, _ = desvincular_articulos_familia(fid, arts_q)
                 (st.success if ok else st.error)(msg)
                 if ok:
                     st.rerun()

@@ -318,6 +318,21 @@ def crear_ticket_html(
     )
     linea_cond = f'<div class="sub">{esc(cond_cli)}</div>' if mostrar_cond else ""
 
+    cuit_cli_raw = str(cli.get("cuit") or "").strip()
+    cuit_cli_dig = "".join(c for c in cuit_cli_raw if c.isdigit())
+    cuit_generico = (not cuit_cli_dig) or set(cuit_cli_dig) <= {"0"}
+    nombre_mostrar = nombre_cli.strip() or "CONSUMIDOR FINAL"
+    if cuit_generico and (
+        not nombre_mostrar
+        or nombre_mostrar.upper() in ("CF", "C.F.", "C.F")
+    ):
+        nombre_mostrar = "CONSUMIDOR FINAL"
+    linea_cuit = (
+        ""
+        if cuit_generico
+        else f'<div class="sub">CUIT/DNI: {esc(cuit_cli_dig or cuit_cli_raw)}</div>'
+    )
+
     logo_uri = _logo_hafid_data_uri()
     logo_html = (
         f'<div class="logo-bleed"><img class="logo" src="{logo_uri}" alt="HAFID"></div>'
@@ -672,8 +687,8 @@ def crear_ticket_html(
 
   <div class="bloque">
     <div class="sec-label">Cliente</div>
-    <div class="cliente">{esc(cli.get("nombre", "CONSUMIDOR FINAL"))}</div>
-    <div class="sub">CUIT/DNI: {esc(cli.get("cuit", "00000000000"))}</div>
+    <div class="cliente">{esc(nombre_mostrar)}</div>
+    {linea_cuit}
     {linea_cond}
   </div>
 
