@@ -1,6 +1,8 @@
 """UI Streamlit — pestaña RELEVAMIENTOS (sección aislada del resto del ERP)."""
 from __future__ import annotations
 
+import hashlib
+
 import pandas as pd
 import streamlit as st
 
@@ -45,6 +47,19 @@ def render_relevamientos():
         _tab_mi_tarjeta()
     with tab_mov:
         _tab_sin_movimiento()
+
+
+_MAX_RESULTADOS = 200
+
+
+def _alto_tabla(n_filas: int) -> int:
+    return min(430, 90 + 35 * max(1, n_filas))
+
+
+def _clave_editor(prefijo: str, texto: str, marcar_todos: bool, n_filas: int) -> str:
+    """Key que cambia con la búsqueda para que la tabla reinicie los tildes."""
+    firma = f"{texto}|{marcar_todos}|{n_filas}"
+    return f"{prefijo}_editor_{hashlib.md5(firma.encode('utf-8')).hexdigest()[:10]}"
 
 
 def _inv_index():
@@ -144,7 +159,7 @@ def _tab_catalogo():
         st.warning("Este módulo aún no tiene artículos vinculados.")
 
     st.markdown("**Vincular artículos del inventario**")
-    st.caption("Buscá, tildá varios y enviá todos de una al módulo.")
+    st.caption("Buscá, tildá en la columna ✓ los que quieras y enviá todos juntos.")
     busq = st.text_input("Buscar por código o descripción", key="rel_vinc_busq")
     if busq.strip():
         t = busq.strip().upper()
@@ -154,39 +169,58 @@ def _tab_catalogo():
             or t in str(x.get("descripcion", "")).upper()
             or t in str(x.get("id_maestro", "")).upper()
             or t in str(x.get("marca", "")).upper()
-        ][:80]
+        ][:_MAX_RESULTADOS]
     else:
-        candidatos = inv[:80]
+        candidatos = inv[:_MAX_RESULTADOS]
 
-    labels = {}
-    for x in candidatos:
-        lab = f"{x.get('codigo')} · {x.get('marca')} · {str(x.get('descripcion', '') or '')[:40]}"
-        # Evitar claves duplicadas en multiselect
-        if lab in labels:
-            lab = f"{lab} [{x.get('id')}]"
-        labels[lab] = x
-
-    if labels:
-        picks = st.multiselect(
-            "Seleccioná uno o más artículos",
-            list(labels.keys()),
-            key="rel_vinc_multi",
+    if candidatos:
+        marcar_todos = st.checkbox(
+            f"Tildar los {len(candidatos)} resultados",
+            key="rel_vinc_todos",
         )
+        filas_sel = [
+            {
+                "Sel": bool(marcar_todos),
+                "Código": str(x.get("codigo") or x.get("id_maestro") or ""),
+                "Marca": str(x.get("marca") or ""),
+                "Descripción": str(x.get("descripcion") or ""),
+                "Vehículo": str(x.get("vehiculo") or ""),
+                "Stock": int(x.get("stock") or 0),
+            }
+            for x in candidatos
+        ]
+        editado = st.data_editor(
+            pd.DataFrame(filas_sel),
+            hide_index=True,
+            use_container_width=True,
+            height=_alto_tabla(len(filas_sel)),
+            column_config={
+                "Sel": st.column_config.CheckboxColumn("✓", width="small"),
+                "Stock": st.column_config.NumberColumn("Stock", width="small"),
+            },
+            disabled=["Código", "Marca", "Descripción", "Vehículo", "Stock"],
+            key=_clave_editor("rel_vinc", busq, marcar_todos, len(candidatos)),
+        )
+        elegidos = [
+            candidatos[i]
+            for i, marcado in enumerate(editado["Sel"].tolist())
+            if bool(marcado) and i < len(candidatos)
+        ]
         if st.button(
-            "➕ Vincular seleccionados",
+            f"➕ Vincular seleccionados ({len(elegidos)})",
             type="primary",
             key="rel_vinc_ok",
-            disabled=not picks,
+            disabled=not elegidos,
             use_container_width=True,
         ):
-            arts_sel = []
-            for p in picks:
-                x = labels[p]
-                arts_sel.append({
+            arts_sel = [
+                {
                     "id_maestro": str(x.get("id_maestro") or x.get("codigo") or ""),
                     "marca": str(x.get("marca") or ""),
                     "descripcion": str(x.get("descripcion") or ""),
-                })
+                }
+                for x in elegidos
+            ]
             ok, msg, _ = vincular_articulos_familia(fid, arts_sel)
             (st.success if ok else st.error)(msg)
             if ok:
@@ -196,22 +230,35 @@ def _tab_catalogo():
 
     if arts:
         with st.expander("Quitar artículos del módulo"):
-            quitar_opts = {
-                f"{a.get('id_maestro')} · {a.get('marca') or 'TODAS'} · {str(a.get('descripcion') or '')[:30]}": a
+            filas_quitar = [
+                {
+                    "Sel": False,
+                    "Código": str(a.get("id_maestro") or ""),
+                    "Marca": str(a.get("marca") or "TODAS"),
+                    "Descripción": str(a.get("descripcion") or ""),
+                }
                 for a in arts
-            }
-            q_picks = st.multiselect(
-                "Seleccioná los que querés quitar",
-                list(quitar_opts.keys()),
-                key="rel_quit_multi",
+            ]
+            editado_q = st.data_editor(
+                pd.DataFrame(filas_quitar),
+                hide_index=True,
+                use_container_width=True,
+                height=_alto_tabla(len(filas_quitar)),
+                column_config={"Sel": st.column_config.CheckboxColumn("✓", width="small")},
+                disabled=["Código", "Marca", "Descripción"],
+                key=_clave_editor("rel_quit", fid, False, len(filas_quitar)),
             )
+            a_quitar = [
+                arts[i]
+                for i, marcado in enumerate(editado_q["Sel"].tolist())
+                if bool(marcado) and i < len(arts)
+            ]
             if st.button(
-                "Quitar seleccionados",
+                f"Quitar seleccionados ({len(a_quitar)})",
                 key="rel_quit_ok",
-                disabled=not q_picks,
+                disabled=not a_quitar,
             ):
-                arts_q = [quitar_opts[p] for p in q_picks]
-                ok, msg, _ = desvincular_articulos_familia(fid, arts_q)
+                ok, msg, _ = desvincular_articulos_familia(fid, a_quitar)
                 (st.success if ok else st.error)(msg)
                 if ok:
                     st.rerun()
