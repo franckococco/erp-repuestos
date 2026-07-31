@@ -508,10 +508,6 @@ def _render_chat_historial(vendedor):
                 st.warning(respuesta)
             else:
                 st.markdown(respuesta)
-    if st.session_state.get(f"manual_add_ctx_{vendedor}"):
-        from modulos.ui_mostrador import render_agregar_manual_mostrador
-
-        render_agregar_manual_mostrador(vendedor)
 
 
 def render_venta_chat(

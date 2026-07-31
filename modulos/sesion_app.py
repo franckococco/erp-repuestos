@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 INACTIVIDAD_MINUTOS = 30
+# No escribir ultima_actividad en cada click: basta cada N minutos
+RENOVACION_ESCRITURA_MINUTOS = 2
 COOKIE_SESION = "hr_auth_token"
 COOKIE_DIAS = 30
 
@@ -64,12 +66,14 @@ def validar_y_renovar_sesion(token: str) -> Tuple[bool, Optional[Dict[str, Any]]
     ultima = _a_utc(data.get("ultima_actividad"))
     if not ultima:
         return False, None
-    if (_ahora_utc() - ultima) > timedelta(minutes=INACTIVIDAD_MINUTOS):
+    ahora = _ahora_utc()
+    if (ahora - ultima) > timedelta(minutes=INACTIVIDAD_MINUTOS):
         ref.update({"activa": False})
         return False, None
 
-    ahora = _ahora_utc()
-    ref.update({"ultima_actividad": ahora})
+    # Evita write a Firestore en cada rerun de Streamlit
+    if (ahora - ultima) >= timedelta(minutes=RENOVACION_ESCRITURA_MINUTOS):
+        ref.update({"ultima_actividad": ahora})
     return True, _datos_desde_doc(data)
 
 

@@ -57,12 +57,19 @@ def gestionar_autenticacion():
     Restaura sesión desde cookie, valida inactividad y renueva actividad.
     Retorna True (autenticado), False (mostrar login) o None (esperando cookies).
     """
+    import time as _time
+
     if sesion_activa():
         token = st.session_state.get("auth_token")
+        # Evita round-trip a Firestore en cada click del mostrador
+        ok_until = float(st.session_state.get("_auth_ok_until", 0) or 0)
+        if token and ok_until > _time.time():
+            return True
         if token:
             ok, data = validar_y_renovar_sesion(token)
             if ok and data:
                 _aplicar_datos_sesion(data, token)
+                st.session_state["_auth_ok_until"] = _time.time() + 90
                 return True
         old = _limpiar_session_state_auth()
         cerrar_sesion_firestore(old)
@@ -84,6 +91,7 @@ def gestionar_autenticacion():
         ok, data = validar_y_renovar_sesion(token)
         if ok and data:
             _aplicar_datos_sesion(data, token)
+            st.session_state["_auth_ok_until"] = _time.time() + 90
             return True
         cm.delete(COOKIE_SESION, key="hr_del_invalid")
 

@@ -1,6 +1,7 @@
 """UI del mostrador: cliente, búsqueda de productos y facturación ARCA."""
 import math
 import re
+import time as time_mod
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
@@ -1013,7 +1014,27 @@ def render_panel_cliente_pendiente_confirmar():
 
 
 def render_agregar_manual_mostrador(vendedor, contexto=None):
-    """Formulario para línea fuera de stock / no encontrada en inventario."""
+    """Formulario para línea fuera de stock / no encontrada en inventario.
+
+    Puede invocarse desde chat, buscador o coincidencias; se dibuja una sola
+    vez por refresco para evitar StreamlitDuplicateElementKey.
+    """
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        sctx = get_script_run_ctx()
+        if sctx is not None:
+            run_tok = getattr(sctx, "_hafid_run_token", None)
+            if run_tok is None:
+                run_tok = time_mod.time_ns()
+                setattr(sctx, "_hafid_run_token", run_tok)
+            guard = f"_manual_form_drawn_{vendedor}"
+            if st.session_state.get(guard) == run_tok:
+                return
+            st.session_state[guard] = run_tok
+    except Exception:
+        pass
+
     ctx = contexto or st.session_state.get(f"manual_add_ctx_{vendedor}") or {}
     termino = str(ctx.get("termino", "") or "").strip()
     veh = ctx.get("vehiculo")
@@ -1404,8 +1425,6 @@ def render_panel_coincidencias_mostrador(
                     st.rerun()
                 elif errores:
                     st.error("\n".join(errores))
-
-    render_agregar_manual_mostrador(vendedor)
 
 
 def render_buscador_productos(vendedor, inv_completo, agregar_al_carrito, filtrar_inventario):
