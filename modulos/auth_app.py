@@ -42,7 +42,7 @@ def _limpiar_session_state_auth():
     token = st.session_state.get("auth_token")
     for k in (
         "auth_usuario", "auth_rol", "auth_nombre", "auth_vendedor_id",
-        "auth_token", "vendedor_mostrador_sel",
+        "auth_token", "vendedor_mostrador_sel", "_auth_ok_until",
     ):
         st.session_state.pop(k, None)
     return token
