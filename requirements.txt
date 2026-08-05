@@ -1,4 +1,8 @@
-streamlit
+# Critico para Cloud: evita crash TypeError GZipResponder (Starlette nuevo vs Streamlit).
+# En Streamlit Cloud también elegí Python 3.12 en: Manage app → Settings → Advanced.
+streamlit==1.56.0
+starlette>=0.40.0,<0.53.0
+
 extra-streamlit-components
 python-dotenv
 anthropic
