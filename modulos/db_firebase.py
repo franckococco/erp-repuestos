@@ -1,6 +1,7 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
 import os
+import time
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import math
@@ -30,6 +31,27 @@ from modulos.precios_proveedor import (
 load_dotenv(override=True)
 
 STOCK_CRITICO_DEFAULT = 3
+_CARRITO_CACHE_TTL_SEG = 12.0
+
+
+def _carrito_cache_keys(vendedor):
+    vid = str(vendedor)
+    return f"_carrito_cache_{vid}", f"_carrito_cache_ts_{vid}"
+
+
+def invalidar_cache_carrito(vendedor=None):
+    """Limpia cache de carrito en sesión (uno o todos)."""
+    try:
+        if vendedor is None:
+            for k in list(st.session_state.keys()):
+                if str(k).startswith("_carrito_cache"):
+                    st.session_state.pop(k, None)
+            return
+        k, ts = _carrito_cache_keys(vendedor)
+        st.session_state.pop(k, None)
+        st.session_state.pop(ts, None)
+    except Exception:
+        pass
 
 
 def ubicacion_default():
@@ -305,6 +327,7 @@ def restaurar_inventario_csv(df_csv, modo="sobreescribir"):
     return True, f"Procesados {operaciones} repuestos agrupados en modo '{modo}'."
 
 # --- GESTIÓN DE CLIENTES ---
+@st.cache_data(ttl=300)
 def obtener_clientes() -> dict:
     docs = get_db().collection("clientes").get()
     return {d.id: d.to_dict() or {} for d in docs}
@@ -348,6 +371,7 @@ def configurar_cliente(
         "actualizado": datetime.now(timezone.utc),
     }
     get_db().collection("clientes").document(id_cli).set(payload, merge=True)
+    _limpiar_cache_streamlit(obtener_clientes)
     try:
         from modulos.cliente_resolver import invalidar_cache_clientes_mostrador
         invalidar_cache_clientes_mostrador()
@@ -475,6 +499,7 @@ def eliminar_item_carrito(vendedor, item_id):
     if not ref.get().exists:
         return False, "Ítem no encontrado en el presupuesto."
     ref.delete()
+    invalidar_cache_carrito(vendedor)
     return True, "Ítem quitado del presupuesto."
 
 
@@ -506,6 +531,7 @@ def actualizar_cantidad_item_carrito(vendedor, item_id, nueva_cantidad):
         )
 
     ref_item.update({"cantidad": cant})
+    invalidar_cache_carrito(vendedor)
     return True, f"Cantidad actualizada a {cant} u."
 
 
@@ -525,6 +551,7 @@ def actualizar_precio_item_carrito(vendedor, item_id, nuevo_precio):
         return False, "Ítem no encontrado en el presupuesto."
 
     ref_item.update({"precio_unitario": precio})
+    invalidar_cache_carrito(vendedor)
     return True, f"Precio actualizado a ${precio:,.2f}."
 
 
@@ -679,9 +706,16 @@ def reabrir_presupuesto_en_carrito(vendedor, pres_id, reemplazar=True):
 def eliminar_cliente(cuit_dni):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     get_db().collection("clientes").document(id_cli).delete()
+    _limpiar_cache_streamlit(obtener_clientes)
+    try:
+        from modulos.cliente_resolver import invalidar_cache_clientes_mostrador
+        invalidar_cache_clientes_mostrador()
+    except Exception:
+        pass
     return True
 
 # --- GESTIÓN DE MARCAS ---
+@st.cache_data(ttl=300)
 def obtener_marcas() -> list:
     docs = get_db().collection("marcas").get()
     return [d.id for d in docs]
@@ -691,10 +725,12 @@ def agregar_marca(nombre):
     get_db().collection("marcas").document(id_marca).set({
         "creado": datetime.now(timezone.utc)
     })
+    _limpiar_cache_streamlit(obtener_marcas)
 
 def eliminar_marca(nombre):
     id_marca = str(nombre).upper().strip()
     get_db().collection("marcas").document(id_marca).delete()
+    _limpiar_cache_streamlit(obtener_marcas)
     return True
 
 # --- GESTIÓN DE PROVEEDORES ---
@@ -1831,6 +1867,7 @@ def agregar_linea_manual_carrito(
         "fuera_stock": True,
         "manual": True,
     })
+    invalidar_cache_carrito(vendedor)
     return True, f"Agregado manual (fuera de stock): {etiqueta}"
 
 
@@ -1874,6 +1911,7 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
             "cantidad": firestore.Increment(cant),  # type: ignore
         }, merge=True)
 
+        invalidar_cache_carrito(vendedor)
         return True, f"Agregado: {descripcion} ({marca_req})"
     except Exception as exc:
         nombre = type(exc).__name__
@@ -1885,21 +1923,35 @@ def agregar_al_carrito(vendedor, id_producto, cantidad=1):
         raise
 
 def obtener_carrito(vendedor) -> list:
-    docs = get_db().collection("presupuestos_activos").document(vendedor).collection("items").get()
+    """Lee ítems del presupuesto activo. Cache corto en sesión (TTL ~12s)."""
+    k, ts_k = _carrito_cache_keys(vendedor)
+    try:
+        ahora = time.time()
+        if k in st.session_state and (ahora - float(st.session_state.get(ts_k, 0))) < _CARRITO_CACHE_TTL_SEG:
+            return list(st.session_state[k])
+    except Exception:
+        pass
+
+    docs = get_db().collection("presupuestos_activos").document(str(vendedor)).collection("items").get()
     carrito = []
-    
     for d in docs:
         item = d.to_dict() or {}
         item['id'] = d.id
         item['subtotal'] = float(item.get('precio_unitario', 0)) * int(item.get('cantidad', 0))
         carrito.append(item)
-        
+
+    try:
+        st.session_state[k] = carrito
+        st.session_state[ts_k] = time.time()
+    except Exception:
+        pass
     return carrito
 
 def vaciar_carrito(vendedor):
-    docs = get_db().collection("presupuestos_activos").document(vendedor).collection("items").get()
+    docs = get_db().collection("presupuestos_activos").document(str(vendedor)).collection("items").get()
     for d in docs:
         d.reference.delete()
+    invalidar_cache_carrito(vendedor)
 
 def validar_carrito_para_venta(vendedor):
     items = obtener_carrito(vendedor)
@@ -2095,8 +2147,16 @@ def invalidar_cache_datos():
     _limpiar_cache_streamlit(obtener_inventario_completo)
     _limpiar_cache_streamlit(_indice_resolucion_productos)
     _limpiar_cache_streamlit(obtener_proveedores)
+    _limpiar_cache_streamlit(obtener_clientes)
+    _limpiar_cache_streamlit(obtener_marcas)
+    invalidar_cache_carrito()
     try:
         from modulos.cliente_resolver import invalidar_cache_clientes_mostrador
         invalidar_cache_clientes_mostrador()
+    except Exception:
+        pass
+    try:
+        from modulos.mostrador_voz_flujo import invalidar_cache_inventario_mostrador
+        invalidar_cache_inventario_mostrador()
     except Exception:
         pass
