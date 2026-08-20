@@ -86,6 +86,26 @@ def _label_tipo_cliente_negocio(tipo: str) -> str:
     return TIPOS_CLIENTE_NEGOCIO.get(str(tipo or "ocasional"), "Cliente ocasional")
 
 
+def establecer_cliente_mostrador(cliente_dict: dict):
+    """Fija cliente activo y tipo de comprobante (Factura A/B) para la venta."""
+    descartar_panels_operacion_anterior()
+    _invalidar_pdf_presupuesto_mostrador()
+    st.session_state.cliente_activo = normalizar_cliente_activo(cliente_dict)
+    cbte = str(st.session_state.cliente_activo.get("tipo_comprobante", "6"))
+    st.session_state.mostrador_intent_sugerido = (
+        "factura_a" if cbte == "1" else "factura_b"
+    )
+    st.session_state.pop("cliente_pendiente_confirmar", None)
+
+
+def _copias_ticket_vendedor(vendedor) -> int:
+    try:
+        n = int(st.session_state.get(f"mostrador_copias_ticket_{vendedor}", 1))
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(n, 10))
+
+
 def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     base = cliente_consumidor_final()
     if not isinstance(cliente, dict):
@@ -1128,14 +1148,10 @@ def render_seccion_cliente_mostrador():
     )
     # Apilados: esta sección vive en 1/3 del layout POS; columns(2) deja botones ilegibles.
     if st.button("Consumidor final", use_container_width=True, key="cli_btn_cf"):
-        descartar_panels_operacion_anterior()
-        _invalidar_pdf_presupuesto_mostrador()
-        st.session_state.cliente_activo = cliente_consumidor_final()
+        establecer_cliente_mostrador(cliente_consumidor_final())
         st.rerun()
     if st.button("Limpiar cliente", use_container_width=True, key="cli_btn_limpiar"):
-        descartar_panels_operacion_anterior()
-        _invalidar_pdf_presupuesto_mostrador()
-        st.session_state.cliente_activo = cliente_consumidor_final()
+        establecer_cliente_mostrador(cliente_consumidor_final())
         st.rerun()
 
     with st.expander("🔍 Buscar o cargar cliente", expanded=False):
@@ -1165,12 +1181,7 @@ def render_seccion_cliente_mostrador():
                     )
                     if st.button("Usar cliente seleccionado", key="mostrador_usar_cliente", type="primary"):
                         if sel_id:
-                            descartar_panels_operacion_anterior()
-                            _invalidar_pdf_presupuesto_mostrador()
-                            st.session_state.cliente_activo = cliente_db_a_activo(
-                                clientes_db.get(sel_id, {})
-                            )
-                            st.session_state.pop("cliente_pendiente_confirmar", None)
+                            establecer_cliente_mostrador(clientes_db.get(sel_id, {}))
                             st.rerun()
                         else:
                             st.warning("Seleccioná un cliente de la lista.")
@@ -1634,10 +1645,14 @@ def carrito_a_items_factura(carrito, descuento_pct):
     return items
 
 
-def _auto_imprimir_ticket(html_ticket):
+def _auto_imprimir_ticket(html_ticket, vendedor=None):
     """Marca ticket HTML para abrir diálogo de impresión al mostrar el panel."""
     if html_ticket:
         st.session_state["_ticket_auto_print_html"] = html_ticket
+        if vendedor is not None:
+            st.session_state["_ticket_auto_print_copias"] = _copias_ticket_vendedor(vendedor)
+        else:
+            st.session_state.setdefault("_ticket_auto_print_copias", 1)
 
 
 def _formato_nro_comprobante(datos):
@@ -1758,25 +1773,37 @@ def _html_ticket_fresco_desde_rec(rec: dict):
     return html_actual
 
 
-def _html_con_auto_print(html_ticket: str) -> str:
+def _html_con_auto_print(html_ticket: str, copias: int = 1) -> str:
     """Inyecta disparo de window.print al cargar (para impresión 1 clic)."""
     if not html_ticket:
         return ""
-    if "window.print()" in html_ticket and "onload" in html_ticket.lower():
+    copias = max(1, min(int(copias or 1), 10))
+    if copias == 1 and "window.print()" in html_ticket and "onload" in html_ticket.lower():
         return html_ticket
-    script = (
-        "<script>"
-        "window.addEventListener('load',function(){"
-        "setTimeout(function(){try{window.print();}catch(e){}},450);"
-        "});"
-        "</script>"
-    )
+    if copias == 1:
+        script = (
+            "<script>"
+            "window.addEventListener('load',function(){"
+            "setTimeout(function(){try{window.print();}catch(e){}},450);"
+            "});"
+            "</script>"
+        )
+    else:
+        script = (
+            "<script>"
+            "window.addEventListener('load',function(){"
+            f"for(var i=0;i<{copias};i++){{"
+            "(function(n){setTimeout(function(){try{window.print();}catch(e){}},450+n*900);})(i);"
+            "}"
+            "});"
+            "</script>"
+        )
     if "</body>" in html_ticket:
         return html_ticket.replace("</body>", script + "</body>")
     return html_ticket + script
 
 
-def _disparar_impresion_ticket(html_ticket: str, key_suffix: str = "print"):
+def _disparar_impresion_ticket(html_ticket: str, key_suffix: str = "print", copias: int = 1):
     """
     Abre el diálogo de impresión con un iframe con altura real.
     (height=0 suele bloquearse en Chrome/Edge y el usuario no ve botón.)
@@ -1787,7 +1814,7 @@ def _disparar_impresion_ticket(html_ticket: str, key_suffix: str = "print"):
 
     st.caption("Si no se abrió el diálogo, volvé a pulsar **IMPRIMIR TICKET**.")
     components.html(
-        _html_con_auto_print(html_ticket),
+        _html_con_auto_print(html_ticket, copias=copias),
         height=720,
         scrolling=True,
     )
@@ -1870,7 +1897,13 @@ def _render_acciones_comprobante(nro, html_ticket, pdf_a4, key_prefix, solo_tick
 
     print_html = st.session_state.pop(f"{key_prefix}_ticket_print_html", None)
     if print_html:
-        _disparar_impresion_ticket(print_html, key_suffix=f"{key_prefix}_manual")
+        copias = st.session_state.pop(
+            f"{key_prefix}_ticket_print_copias",
+            st.session_state.get("_ticket_auto_print_copias", 1),
+        )
+        _disparar_impresion_ticket(
+            print_html, key_suffix=f"{key_prefix}_manual", copias=copias
+        )
 
 
 def _render_acciones_pdf_compactas(nro, html_ticket, pdf_a4, key_prefix, solo_ticket=False):
@@ -1927,11 +1960,17 @@ def render_factura_arca_exitosa(key_suffix=""):
         # Disparo manual (botón de arriba) — mismo key que acciones
         print_manual = st.session_state.pop(f"fact_{ks}_ticket_print_html", None)
         auto_print = st.session_state.pop("_ticket_auto_print_html", None)
+        copias_imp = st.session_state.pop("_ticket_auto_print_copias", None)
+        if copias_imp is None:
+            vend_rec = str(rec.get("vendedor") or "")
+            copias_imp = _copias_ticket_vendedor(vend_rec) if vend_rec else 1
         html_a_imprimir = print_manual or auto_print
         if html_a_imprimir:
             if auto_print and not print_manual:
                 st.info("Abriendo diálogo de impresión…")
-            _disparar_impresion_ticket(html_a_imprimir, key_suffix=f"fact_{ks}_auto")
+            _disparar_impresion_ticket(
+                html_a_imprimir, key_suffix=f"fact_{ks}_auto", copias=copias_imp
+            )
         else:
             _render_vista_previa_ticket_html(html_ticket, f"fact_{ks}")
 
@@ -2190,7 +2229,7 @@ def ejecutar_emitir_factura_arca(
             vendedor=str(vendedor),
             observacion=_observacion_ticket(vendedor),
         )
-        _auto_imprimir_ticket(html_ticket)
+        _auto_imprimir_ticket(html_ticket, vendedor=vendedor)
         st.write("Generando factura A4…")
         pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
         status.update(label="CAE otorgado", state="complete")
@@ -2269,7 +2308,7 @@ def _facturar_desde_carrito(vendedor, carrito, total_final, desc_porc, forma_pag
         vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=solo_ticket
     )
     if ok and datos:
-        _auto_imprimir_ticket(datos.get("html_ticket"))
+        _auto_imprimir_ticket(datos.get("html_ticket"), vendedor=vendedor)
     return ok, msj
 
 
@@ -2308,7 +2347,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
                 vendedor, carrito, total_final, desc_porc, forma_pago
             )
         if ok and datos:
-            _auto_imprimir_ticket(datos.get("html_ticket"))
+            _auto_imprimir_ticket(datos.get("html_ticket"), vendedor=vendedor)
         return ok, msj
 
     if tipo == "imprimir_ticket":
@@ -2317,7 +2356,7 @@ def _ejecutar_accion_pendiente(vendedor, pendiente, carrito, total_final, desc_p
                 vendedor, carrito, total_final, desc_porc, forma_pago, solo_ticket=True
             )
         if ok and datos:
-            _auto_imprimir_ticket(datos.get("html_ticket"))
+            _auto_imprimir_ticket(datos.get("html_ticket"), vendedor=vendedor)
         return ok, msj
 
     if tipo == "guardar_presupuesto":
@@ -2497,8 +2536,10 @@ def render_panel_cobro_mostrador(
     """Totales, pago en tarjetas (tiles) y botones de facturación."""
     listo_ticket = bool(st.session_state.get("mostrador_listo_para_ticket"))
     intent = st.session_state.get("mostrador_intent_sugerido", "factura_b")
+    modo_caja = bool(st.session_state.get("mostrador_modo_caja"))
     listo_para_cerrar = listo_ticket or (
-        bool(carrito) and intent in ("factura_b", "factura_a", "presupuesto")
+        bool(carrito)
+        and (modo_caja or intent in ("factura_b", "factura_a", "presupuesto"))
     )
 
     with st.container(border=True):
@@ -2533,6 +2574,15 @@ def render_panel_cobro_mostrador(
                     key=f"mostrador_obs_ticket_{vendedor}",
                     height=68,
                     placeholder="Ej: Garantía 30 días · Retira mañana · Dejar en mostrador…",
+                )
+
+                st.number_input(
+                    "Copias del ticket",
+                    min_value=1,
+                    max_value=10,
+                    step=1,
+                    key=f"mostrador_copias_ticket_{vendedor}",
+                    help="Cantidad de tickets a imprimir al facturar.",
                 )
 
                 total_a_cobrar = float(total_final)
@@ -2585,7 +2635,7 @@ def render_panel_cobro_mostrador(
                     else:
                         st.error(msj)
         else:
-            st.caption("Agregá ítems por teclado o voz para facturar.")
+            st.caption("Agregá ítems para facturar.")
 
         with st.expander("Más acciones", expanded=False):
             if intent != "presupuesto" or not listo_para_cerrar:

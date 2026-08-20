@@ -670,9 +670,6 @@ elif pagina == "mostrador":
 
     init_credenciales_arca_session()
     from modulos.ui_mostrador import (
-        render_seccion_cliente_mostrador,
-        render_credenciales_arca,
-        render_buscador_productos,
         render_carrito_grilla,
         render_presupuestos_guardados,
         render_panel_coincidencias_mostrador,
@@ -683,9 +680,10 @@ elif pagina == "mostrador":
         carrito_efectivo_mostrador,
         calcular_totales_carrito,
         limpiar_venta_mostrador,
+        render_credenciales_arca,
         VENDEDOR_MOSTRADOR,
     )
-    from modulos.ui_venta_chat import render_venta_chat
+    from modulos.ui_mostrador_caja import render_mostrador_caja
 
     from modulos.ui_estilos import aplicar_estilos_mostrador
     from modulos.mostrador_voz_flujo import inventario_cache_mostrador
@@ -693,12 +691,12 @@ elif pagina == "mostrador":
     aplicar_estilos_mostrador()
     c_tit, c_vista, c_vend = st.columns([2.2, 2.2, 1.6], gap="small")
     with c_tit:
-        titulo_seccion("Mostrador / Presupuesto", "Ctrl+M")
+        titulo_seccion("Mostrador / Caja", "Ctrl+M")
     with c_vista:
         st.write("")  # alinea con título
         vista_mostrador = st.radio(
             "Vista mostrador",
-            ["🛒 Caja / Presupuesto", "🧾 Facturas ARCA"],
+            ["🛒 Caja", "🧾 Facturas ARCA"],
             horizontal=True,
             label_visibility="collapsed",
             key="mostrador_vista_principal",
@@ -729,8 +727,9 @@ elif pagina == "mostrador":
         render_historial_facturas_arca()
     else:
         inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
-        render_venta_chat(
+        render_mostrador_caja(
             vendedor,
+            inv_mostrador,
             obtener_inventario_completo,
             buscar_en_inventario,
             agrupar_por_maestro,
@@ -740,15 +739,10 @@ elif pagina == "mostrador":
             render_panel_cobro_mostrador=render_panel_cobro_mostrador,
             render_factura_arca_exitosa=render_factura_arca_exitosa,
             render_credenciales_arca=render_credenciales_arca,
-            render_seccion_cliente_mostrador=render_seccion_cliente_mostrador,
-            render_buscador_productos=render_buscador_productos,
             render_presupuestos_guardados=render_presupuestos_guardados,
-            filtrar_inventario=filtrar_inventario,
             carrito_efectivo_mostrador=carrito_efectivo_mostrador,
             calcular_totales_carrito=calcular_totales_carrito,
             limpiar_venta_mostrador=limpiar_venta_mostrador,
-            inv_mostrador=inv_mostrador,
-            decodificar_qr_fn=decodificar_qr_desde_imagen,
         )
 
 # --- ASISTENTE ---

@@ -161,6 +161,17 @@ def aplicar_estilos_mostrador():
             color: #0f172a;
             font-size: 0.92rem;
         }
+        .mostrador-caja-busqueda {
+            background: #eff6ff;
+            border: 2px solid #3b82f6;
+            border-radius: 0.55rem;
+            padding: 0.55rem 0.85rem 0.35rem;
+            margin-bottom: 0.5rem;
+        }
+        .mostrador-caja-busqueda strong {
+            color: #1e3a8a;
+            font-size: 1rem;
+        }
         div[data-testid="stRadio"] label p {
             font-size: 0.88rem !important;
             line-height: 1.3 !important;
