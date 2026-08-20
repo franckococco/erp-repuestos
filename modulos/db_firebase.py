@@ -340,6 +340,8 @@ def cliente_consumidor_final() -> dict:
         "tipo_comprobante": "6",
         "etiqueta_descuento": "",
         "tipo_cliente": "ocasional",
+        "telefono": "",
+        "condicion_iva": "",
     }
 
 
@@ -350,6 +352,8 @@ def configurar_cliente(
     tipo_comprobante="6",
     etiqueta_descuento="",
     tipo_cliente="ocasional",
+    telefono="",
+    condicion_iva="",
 ):
     id_cli = "".join(filter(str.isdigit, str(cuit_dni)))
     if not id_cli:
@@ -368,6 +372,8 @@ def configurar_cliente(
         "tipo_comprobante": cbte,
         "tipo_cliente": tipo,
         "etiqueta_descuento": etq,
+        "telefono": str(telefono or "").strip(),
+        "condicion_iva": str(condicion_iva or "").strip(),
         "actualizado": datetime.now(timezone.utc),
     }
     get_db().collection("clientes").document(id_cli).set(payload, merge=True)
@@ -395,6 +401,8 @@ def cliente_db_a_activo(datos: dict) -> dict:
         "tipo_comprobante": cbte,
         "etiqueta_descuento": str(datos.get("etiqueta_descuento", "") or "").strip().upper(),
         "tipo_cliente": str(datos.get("tipo_cliente", "ocasional") or "ocasional"),
+        "telefono": str(datos.get("telefono") or datos.get("celular") or "").strip(),
+        "condicion_iva": str(datos.get("condicion_iva") or "").strip(),
     }
 
 

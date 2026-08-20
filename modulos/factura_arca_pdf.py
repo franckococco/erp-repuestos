@@ -109,6 +109,12 @@ def crear_ticket(
         ancho_util, 3, f"CUIT/DNI: {_get_str(datos_cliente, 'cuit', '00000000000')}",
         new_x="LMARGIN", new_y="NEXT",
     )
+    tel_cli = _get_str(datos_cliente, "telefono", "").strip()
+    if tel_cli:
+        pdf.cell(ancho_util, 3, f"Cel: {tel_cli}", new_x="LMARGIN", new_y="NEXT")
+    cond_cli = _get_str(datos_cliente, "condicion_iva", "").strip()
+    if cond_cli:
+        pdf.cell(ancho_util, 3, cond_cli, new_x="LMARGIN", new_y="NEXT")
 
     pdf.line(margen_x, pdf.get_y(), 58 - margen_x, pdf.get_y())
     pdf.set_y(pdf.get_y() + 1)

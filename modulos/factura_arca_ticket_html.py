@@ -332,6 +332,10 @@ def crear_ticket_html(
         if cuit_generico
         else f'<div class="sub">CUIT/DNI: {esc(cuit_cli_dig or cuit_cli_raw)}</div>'
     )
+    telefono_cli = str(cli.get("telefono") or "").strip()
+    linea_tel = (
+        f'<div class="sub">Cel: {esc(telefono_cli)}</div>' if telefono_cli else ""
+    )
 
     logo_uri = _logo_hafid_data_uri()
     logo_html = (
@@ -689,6 +693,7 @@ def crear_ticket_html(
     <div class="sec-label">Cliente</div>
     <div class="cliente">{esc(nombre_mostrar)}</div>
     {linea_cuit}
+    {linea_tel}
     {linea_cond}
   </div>
 

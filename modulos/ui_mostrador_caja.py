@@ -34,6 +34,11 @@ def _es_consumidor_final(cli: dict) -> bool:
     return nombre in ("", "CONSUMIDOR FINAL") and _cuit_vacio((cli or {}).get("cuit"))
 
 
+def sincronizar_cliente_desde_caja():
+    """Expone sync para usar antes de facturar."""
+    _sync_cliente_caja_desde_inputs()
+
+
 def _sync_cliente_caja_desde_inputs():
     from modulos.ui_mostrador import normalizar_cliente_activo
 
@@ -46,6 +51,8 @@ def _sync_cliente_caja_desde_inputs():
         desc = float(st.session_state.get("caja_desc_cli") or 0)
     except (TypeError, ValueError):
         desc = 0.0
+    telefono = str(st.session_state.get("caja_celular_cli") or "").strip()
+    condicion_iva = str(st.session_state.get("caja_condicion_iva") or "").strip()
     actual = st.session_state.get("cliente_activo") or {}
     st.session_state.cliente_activo = normalizar_cliente_activo({
         **actual,
@@ -53,6 +60,8 @@ def _sync_cliente_caja_desde_inputs():
         "cuit": cuit or "00000000000",
         "tipo_comprobante": tipo,
         "descuento": desc,
+        "telefono": telefono,
+        "condicion_iva": condicion_iva,
     })
     st.session_state.mostrador_intent_sugerido = (
         "factura_a" if tipo == "1" else "factura_b"
@@ -65,6 +74,8 @@ def _cargar_inputs_cliente(cli: dict):
     st.session_state.caja_cuit_cli = "" if _cuit_vacio(cli.get("cuit")) else _digitos(cli.get("cuit"))
     st.session_state.caja_tipo_fc = str(cli.get("tipo_comprobante") or "6")
     st.session_state.caja_desc_cli = float(cli.get("descuento") or 0)
+    st.session_state.caja_celular_cli = str(cli.get("telefono") or cli.get("celular") or "")
+    st.session_state.caja_condicion_iva = str(cli.get("condicion_iva") or "")
 
 
 def _usar_cliente_encontrado(datos: dict):
@@ -101,6 +112,8 @@ def _aplicar_tipo_factura(tipo: str):
             cuit,
             float(st.session_state.get("caja_desc_cli") or 0),
             tipo,
+            telefono=str(st.session_state.get("caja_celular_cli") or "").strip(),
+            condicion_iva=str(st.session_state.get("caja_condicion_iva") or "").strip(),
         )
         if not ok:
             st.session_state.caja_msg_cli = msj
@@ -110,6 +123,8 @@ def _aplicar_tipo_factura(tipo: str):
             "cuit": cuit,
             "descuento": float(st.session_state.get("caja_desc_cli") or 0),
             "tipo_comprobante": tipo,
+            "telefono": str(st.session_state.get("caja_celular_cli") or "").strip(),
+            "condicion_iva": str(st.session_state.get("caja_condicion_iva") or "").strip(),
         })
         _cargar_inputs_cliente(st.session_state.cliente_activo)
     st.session_state.pop("caja_msg_cli", None)
@@ -208,7 +223,7 @@ def render_barra_cliente_caja():
     if msg:
         st.warning(msg)
 
-    c_nom, c_cuit, c_dto = st.columns([3, 2, 1])
+    c_nom, c_cuit, c_tel, c_dto = st.columns([3, 2, 2, 1])
     c_nom.text_input(
         "Nombre",
         key="caja_nombre_cli",
@@ -218,7 +233,13 @@ def render_barra_cliente_caja():
     c_cuit.text_input(
         "CUIT / DNI",
         key="caja_cuit_cli",
-        placeholder="11 dígitos para Factura A",
+        placeholder="CUIT, DNI o CUIL",
+        on_change=_sync_cliente_caja_desde_inputs,
+    )
+    c_tel.text_input(
+        "Celular",
+        key="caja_celular_cli",
+        placeholder="11 1234-5678",
         on_change=_sync_cliente_caja_desde_inputs,
     )
     c_dto.number_input(
@@ -228,10 +249,20 @@ def render_barra_cliente_caja():
         key="caja_desc_cli",
         on_change=_sync_cliente_caja_desde_inputs,
     )
+    st.text_input(
+        "Condición IVA (opcional)",
+        key="caja_condicion_iva",
+        placeholder="Ej: IVA Exento, Monotributo, Responsable inscripto…",
+        on_change=_sync_cliente_caja_desde_inputs,
+    )
 
     nombre_mostrar = str(st.session_state.get("caja_nombre_cli") or "").strip() or "CONSUMIDOR FINAL"
     cuit_mostrar = _cuit_visible(st.session_state.get("caja_cuit_cli"))
-    st.caption(f"Se factura a **{nombre_mostrar}** · CUIT {cuit_mostrar}")
+    cel_mostrar = str(st.session_state.get("caja_celular_cli") or "").strip()
+    resumen = f"Se factura a **{nombre_mostrar}** · CUIT {cuit_mostrar}"
+    if cel_mostrar:
+        resumen += f" · Cel {cel_mostrar}"
+    st.caption(resumen)
     if tipo == "1" and not _cuit_ok_factura_a(st.session_state.get("caja_cuit_cli")):
         st.warning("Factura A: el CUIT tiene que tener 11 dígitos. Si no, usá Factura B.")
 
@@ -406,7 +437,10 @@ def render_mostrador_caja(
         render_factura_arca_exitosa("caja")
         if st.button("✅ Nueva venta", type="primary", key=f"nueva_venta_caja_{vendedor}"):
             limpiar_venta_mostrador(vendedor, reset_cliente=True)
-            for k in ("caja_nombre_cli", "caja_cuit_cli", "caja_tipo_fc", "caja_desc_cli"):
+            for k in (
+                "caja_nombre_cli", "caja_cuit_cli", "caja_tipo_fc", "caja_desc_cli",
+                "caja_celular_cli", "caja_condicion_iva",
+            ):
                 st.session_state.pop(k, None)
             st.rerun()
         return
@@ -425,7 +459,10 @@ def render_mostrador_caja(
             help="Vacía carrito y vuelve a consumidor final.",
         ):
             cancelar_operacion_mostrador(vendedor, reset_cliente=True)
-            for k in ("caja_nombre_cli", "caja_cuit_cli", "caja_tipo_fc", "caja_desc_cli"):
+            for k in (
+                "caja_nombre_cli", "caja_cuit_cli", "caja_tipo_fc", "caja_desc_cli",
+                "caja_celular_cli", "caja_condicion_iva",
+            ):
                 st.session_state.pop(k, None)
             st.rerun()
 

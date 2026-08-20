@@ -60,6 +60,7 @@ def armar_contexto_comprobante(
             "nombre": _s(cli, "nombre", "CONSUMIDOR FINAL"),
             "condicion_iva": condicion_iva_cliente(cli),
             "domicilio": _s(cli, "domicilio", ""),
+            "telefono": _s(cli, "telefono", ""),
             "condicion_venta": _s({"p": forma_pago}, "p", "Contado"),
         },
         "cae": {

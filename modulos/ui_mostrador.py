@@ -107,6 +107,29 @@ def _copias_ticket_vendedor(vendedor) -> int:
     return max(1, min(n, 10))
 
 
+def persistir_cliente_mostrador(cli: dict) -> None:
+    """Guarda o actualiza el cliente en Firestore (no aplica a consumidor final)."""
+    nombre = str((cli or {}).get("nombre") or "").strip().upper()
+    cuit = "".join(filter(str.isdigit, str((cli or {}).get("cuit") or "")))
+    if not nombre or nombre == "CONSUMIDOR FINAL":
+        return
+    if not cuit or set(cuit) <= {"0"}:
+        return
+    try:
+        configurar_cliente(
+            nombre,
+            cuit,
+            float((cli or {}).get("descuento", 0)),
+            str((cli or {}).get("tipo_comprobante", "6")),
+            etiqueta_descuento=str((cli or {}).get("etiqueta_descuento") or ""),
+            tipo_cliente=str((cli or {}).get("tipo_cliente") or "ocasional"),
+            telefono=str((cli or {}).get("telefono") or ""),
+            condicion_iva=str((cli or {}).get("condicion_iva") or ""),
+        )
+    except Exception:
+        pass
+
+
 def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     base = cliente_consumidor_final()
     if not isinstance(cliente, dict):
@@ -129,6 +152,8 @@ def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
         "tipo_comprobante": cbte,
         "etiqueta_descuento": etiqueta,
         "tipo_cliente": tipo_cli,
+        "telefono": str(cliente.get("telefono") or cliente.get("celular") or "").strip(),
+        "condicion_iva": str(cliente.get("condicion_iva") or "").strip(),
     }
 
 
@@ -1695,6 +1720,8 @@ def _cliente_para_pdf(cliente):
         "descuento": cli.get("descuento", 0.0),
         "etiqueta_descuento": cli.get("etiqueta_descuento", ""),
         "tipo_cliente": cli.get("tipo_cliente", "ocasional"),
+        "telefono": cli.get("telefono", ""),
+        "condicion_iva": cli.get("condicion_iva", ""),
     }
 
 
@@ -2210,6 +2237,13 @@ def ejecutar_emitir_factura_arca(
     if not ok_val:
         return False, msg_val, None
 
+    if st.session_state.get("mostrador_modo_caja"):
+        try:
+            from modulos.ui_mostrador_caja import sincronizar_cliente_desde_caja
+            sincronizar_cliente_desde_caja()
+        except Exception:
+            pass
+
     cli = normalizar_cliente_activo(st.session_state.cliente_activo)
     cuit_cli = "".join(filter(str.isdigit, str(cli.get("cuit") or "")))
     if str(cli.get("tipo_comprobante")) == "1":
@@ -2222,6 +2256,8 @@ def ejecutar_emitir_factura_arca(
         "cuit": cli["cuit"],
         "nombre": cli["nombre"],
         "cbte_tipo": cli["tipo_comprobante"],
+        "telefono": cli.get("telefono", ""),
+        "condicion_iva": cli.get("condicion_iva", ""),
     }
     items_fc = carrito_a_items_factura(carrito, desc_porc)
     interes_pct = 0.0
@@ -2260,6 +2296,8 @@ def ejecutar_emitir_factura_arca(
         st.write("Generando factura A4…")
         pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
         status.update(label="CAE otorgado", state="complete")
+
+    persistir_cliente_mostrador(cli)
 
     exito_stock, msj_stock = confirmar_venta(str(vendedor))
     if not exito_stock:
