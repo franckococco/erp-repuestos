@@ -114,7 +114,8 @@ def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
     cbte = str(cliente.get("tipo_comprobante", cliente.get("cbte_tipo", "6"))).strip()
     if cbte not in ("1", "6"):
         cbte = "6"
-    cuit = "".join(filter(str.isdigit, str(cliente.get("cuit", "00000000000")))) or "00000000000"
+    cuit_raw = cliente.get("cuit") or cliente.get("cuit_dni") or "00000000000"
+    cuit = "".join(filter(str.isdigit, str(cuit_raw))) or "00000000000"
     etiqueta = str(cliente.get("etiqueta_descuento", "") or "").strip().upper()
     tipo_cli = str(cliente.get("tipo_cliente", "ocasional") or "ocasional").strip().lower()
     if tipo_cli not in TIPOS_CLIENTE_NEGOCIO:
@@ -2210,6 +2211,13 @@ def ejecutar_emitir_factura_arca(
         return False, msg_val, None
 
     cli = normalizar_cliente_activo(st.session_state.cliente_activo)
+    cuit_cli = "".join(filter(str.isdigit, str(cli.get("cuit") or "")))
+    if str(cli.get("tipo_comprobante")) == "1":
+        if len(cuit_cli) != 11 or set(cuit_cli) <= {"0"}:
+            return False, (
+                "Factura A necesita el CUIT del cliente (11 dígitos). "
+                "Cargalo arriba o usá Factura B / Consumidor final."
+            ), None
     datos_cliente = {
         "cuit": cli["cuit"],
         "nombre": cli["nombre"],
@@ -2578,15 +2586,30 @@ def render_panel_cobro_mostrador(
                 actual = _forma_pago_actual(vendedor)
                 if actual not in FORMAS_PAGO:
                     actual = "Contado"
-                forma_pago = st.radio(
-                    "Forma de pago",
-                    list(FORMAS_PAGO),
-                    index=list(FORMAS_PAGO).index(actual),
-                    horizontal=True,
-                    label_visibility="collapsed",
-                    key=f"pago_arca_{vendedor}",
-                )
-                _set_forma_pago(vendedor, forma_pago)
+                if modo_caja:
+                    cols_pago = st.columns(len(FORMAS_PAGO))
+                    for col, fp in zip(cols_pago, FORMAS_PAGO):
+                        if col.button(
+                            fp,
+                            type="primary" if fp == actual else "secondary",
+                            use_container_width=True,
+                            key=f"pago_caja_{fp}_{vendedor}",
+                        ):
+                            _set_forma_pago(vendedor, fp)
+                            st.rerun()
+                    forma_pago = _forma_pago_actual(vendedor)
+                    if forma_pago not in FORMAS_PAGO:
+                        forma_pago = "Contado"
+                else:
+                    forma_pago = st.radio(
+                        "Forma de pago",
+                        list(FORMAS_PAGO),
+                        index=list(FORMAS_PAGO).index(actual),
+                        horizontal=True,
+                        label_visibility="collapsed",
+                        key=f"pago_arca_{vendedor}",
+                    )
+                    _set_forma_pago(vendedor, forma_pago)
 
                 st.text_area(
                     "Observación (opcional, sale en el ticket)",

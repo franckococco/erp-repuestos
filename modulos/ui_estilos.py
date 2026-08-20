@@ -172,6 +172,13 @@ def aplicar_estilos_mostrador():
             color: #1e3a8a;
             font-size: 1rem;
         }
+        .mostrador-caja-cliente {
+            background: #ffffff;
+            border: 2px solid #475569;
+            border-radius: 0.5rem;
+            padding: 0.55rem 0.75rem 0.35rem;
+            margin: 0.35rem 0 0.65rem;
+        }
         div[data-testid="stRadio"] label p {
             font-size: 0.88rem !important;
             line-height: 1.3 !important;
