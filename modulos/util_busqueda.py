@@ -282,11 +282,48 @@ _CALIFICADORES_TIPO = frozenset({
 })
 
 
+def _marcas_catalogo_desde_items(items) -> set:
+    """Marcas presentes en el inventario (para detectar 'mahle', 'bosch', etc.)."""
+    out = set()
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        raw = str(it.get("marca") or it.get("condicion") or "").strip()
+        if not raw:
+            continue
+        m = normalizar_para_busqueda(raw)
+        if len(m) >= 2:
+            out.add(m)
+        for tok in m.split():
+            if len(tok) >= 2:
+                out.add(tok)
+    return out
+
+
+def _item_coincide_marca(item, marca_norm: str) -> bool:
+    if not marca_norm or not isinstance(item, dict):
+        return False
+    marca_item = normalizar_para_busqueda(
+        str(item.get("marca") or item.get("condicion") or "")
+    )
+    if marca_item and (
+        marca_norm == marca_item
+        or marca_norm in marca_item.split()
+        or marca_item.startswith(marca_norm)
+        or marca_norm.startswith(marca_item)
+    ):
+        return True
+    texto = normalizar_para_busqueda(
+        f"{item.get('descripcion', '')} {item.get('codigo', '')}"
+    )
+    return termino_en_texto(marca_norm, texto)
+
+
 def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
     """
     Ancla obligatoria (ej. filtro / bieleta).
-    Calificadores de tipo (aceite, aire…) también obligatorios si el usuario los escribió.
-    Otras palabras solo suben el ranking.
+    Tipo (aceite, aire…) y marca (mahle, bosch…) obligatorios si el usuario los escribió.
+    Si no hay match de marca, no mezcla otras marcas: lista vacía → fallback flexible.
     """
     from modulos.voz_repuestos import corregir_palabra_dictada
 
@@ -303,12 +340,21 @@ def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
     if not ancla:
         return filtrar_por_busqueda_flexible(items, term_limpio, extraer_texto, limite=limite)
 
+    marcas_cat = _marcas_catalogo_desde_items(items)
     tipos_req = []
+    marcas_req = []
     extras = []
     for op in opcionales:
         op_n = corregir_palabra_dictada(op)
+        op_norm = normalizar_para_busqueda(op_n)
         if op in _CALIFICADORES_TIPO or op_n in _CALIFICADORES_TIPO:
             tipos_req.append(op_n if op_n in _CALIFICADORES_TIPO else op)
+        elif op_norm in marcas_cat or any(
+            op_norm == m or m.startswith(op_norm) or op_norm.startswith(m)
+            for m in marcas_cat
+            if len(op_norm) >= 3
+        ):
+            marcas_req.append(op_norm)
         else:
             extras.append(op)
 
@@ -321,16 +367,24 @@ def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
             continue
         if tipos_req and not any(termino_en_texto(t, texto_norm) for t in tipos_req):
             continue
+        if marcas_req and not any(_item_coincide_marca(item, m) for m in marcas_req):
+            continue
         score = 10
         for t in tipos_req:
             if termino_en_texto(t, texto_norm):
                 score += 8
+        for m in marcas_req:
+            if _item_coincide_marca(item, m):
+                score += 12
         for op in extras:
             if termino_en_texto(op, texto_norm):
                 score += 5
         scored.append((score, item))
 
     if not scored:
+        # Con marca pedida y sin resultados: no devolver "todos los filtros"
+        if marcas_req:
+            return []
         return filtrar_por_busqueda_flexible(items, term_limpio, extraer_texto, limite=limite)
 
     scored.sort(key=lambda x: -x[0])

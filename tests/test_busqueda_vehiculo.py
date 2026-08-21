@@ -112,6 +112,44 @@ class TestBusquedaVehiculo(unittest.TestCase):
         self.assertIn("B4", ids)
         self.assertNotIn("R1_SKF", ids)
 
+    def test_filtro_aceite_mahle_no_mezcla_bosch(self):
+        inv = [
+            {
+                "id": "F1_MAHLE",
+                "codigo": "OC123",
+                "descripcion": "FILTRO ACEITE MAHLE FOX",
+                "marca": "MAHLE",
+                "vehiculo": "VW",
+            },
+            {
+                "id": "F2_BOSCH",
+                "codigo": "B999",
+                "descripcion": "FILTRO ACEITE BOSCH GOL",
+                "marca": "BOSCH",
+                "vehiculo": "VW",
+            },
+            {
+                "id": "F3_GEN",
+                "codigo": "G1",
+                "descripcion": "FILTRO ACEITE GENERICO",
+                "marca": "GENERICO",
+                "vehiculo": "UNIVERSAL",
+            },
+            {
+                "id": "FA_AIRE",
+                "codigo": "A1",
+                "descripcion": "FILTRO AIRE MAHLE",
+                "marca": "MAHLE",
+                "vehiculo": "VW",
+            },
+        ]
+        res = buscar_en_inventario_mostrador(inv, "filtro de aceite mahle")
+        ids = [r["id"] for r in res]
+        self.assertEqual(ids, ["F1_MAHLE"])
+        self.assertNotIn("F2_BOSCH", ids)
+        self.assertNotIn("F3_GEN", ids)
+        self.assertNotIn("FA_AIRE", ids)
+
 
 if __name__ == "__main__":
     unittest.main()
