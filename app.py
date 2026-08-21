@@ -681,6 +681,7 @@ elif pagina == "mostrador":
         calcular_totales_carrito,
         limpiar_venta_mostrador,
         render_credenciales_arca,
+        render_pendientes_alta_mostrador,
         VENDEDOR_MOSTRADOR,
     )
     from modulos.ui_mostrador_caja import render_mostrador_caja
@@ -689,6 +690,15 @@ elif pagina == "mostrador":
     from modulos.mostrador_voz_flujo import inventario_cache_mostrador
 
     aplicar_estilos_mostrador()
+    n_pend_alta = 0
+    try:
+        from modulos.db_firebase import contar_pendientes_alta_manual
+        n_pend_alta = contar_pendientes_alta_manual()
+    except Exception:
+        n_pend_alta = 0
+    label_pend = (
+        f"⚠️ Pendientes alta ({n_pend_alta})" if n_pend_alta else "⚠️ Pendientes alta"
+    )
     c_tit, c_vista, c_vend = st.columns([2.2, 2.2, 1.6], gap="small")
     with c_tit:
         titulo_seccion("Mostrador / Caja", "Ctrl+M")
@@ -696,7 +706,7 @@ elif pagina == "mostrador":
         st.write("")  # alinea con título
         vista_mostrador = st.radio(
             "Vista mostrador",
-            ["🛒 Caja", "📋 Presupuestos", "🧾 Facturas ARCA"],
+            ["🛒 Caja", "📋 Presupuestos", label_pend, "🧾 Facturas ARCA"],
             horizontal=True,
             label_visibility="collapsed",
             key="mostrador_vista_principal",
@@ -725,6 +735,8 @@ elif pagina == "mostrador":
 
     if vista_mostrador.startswith("🧾"):
         render_historial_facturas_arca()
+    elif "Pendientes" in vista_mostrador:
+        render_pendientes_alta_mostrador(vendedor)
     elif vista_mostrador.startswith("📋"):
         st.markdown("#### Presupuestos")
         carrito_ui = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])

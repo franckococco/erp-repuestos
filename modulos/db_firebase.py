@@ -1859,13 +1859,28 @@ def agregar_linea_manual_carrito(
     marca_limpia = sanitizar_clave_marca(marca or "GENERICO")
     item_id = f"MANUAL_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
     etiqueta = desc if not cod else f"{desc} [{cod}]"
+
+    pendiente_id = ""
+    try:
+        pendiente_id = crear_pendiente_alta_manual(
+            vendedor,
+            descripcion=desc,
+            precio_unitario=precio,
+            cantidad=cant,
+            codigo=cod,
+            marca=marca_limpia,
+            item_carrito_id=item_id,
+        )
+    except Exception:
+        pendiente_id = ""
+
     ref_item = (
         get_db().collection("presupuestos_activos")
         .document(str(vendedor))
         .collection("items")
         .document(item_id)
     )
-    ref_item.set({
+    payload = {
         "id_maestro": cod or item_id,
         "codigo": cod,
         "marca": marca_limpia,
@@ -1874,9 +1889,113 @@ def agregar_linea_manual_carrito(
         "cantidad": cant,
         "fuera_stock": True,
         "manual": True,
-    })
+    }
+    if pendiente_id:
+        payload["pendiente_alta_id"] = pendiente_id
+    ref_item.set(payload)
     invalidar_cache_carrito(vendedor)
     return True, f"Agregado manual (fuera de stock): {etiqueta}"
+
+
+def crear_pendiente_alta_manual(
+    vendedor,
+    descripcion,
+    precio_unitario=0.0,
+    cantidad=1,
+    codigo="",
+    marca="",
+    item_carrito_id="",
+):
+    """Recordatorio urgente: producto vendido sin alta en inventario."""
+    ref = get_db().collection("pendientes_alta_manual").document()
+    ref.set({
+        "vendedor": str(vendedor),
+        "descripcion": str(descripcion or "").strip().upper(),
+        "precio_unitario": float(precio_unitario or 0),
+        "cantidad": max(1, int(cantidad or 1)),
+        "codigo": str(codigo or "").strip().upper(),
+        "marca": str(marca or "").strip().upper(),
+        "item_carrito_id": str(item_carrito_id or ""),
+        "estado": "pendiente",
+        "creado": datetime.now(timezone.utc),
+        "comprobante_id": "",
+        "nro_factura": "",
+        "resuelto_en": None,
+        "resuelto_por": "",
+    })
+    return ref.id
+
+
+def listar_pendientes_alta_manual(solo_abiertos=True, limite=80):
+    try:
+        docs = list(
+            get_db().collection("pendientes_alta_manual")
+            .order_by("creado", direction=firestore.Query.DESCENDING)  # type: ignore
+            .limit(max(int(limite), 20))
+            .stream()
+        )
+    except Exception:
+        try:
+            docs = list(get_db().collection("pendientes_alta_manual").limit(120).stream())
+        except Exception:
+            return []
+    out = []
+    for d in docs:
+        data = d.to_dict() or {}
+        data["id"] = d.id
+        estado = str(data.get("estado") or "pendiente").lower()
+        if solo_abiertos and estado not in ("pendiente", "abierto"):
+            continue
+        out.append(data)
+    out.sort(
+        key=lambda x: x.get("creado") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return out[:limite]
+
+
+def contar_pendientes_alta_manual() -> int:
+    return len(listar_pendientes_alta_manual(solo_abiertos=True, limite=200))
+
+
+def resolver_pendiente_alta_manual(pendiente_id, resuelto_por=""):
+    pid = str(pendiente_id or "").strip()
+    if not pid:
+        return False, "ID inválido."
+    ref = get_db().collection("pendientes_alta_manual").document(pid)
+    if not ref.get().exists:
+        return False, "Pendiente no encontrado."
+    ref.set({
+        "estado": "resuelto",
+        "resuelto_en": datetime.now(timezone.utc),
+        "resuelto_por": str(resuelto_por or ""),
+    }, merge=True)
+    return True, "Marcado como dado de alta."
+
+
+def vincular_pendientes_alta_a_factura(carrito, comprobante_id, nro_factura):
+    """Al facturar, asocia el comprobante a los pendientes de ítems manuales."""
+    ids = []
+    for it in carrito or []:
+        if not isinstance(it, dict):
+            continue
+        pid = str(it.get("pendiente_alta_id") or "").strip()
+        if pid:
+            ids.append(pid)
+    if not ids:
+        return 0
+    n = 0
+    for pid in ids:
+        try:
+            get_db().collection("pendientes_alta_manual").document(pid).set({
+                "comprobante_id": str(comprobante_id or ""),
+                "nro_factura": str(nro_factura or ""),
+                "facturado_en": datetime.now(timezone.utc),
+            }, merge=True)
+            n += 1
+        except Exception:
+            pass
+    return n
 
 
 def agregar_al_carrito(vendedor, id_producto, cantidad=1):

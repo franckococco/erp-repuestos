@@ -107,16 +107,16 @@ def _copias_ticket_vendedor(vendedor) -> int:
     return max(1, min(n, 10))
 
 
-def persistir_cliente_mostrador(cli: dict) -> None:
+def persistir_cliente_mostrador(cli: dict) -> bool:
     """Guarda o actualiza el cliente en Firestore (no aplica a consumidor final)."""
     nombre = str((cli or {}).get("nombre") or "").strip().upper()
     cuit = "".join(filter(str.isdigit, str((cli or {}).get("cuit") or "")))
     if not nombre or nombre == "CONSUMIDOR FINAL":
-        return
-    if not cuit or set(cuit) <= {"0"}:
-        return
+        return False
+    if not cuit or set(cuit) <= {"0"} or len(cuit) < 7:
+        return False
     try:
-        configurar_cliente(
+        ok, _ = configurar_cliente(
             nombre,
             cuit,
             float((cli or {}).get("descuento", 0)),
@@ -126,8 +126,9 @@ def persistir_cliente_mostrador(cli: dict) -> None:
             telefono=str((cli or {}).get("telefono") or ""),
             condicion_iva=str((cli or {}).get("condicion_iva") or ""),
         )
+        return bool(ok)
     except Exception:
-        pass
+        return False
 
 
 def normalizar_cliente_activo(cliente: Optional[dict]) -> dict:
@@ -1172,10 +1173,81 @@ def render_agregar_manual_mostrador(vendedor, contexto=None):
                 st.session_state.pop(f"manual_add_ctx_{vendedor}", None)
                 st.session_state.resultados_ia_mostrador = None
                 st.session_state.msg_ia_mostrador = None
+                if not cargar_stock:
+                    st.session_state["_alerta_manual_alta"] = (
+                        "Producto vendido sin alta en inventario. "
+                        "Cargalo urgente en la pestaña «Pendientes alta»."
+                    )
                 st.success(msj)
                 st.rerun()
             else:
                 st.error(msj)
+
+
+def render_pendientes_alta_mostrador(vendedor=""):
+    """Lista de productos vendidos manualmente que deben darse de alta en inventario."""
+    from modulos.db_firebase import (
+        contar_pendientes_alta_manual,
+        listar_pendientes_alta_manual,
+        resolver_pendiente_alta_manual,
+    )
+    from modulos.util_fechas import formatear_fecha_ar
+
+    n = contar_pendientes_alta_manual()
+    st.markdown("#### Pendientes de alta en inventario")
+    if n:
+        st.error(
+            f"**{n} producto(s)** vendidos sin alta. "
+            "Dalos de alta en **Carga Stock** y marcá como resuelto acá."
+        )
+    else:
+        st.success("No hay pendientes de alta. Bien.")
+
+    solo_abiertos = st.checkbox(
+        "Solo abiertos",
+        value=True,
+        key="pend_alta_solo_abiertos",
+    )
+    lista = listar_pendientes_alta_manual(solo_abiertos=solo_abiertos, limite=80)
+    if not lista:
+        st.caption("Sin registros.")
+        return
+
+    for p in lista:
+        pid = p.get("id", "")
+        with st.container(border=True):
+            c1, c2 = st.columns([4, 1])
+            with c1:
+                st.markdown(
+                    f"**{p.get('descripcion', '—')}** · "
+                    f"{p.get('marca') or '—'} · cant {p.get('cantidad', 1)} · "
+                    f"${float(p.get('precio_unitario') or 0):,.0f}"
+                )
+                extra = []
+                if p.get("codigo"):
+                    extra.append(f"Cód {p['codigo']}")
+                if p.get("nro_factura"):
+                    extra.append(f"FC {p['nro_factura']}")
+                extra.append(f"Vend. {p.get('vendedor') or '—'}")
+                extra.append(formatear_fecha_ar(p.get("creado")))
+                st.caption(" · ".join(extra))
+            with c2:
+                estado = str(p.get("estado") or "pendiente").lower()
+                if estado in ("pendiente", "abierto"):
+                    if st.button(
+                        "✓ Hecho",
+                        key=f"pend_res_{pid}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        ok, msj = resolver_pendiente_alta_manual(pid, resuelto_por=str(vendedor))
+                        if ok:
+                            st.toast(msj)
+                            st.rerun()
+                        else:
+                            st.error(msj)
+                else:
+                    st.caption("Resuelto")
 
 
 def render_seccion_cliente_mostrador():
@@ -2297,7 +2369,11 @@ def ejecutar_emitir_factura_arca(
         pdf_a4 = crear_a4(datos_resp, datos_cliente, items_fc, cfg)
         status.update(label="CAE otorgado", state="complete")
 
-    persistir_cliente_mostrador(cli)
+    persistir_ok = persistir_cliente_mostrador(cli)
+    if persistir_ok:
+        st.session_state["_cliente_guardado_ok"] = (
+            f"Cliente guardado: {cli.get('nombre')} · {cli.get('cuit')}"
+        )
 
     exito_stock, msj_stock = confirmar_venta(str(vendedor))
     if not exito_stock:
@@ -2316,6 +2392,11 @@ def ejecutar_emitir_factura_arca(
     )
     st.session_state.pop(f"mostrador_obs_ticket_{vendedor}", None)
     nro = _formato_nro_comprobante(datos_resp)
+    try:
+        from modulos.db_firebase import vincular_pendientes_alta_a_factura
+        vincular_pendientes_alta_a_factura(carrito, comp_id, nro)
+    except Exception:
+        pass
     try:
         from modulos.puntos_vendedor import registrar_venta_puntos, asegurar_vendedor
         asegurar_vendedor(str(vendedor), nombre=str(vendedor))

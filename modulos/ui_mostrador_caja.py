@@ -127,6 +127,9 @@ def _aplicar_tipo_factura(tipo: str):
             "condicion_iva": str(st.session_state.get("caja_condicion_iva") or "").strip(),
         })
         _cargar_inputs_cliente(st.session_state.cliente_activo)
+        st.session_state["_cliente_guardado_ok"] = (
+            f"Cliente guardado: {nombre.upper()} · {cuit}"
+        )
     st.session_state.pop("caja_msg_cli", None)
 
 
@@ -263,6 +266,7 @@ def render_barra_cliente_caja():
     if cel_mostrar:
         resumen += f" · Cel {cel_mostrar}"
     st.caption(resumen)
+    st.caption("Al facturar A o B, el cliente se guarda solo (si tiene nombre y CUIT/DNI).")
     if tipo == "1" and not _cuit_ok_factura_a(st.session_state.get("caja_cuit_cli")):
         st.warning("Factura A: el CUIT tiene que tener 11 dígitos. Si no, usá Factura B.")
 
@@ -335,7 +339,7 @@ def render_coincidencias_caja(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
 
 def render_buscador_caja(vendedor, inv, agregar_al_carrito):
-    """Campo grande de código/producto arriba de la grilla."""
+    """Campo grande de código/producto + acceso rápido a carga manual."""
     st.markdown(
         '<div class="mostrador-caja-busqueda"><strong>Agregar producto</strong></div>',
         unsafe_allow_html=True,
@@ -374,6 +378,26 @@ def render_buscador_caja(vendedor, inv, agregar_al_carrito):
                 else:
                     st.error(msj)
             st.rerun()
+
+    # Carga manual siempre visible (compacta) debajo de la búsqueda
+    mostrar = bool(st.session_state.get(f"caja_mostrar_manual_{vendedor}"))
+    if st.button(
+        "⚠️ Carga manual (sin stock)" if not mostrar else "▾ Ocultar carga manual",
+        key=f"caja_toggle_manual_{vendedor}",
+        use_container_width=True,
+    ):
+        st.session_state[f"caja_mostrar_manual_{vendedor}"] = not mostrar
+        st.rerun()
+
+    alerta = st.session_state.pop("_alerta_manual_alta", None)
+    if alerta:
+        st.error(alerta)
+
+    if st.session_state.get(f"caja_mostrar_manual_{vendedor}") or st.session_state.get(
+        f"manual_add_ctx_{vendedor}"
+    ):
+        from modulos.ui_mostrador import render_agregar_manual_mostrador
+        render_agregar_manual_mostrador(vendedor)
 
 
 def _render_resumen_caja(vendedor, carrito_efectivo_mostrador, calcular_totales_carrito):
@@ -472,9 +496,17 @@ def render_mostrador_caja(
         st.info("Inventario vacío.")
 
     render_barra_cliente_caja()
+    msg_cli = st.session_state.pop("_cliente_guardado_ok", None)
+    if msg_cli:
+        st.toast(msg_cli)
+
     render_coincidencias_caja(vendedor, agrupar_por_maestro, agregar_al_carrito)
 
-    if st.session_state.get(f"manual_add_ctx_{vendedor}"):
+    # El form manual ya se muestra bajo la búsqueda; evitar duplicar
+    if (
+        st.session_state.get(f"manual_add_ctx_{vendedor}")
+        and not st.session_state.get(f"caja_mostrar_manual_{vendedor}")
+    ):
         render_agregar_manual_mostrador(vendedor)
 
     if any(
