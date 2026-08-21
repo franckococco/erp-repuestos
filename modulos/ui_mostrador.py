@@ -2625,16 +2625,44 @@ def render_panel_cobro_mostrador(
                 if actual not in FORMAS_PAGO:
                     actual = "Contado"
                 if modo_caja:
-                    cols_pago = st.columns(len(FORMAS_PAGO))
-                    for col, fp in zip(cols_pago, FORMAS_PAGO):
-                        if col.button(
-                            fp,
-                            type="primary" if fp == actual else "secondary",
-                            use_container_width=True,
-                            key=f"pago_caja_{fp}_{vendedor}",
-                        ):
-                            _set_forma_pago(vendedor, fp)
-                            st.rerun()
+                    ops = list(FORMAS_PAGO) + ["Sin factura", "Vaciar"]
+                    cols_pago = st.columns(len(ops))
+                    for col, fp in zip(cols_pago, ops):
+                        if fp in FORMAS_PAGO:
+                            if col.button(
+                                fp,
+                                type="primary" if fp == actual else "secondary",
+                                use_container_width=True,
+                                key=f"pago_caja_{fp}_{vendedor}",
+                            ):
+                                _set_forma_pago(vendedor, fp)
+                                st.rerun()
+                        elif fp == "Sin factura":
+                            if col.button(
+                                "Sin factura",
+                                use_container_width=True,
+                                key=f"venta_sin_fc_{vendedor}",
+                            ):
+                                _, err_sync = sincronizar_grilla_carrito_firebase(vendedor)
+                                if err_sync:
+                                    st.error("\n".join(err_sync))
+                                else:
+                                    exito, msj = confirmar_venta(str(vendedor))
+                                    if exito:
+                                        _cerrar_presupuesto_cargado("vendido")
+                                        limpiar_venta_mostrador(vendedor, reset_cliente=True)
+                                        st.success(msj)
+                                        st.rerun()
+                                    else:
+                                        st.error(msj)
+                        else:
+                            if col.button(
+                                "Vaciar",
+                                use_container_width=True,
+                                key=f"vaciar_{vendedor}",
+                            ):
+                                limpiar_venta_mostrador(vendedor, reset_cliente=False)
+                                st.rerun()
                     forma_pago = _forma_pago_actual(vendedor)
                     if forma_pago not in FORMAS_PAGO:
                         forma_pago = "Contado"
@@ -2649,21 +2677,21 @@ def render_panel_cobro_mostrador(
                     )
                     _set_forma_pago(vendedor, forma_pago)
 
-                st.text_area(
-                    "Observación (opcional, sale en el ticket)",
-                    key=f"mostrador_obs_ticket_{vendedor}",
-                    height=68,
-                    placeholder="Ej: Garantía 30 días · Retira mañana · Dejar en mostrador…",
-                )
-
-                st.number_input(
-                    "Copias del ticket",
-                    min_value=1,
-                    max_value=10,
-                    step=1,
-                    key=f"mostrador_copias_ticket_{vendedor}",
-                    help="Cantidad de tickets a imprimir al facturar.",
-                )
+                c_obs, c_cop = st.columns([3, 1])
+                with c_obs:
+                    st.text_input(
+                        "Obs. ticket (opcional)",
+                        key=f"mostrador_obs_ticket_{vendedor}",
+                        placeholder="Garantía · Retira mañana…",
+                    )
+                with c_cop:
+                    st.number_input(
+                        "Copias",
+                        min_value=1,
+                        max_value=10,
+                        step=1,
+                        key=f"mostrador_copias_ticket_{vendedor}",
+                    )
 
                 total_a_cobrar = float(total_final)
                 if forma_pago == "Tarjeta":
@@ -2717,35 +2745,38 @@ def render_panel_cobro_mostrador(
         else:
             st.caption("Agregá ítems para facturar.")
 
-        with st.expander("Más acciones", expanded=False):
-            if intent != "presupuesto" or not listo_para_cerrar:
-                nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
-                if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
-                    ok, msj, nuevo_id = guardar_presupuesto(
-                        str(vendedor), st.session_state.cliente_activo, nota_pres
-                    )
-                    if ok:
-                        st.session_state.presupuesto_cargado_id = nuevo_id
-                        st.success(msj)
-                        st.rerun()
+        if modo_caja:
+            pass  # Sin factura / Vaciar ya van junto a Contado, Tarjeta, etc.
+        else:
+            with st.expander("Más acciones", expanded=False):
+                if intent != "presupuesto" or not listo_para_cerrar:
+                    nota_pres = st.text_input("Nota presupuesto", key=f"nota_pres_{vendedor}")
+                    if st.button("💾 Guardar presupuesto", key=f"guardar_pres_{vendedor}", use_container_width=True):
+                        ok, msj, nuevo_id = guardar_presupuesto(
+                            str(vendedor), st.session_state.cliente_activo, nota_pres
+                        )
+                        if ok:
+                            st.session_state.presupuesto_cargado_id = nuevo_id
+                            st.success(msj)
+                            st.rerun()
+                        else:
+                            st.error(msj)
+                if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
+                    _, err_sync = sincronizar_grilla_carrito_firebase(vendedor)
+                    if err_sync:
+                        st.error("\n".join(err_sync))
                     else:
-                        st.error(msj)
-            if st.button("✅ Venta sin factura", key=f"venta_sin_fc_{vendedor}", use_container_width=True):
-                _, err_sync = sincronizar_grilla_carrito_firebase(vendedor)
-                if err_sync:
-                    st.error("\n".join(err_sync))
-                else:
-                    exito, msj = confirmar_venta(str(vendedor))
-                    if exito:
-                        _cerrar_presupuesto_cargado("vendido")
-                        limpiar_venta_mostrador(vendedor, reset_cliente=True)
-                        st.success(msj)
-                        st.rerun()
-                    else:
-                        st.error(msj)
-            if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
-                limpiar_venta_mostrador(vendedor, reset_cliente=False)
-                st.rerun()
+                        exito, msj = confirmar_venta(str(vendedor))
+                        if exito:
+                            _cerrar_presupuesto_cargado("vendido")
+                            limpiar_venta_mostrador(vendedor, reset_cliente=True)
+                            st.success(msj)
+                            st.rerun()
+                        else:
+                            st.error(msj)
+                if st.button("🗑️ Vaciar carrito", key=f"vaciar_{vendedor}", use_container_width=True):
+                    limpiar_venta_mostrador(vendedor, reset_cliente=False)
+                    st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
 

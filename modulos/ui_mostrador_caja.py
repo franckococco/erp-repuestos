@@ -494,7 +494,3 @@ def render_mostrador_caja(
         )
     else:
         st.caption("Carrito vacío — escaneá o buscá un producto arriba.")
-
-    with st.expander("Presupuestos guardados", expanded=False):
-        render_presupuestos_guardados(vendedor)
-        render_credenciales_arca()

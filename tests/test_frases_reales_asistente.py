@@ -76,6 +76,15 @@ class TestParsersLocalesAsistente(unittest.TestCase):
         self.assertEqual(r["operador"], "menor_o_igual")
         self.assertEqual(r["cantidad"], 3)
 
+    def test_reporte_proveedor_y_stock(self):
+        r = parse_reporte_rapido(
+            self._prep("buscame productos de expoyer que tengan menos de 4 unidades")
+        )
+        self.assertIsNotNone(r)
+        self.assertEqual(r["accion"], "reporte_stock")
+        self.assertEqual(r["cantidad"], 4)
+        self.assertEqual(str(r.get("proveedor", "")).lower(), "expoyer")
+
     def test_proveedor_expoyer(self):
         r = parse_proveedor_rapido(self._prep("mostrame lo de expoyer"))
         self.assertIsNotNone(r)

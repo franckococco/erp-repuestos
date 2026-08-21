@@ -276,11 +276,20 @@ def _ancla_y_opcionales_busqueda(termino: str):
     return ancla_norm, opcionales
 
 
+_CALIFICADORES_TIPO = frozenset({
+    "aceite", "aire", "nafta", "combustible", "polen",
+    "habitaculo", "habitáculo", "cabina", "gasoil", "diesel",
+})
+
+
 def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
     """
-    Muestra todo lo que contiene la palabra ancla del repuesto (ej. bieleta).
-    Palabras extra (suspension) solo suben el ranking, no excluyen.
+    Ancla obligatoria (ej. filtro / bieleta).
+    Calificadores de tipo (aceite, aire…) también obligatorios si el usuario los escribió.
+    Otras palabras solo suben el ranking.
     """
+    from modulos.voz_repuestos import corregir_palabra_dictada
+
     term_limpio = _limpiar_prefijo_busqueda(str(termino or "").strip())
     if not term_limpio:
         return []
@@ -294,6 +303,15 @@ def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
     if not ancla:
         return filtrar_por_busqueda_flexible(items, term_limpio, extraer_texto, limite=limite)
 
+    tipos_req = []
+    extras = []
+    for op in opcionales:
+        op_n = corregir_palabra_dictada(op)
+        if op in _CALIFICADORES_TIPO or op_n in _CALIFICADORES_TIPO:
+            tipos_req.append(op_n if op_n in _CALIFICADORES_TIPO else op)
+        else:
+            extras.append(op)
+
     scored = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -301,8 +319,13 @@ def buscar_por_ancla_repuesto(items, termino, extraer_texto, limite=50):
         texto_norm = normalizar_para_busqueda(extraer_texto(item))
         if not termino_en_texto(ancla, texto_norm):
             continue
+        if tipos_req and not any(termino_en_texto(t, texto_norm) for t in tipos_req):
+            continue
         score = 10
-        for op in opcionales:
+        for t in tipos_req:
+            if termino_en_texto(t, texto_norm):
+                score += 8
+        for op in extras:
             if termino_en_texto(op, texto_norm):
                 score += 5
         scored.append((score, item))
@@ -358,7 +381,8 @@ def buscar_en_inventario_con_vehiculo(
 ):
     """
     Búsqueda por repuesto + vehículo opcional.
-    Por defecto el vehículo reordena; con filtro_vehiculo_estricto solo devuelve compatibles.
+    - estricto=True: solo compatibles con el vehículo.
+    - estricto=False (default): si hay compatibles, solo esos; si no hay, muestra similares.
     """
     from modulos.voz_repuestos import corregir_termino_repuesto
 
@@ -370,8 +394,12 @@ def buscar_en_inventario_con_vehiculo(
     base = buscar_por_ancla_repuesto(items, term, ext, limite=50)
     if not vehiculo:
         return base
+
+    con_veh = [it for it in base if item_coincide_vehiculo(it, vehiculo)]
     if filtro_vehiculo_estricto:
-        return [it for it in base if item_coincide_vehiculo(it, vehiculo)][:50]
+        return con_veh[:50]
+    if con_veh:
+        return con_veh[:50]
     return _ordenar_por_vehiculo(base, vehiculo, ext)[:50]
 
 

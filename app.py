@@ -696,7 +696,7 @@ elif pagina == "mostrador":
         st.write("")  # alinea con título
         vista_mostrador = st.radio(
             "Vista mostrador",
-            ["🛒 Caja", "🧾 Facturas ARCA"],
+            ["🛒 Caja", "📋 Presupuestos", "🧾 Facturas ARCA"],
             horizontal=True,
             label_visibility="collapsed",
             key="mostrador_vista_principal",
@@ -725,6 +725,33 @@ elif pagina == "mostrador":
 
     if vista_mostrador.startswith("🧾"):
         render_historial_facturas_arca()
+    elif vista_mostrador.startswith("📋"):
+        st.markdown("#### Presupuestos")
+        carrito_ui = carrito_efectivo_mostrador(vendedor, obtener_carrito(str(vendedor)) or [])
+        if carrito_ui:
+            with st.container(border=True):
+                st.caption(f"Carrito actual: **{len(carrito_ui)}** ítems")
+                nota_pres = st.text_input("Nota (opcional)", key=f"nota_pres_tab_{vendedor}")
+                if st.button(
+                    "💾 Guardar carrito como presupuesto",
+                    type="primary",
+                    use_container_width=True,
+                    key=f"guardar_pres_tab_{vendedor}",
+                ):
+                    from modulos.db_firebase import guardar_presupuesto
+                    ok, msj, nuevo_id = guardar_presupuesto(
+                        str(vendedor), st.session_state.cliente_activo, nota_pres
+                    )
+                    if ok:
+                        st.session_state.presupuesto_cargado_id = nuevo_id
+                        st.success(msj)
+                        st.rerun()
+                    else:
+                        st.error(msj)
+        else:
+            st.caption("No hay ítems en el carrito para guardar. Armá la venta en **Caja**.")
+        render_presupuestos_guardados(vendedor)
+        render_credenciales_arca()
     else:
         inv_mostrador = inventario_cache_mostrador(obtener_inventario_completo, ttl_seg=300)
         render_mostrador_caja(
@@ -819,30 +846,67 @@ elif pagina == "asistente":
                 raw_cant = respuesta_json.get("cantidad")
                 cant_limite = int(raw_cant) if raw_cant is not None and str(raw_cant).isdigit() else 3
                 operador = respuesta_json.get("operador", "menor_o_igual")
+                prov_filtro = str(respuesta_json.get("proveedor") or "").strip()
 
                 texto_usuario_norm = normalizar_para_busqueda(orden_usuario)
                 if operador != "exacto" and re.search(r'\b(mas de|al menos|mayor que|mayor a|o mas|>=|\+)\b', texto_usuario_norm):
                     operador = "mayor_o_igual"
 
-                if operador == "exacto":
-                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) == cant_limite]
-                    msg_op = f"exactamente {cant_limite}"
-                elif operador == "mayor_o_igual":
-                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) >= cant_limite]
-                    msg_op = f"{cant_limite} o más"
-                else:
-                    bajo_stock = [p for p in inventario if int(p.get('stock', 0)) <= cant_limite]
-                    msg_op = f"{cant_limite} o menos"
+                base_inv = list(inventario)
+                extra_prov = ""
+                omitir_stock = False
+                if prov_filtro:
+                    provs_catalogo = obtener_proveedores() or {}
+                    cuits_match, terminos_clave = _cuits_proveedor_en_catalogo(prov_filtro, provs_catalogo)
+                    filtrados_prov = []
+                    for p in inventario:
+                        if not isinstance(p, dict):
+                            continue
+                        cuit_p = "".join(filter(str.isdigit, str(p.get("cuit_proveedor", ""))))
+                        if cuit_p and cuit_p in cuits_match:
+                            filtrados_prov.append(p)
+                            continue
+                        if terminos_clave and _proveedor_coincide_busqueda(
+                            terminos_clave, str(p.get("proveedor", ""))
+                        ):
+                            filtrados_prov.append(p)
+                    if not filtrados_prov:
+                        st.session_state.ultima_respuesta = (
+                            f"⚠️ No encontré productos del proveedor '{prov_filtro}' "
+                            f"para armar el reporte de stock."
+                        )
+                        st.session_state.df_reporte = None
+                        st.session_state.ultimo_estado = "normal"
+                        omitir_stock = True
+                    else:
+                        base_inv = filtrados_prov
+                        extra_prov = f" de **{prov_filtro.upper()}**"
 
-                if bajo_stock:
-                    st.session_state.ultima_respuesta = f"📉 **Reporte de stock:** {len(bajo_stock)} variantes con {msg_op} unidades."
-                    df_r = pd.DataFrame(bajo_stock)
-                    cols_rep = ['codigo', 'descripcion', 'vehiculo', 'marca', 'stock']
-                    st.session_state.df_reporte = df_r[[c for c in cols_rep if c in df_r.columns]]
-                    st.session_state.ultimo_estado = "normal"
-                else:
-                    st.session_state.ultima_respuesta = f"✅ Excelente. No hay variantes con {msg_op} unidades."
-                    st.session_state.ultimo_estado = "success"
+                if not omitir_stock:
+                    if operador == "exacto":
+                        bajo_stock = [p for p in base_inv if int(p.get('stock', 0)) == cant_limite]
+                        msg_op = f"exactamente {cant_limite}"
+                    elif operador == "mayor_o_igual":
+                        bajo_stock = [p for p in base_inv if int(p.get('stock', 0)) >= cant_limite]
+                        msg_op = f"{cant_limite} o más"
+                    else:
+                        bajo_stock = [p for p in base_inv if int(p.get('stock', 0)) <= cant_limite]
+                        msg_op = f"{cant_limite} o menos"
+
+                    if bajo_stock:
+                        st.session_state.ultima_respuesta = (
+                            f"📉 **Reporte de stock:** {len(bajo_stock)} variantes{extra_prov} "
+                            f"con {msg_op} unidades."
+                        )
+                        df_r = pd.DataFrame(bajo_stock)
+                        cols_rep = ['codigo', 'descripcion', 'vehiculo', 'marca', 'stock', 'proveedor']
+                        st.session_state.df_reporte = df_r[[c for c in cols_rep if c in df_r.columns]]
+                        st.session_state.ultimo_estado = "normal"
+                    else:
+                        st.session_state.ultima_respuesta = (
+                            f"✅ No hay variantes{extra_prov} con {msg_op} unidades."
+                        )
+                        st.session_state.ultimo_estado = "success"
 
             elif accion == "set_cliente":
                 nombre_det = respuesta_json.get("nombre_cliente", "").upper()

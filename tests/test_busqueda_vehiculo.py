@@ -93,16 +93,17 @@ class TestBusquedaVehiculo(unittest.TestCase):
         self.assertFalse(item_coincide_vehiculo(INVENTARIO_FAKE[5], "207"))
 
     def test_bieleta_suspension_207_mostrador(self):
+        """Con vehículo detectado y matches, solo muestra compatibles (no todo el catálogo)."""
         res = buscar_en_inventario_mostrador(INVENTARIO_FAKE, "bieleta de suspension 207")
         ids = [r["id"] for r in res]
         self.assertIn("B1_GEN", ids)
-        self.assertIn("B2_GEN", ids)
-        self.assertIn("B3", ids)
-        self.assertIn("B4", ids)
+        self.assertEqual(ids[0], "B1_GEN")
         self.assertNotIn("D1", ids)
         self.assertNotIn("G1", ids)
         self.assertNotIn("R1_SKF", ids)
-        self.assertEqual(ids[0], "B1_GEN")
+        # Si hay match de vehículo, no mezcla el resto
+        self.assertNotIn("B3", ids)
+        self.assertNotIn("B2_GEN", ids)
 
     def test_bieleta_suspension_sin_vehiculo(self):
         res = buscar_en_inventario_mostrador(INVENTARIO_FAKE, "bieleta de suspension")

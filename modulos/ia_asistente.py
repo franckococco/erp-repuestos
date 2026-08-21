@@ -377,8 +377,32 @@ def parse_ubicacion_rapido(texto_nl):
     return out
 
 
+def _extraer_proveedor_de_texto_reporte(texto_nl: str) -> str:
+    """Si el reporte menciona proveedor (ej. 'proveedor expoyer'), lo recupera."""
+    t = str(texto_nl or "").lower()
+    m = re.search(r"\bproveedor\s+(.+)$", t)
+    if not m:
+        return ""
+    resto = m.group(1).strip()
+    stop = {
+        "que", "con", "menos", "mas", "más", "tienen", "tenga", "stock",
+        "unidades", "unidad", "de", "del", "los", "las", "al", "a",
+    }
+    palabras = []
+    for p in resto.split():
+        pl = p.strip(".,;:")
+        if not pl or pl.isdigit() or pl in stop:
+            break
+        if len(pl) >= 2:
+            palabras.append(pl)
+        if len(palabras) >= 4:
+            break
+    prov = _limpiar_termino_busqueda(" ".join(palabras))
+    return prov if len(prov) >= 2 else ""
+
+
 def parse_reporte_rapido(texto_nl):
-    """Reporte de stock por cantidad."""
+    """Reporte de stock por cantidad (opcionalmente acotado a un proveedor)."""
     if not texto_nl:
         return None
     t = str(texto_nl).lower()
@@ -400,7 +424,11 @@ def parse_reporte_rapido(texto_nl):
     elif es_consulta_mayor_o_igual(t) or re.search(r"\b(mas de|más de|al menos|mayor)\b", t):
         operador = "mayor_o_igual"
 
-    return {"accion": "reporte_stock", "operador": operador, "cantidad": cant}
+    out = {"accion": "reporte_stock", "operador": operador, "cantidad": cant}
+    proveedor = _extraer_proveedor_de_texto_reporte(t)
+    if proveedor:
+        out["proveedor"] = proveedor
+    return out
 
 
 def parse_proveedor_rapido(texto_nl):
