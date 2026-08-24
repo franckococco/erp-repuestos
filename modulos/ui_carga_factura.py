@@ -200,14 +200,17 @@ def _render_cola_facturas():
 
 
 def _procesar_upload_factura(archivo, mejorar_img):
-    from modulos.util_imagen import imagen_desde_upload
+    from modulos.util_imagen import imagenes_desde_upload
 
-    img = imagen_desde_upload(archivo)
-    img_proc = mejorar_imagen_documento(img.copy()) if mejorar_img else img
-    datos = procesar_factura_con_ia(img_proc, mejorar_imagen=False)
+    imgs = imagenes_desde_upload(archivo)
+    if not imgs:
+        raise ValueError("No se pudo leer el archivo.")
+    imgs_proc = [mejorar_imagen_documento(im.copy()) for im in imgs] if mejorar_img else imgs
+    datos = procesar_factura_con_ia(imgs_proc, mejorar_imagen=False)
     if not datos:
         raise ValueError("La IA no devolvió datos de la factura.")
-    return datos, img, img_proc
+    # Vista previa: primera página
+    return datos, imgs[0], imgs_proc[0]
 
 
 def _cargar_datos_en_sesion(datos):

@@ -5,12 +5,13 @@ import numpy as np
 from PIL import Image
 
 _TIPOS_IMAGEN = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp"})
+_MAX_PAGINAS_PDF = 10
 
 
-def imagen_desde_upload(archivo, pagina_pdf: int = 0, escala_pdf: float = 2.0) -> Image.Image:
+def imagenes_desde_upload(archivo, escala_pdf: float = 2.0, max_paginas: int = _MAX_PAGINAS_PDF):
     """
-    Convierte un upload de Streamlit (imagen o PDF) a PIL Image RGB.
-    La primera página del PDF se rasteriza para la IA.
+    Convierte un upload (imagen o PDF) a una lista de PIL Image RGB.
+    PDFs: todas las páginas (hasta max_paginas). Imágenes: una sola.
     """
     nombre = (getattr(archivo, "name", None) or "").lower()
     raw = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo.read()
@@ -25,17 +26,31 @@ def imagen_desde_upload(archivo, pagina_pdf: int = 0, escala_pdf: float = 2.0) -
         doc = fitz.open(stream=raw, filetype="pdf")
         if doc.page_count == 0:
             raise ValueError("El PDF no tiene páginas.")
-        idx = max(0, min(int(pagina_pdf), doc.page_count - 1))
-        page = doc[idx]
+        n = min(int(doc.page_count), max(1, int(max_paginas or _MAX_PAGINAS_PDF)))
         mat = fitz.Matrix(escala_pdf, escala_pdf)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        out = []
+        for i in range(n):
+            pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+            out.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+        return out
 
     suf = "." + nombre.rsplit(".", 1)[-1] if "." in nombre else ""
     if suf and suf not in _TIPOS_IMAGEN:
         raise ValueError(f"Formato no soportado ({nombre}). Usá PDF, PNG o JPG.")
 
-    return Image.open(io.BytesIO(raw)).convert("RGB")
+    return [Image.open(io.BytesIO(raw)).convert("RGB")]
+
+
+def imagen_desde_upload(archivo, pagina_pdf: int = 0, escala_pdf: float = 2.0) -> Image.Image:
+    """
+    Compatibilidad: una sola imagen.
+    Para PDF multipágina preferí imagenes_desde_upload.
+    """
+    imgs = imagenes_desde_upload(archivo, escala_pdf=escala_pdf)
+    if not imgs:
+        raise ValueError("El archivo no tiene páginas/imágenes.")
+    idx = max(0, min(int(pagina_pdf), len(imgs) - 1))
+    return imgs[idx]
 
 
 def mejorar_imagen_documento(imagen_pil, max_lado=2400):

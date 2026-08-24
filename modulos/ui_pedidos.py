@@ -297,8 +297,8 @@ def render_pedidos():
         if img_src and st.button(f"Leer {tipo_doc}", key=f"leer_{tipo_doc}"):
             with st.spinner(f"Leyendo {tipo_doc}..."):
                 try:
-                    from modulos.util_imagen import imagen_desde_upload
-                    pil = imagen_desde_upload(img_src)
+                    from modulos.util_imagen import imagenes_desde_upload
+                    pil = imagenes_desde_upload(img_src)
                     datos = leer_fn(pil)
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):

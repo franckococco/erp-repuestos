@@ -190,27 +190,39 @@ def _extraer_json_respuesta(texto_limpio: str) -> dict:
 
 
 def _procesar_documento_ia(imagen_pil, prompt, tipo="factura"):
-    imagen_b64 = pil_a_base64(imagen_pil)
+    """Acepta una imagen PIL o una lista de páginas (PDF multipágina)."""
+    if isinstance(imagen_pil, (list, tuple)):
+        imagenes = [im for im in imagen_pil if im is not None]
+    else:
+        imagenes = [imagen_pil] if imagen_pil is not None else []
+    if not imagenes:
+        raise ValueError("No hay imagen para procesar.")
+
+    content = []
+    for im in imagenes:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": pil_a_base64(im),
+            },
+        })
+    texto_prompt = prompt
+    if len(imagenes) > 1:
+        texto_prompt = (
+            f"Este documento tiene {len(imagenes)} páginas (en orden). "
+            "Leé TODAS las páginas y unificá los datos en un solo JSON. "
+            "Incluí TODOS los artículos de todas las páginas, sin omitir ninguno.\n\n"
+            + prompt
+        )
+    content.append({"type": "text", "text": texto_prompt})
+
     respuesta = _anthropic_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=_MAX_TOKENS_DOCUMENTO,
         temperature=0.0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": imagen_b64,
-                        },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": content}],
     )
     texto_limpio = ""
     for bloque in respuesta.content:
@@ -231,8 +243,12 @@ IMPORTANTE sobre el JSON:
 
 
 def procesar_factura_con_ia(imagen_pil, mejorar_imagen=True):
+    if isinstance(imagen_pil, (list, tuple)):
+        imagenes = list(imagen_pil)
+    else:
+        imagenes = [imagen_pil]
     if mejorar_imagen:
-        imagen_pil = mejorar_imagen_documento(imagen_pil)
+        imagenes = [mejorar_imagen_documento(im) for im in imagenes]
     prompt = f"""
     Eres un experto en facturación argentina. Extrae de CUALQUIER proveedor:
     1. CUIT del emisor (11 dígitos).
@@ -252,14 +268,19 @@ def procesar_factura_con_ia(imagen_pil, mejorar_imagen=True):
     {_PROMPT_JSON_STRICT}
     """
     try:
-        return _procesar_documento_ia(imagen_pil, prompt, tipo="factura")
+        payload = imagenes if len(imagenes) > 1 else imagenes[0]
+        return _procesar_documento_ia(payload, prompt, tipo="factura")
     except Exception as e:
         raise Exception(f"Error en lectura de IA: {str(e)}") from e
 
 
 def procesar_remito_con_ia(imagen_pil, mejorar_imagen=True):
+    if isinstance(imagen_pil, (list, tuple)):
+        imagenes = list(imagen_pil)
+    else:
+        imagenes = [imagen_pil]
     if mejorar_imagen:
-        imagen_pil = mejorar_imagen_documento(imagen_pil)
+        imagenes = [mejorar_imagen_documento(im) for im in imagenes]
     prompt = f"""
     Eres un experto en documentos logísticos argentinos (remitos de entrega).
     Extrae de CUALQUIER proveedor:
@@ -279,7 +300,8 @@ def procesar_remito_con_ia(imagen_pil, mejorar_imagen=True):
     {_PROMPT_JSON_STRICT}
     """
     try:
-        return _procesar_documento_ia(imagen_pil, prompt, tipo="remito")
+        payload = imagenes if len(imagenes) > 1 else imagenes[0]
+        return _procesar_documento_ia(payload, prompt, tipo="remito")
     except Exception as e:
         raise Exception(f"Error en lectura de remito: {str(e)}") from e
 

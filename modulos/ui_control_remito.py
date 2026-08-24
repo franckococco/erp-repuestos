@@ -48,8 +48,8 @@ def render_control_factura_remito():
         if img_f and st.button("Leer factura", key="btn_leer_fact_ctrl", use_container_width=True):
             with st.spinner("Leyendo factura..."):
                 try:
-                    from modulos.util_imagen import imagen_desde_upload
-                    datos = procesar_factura_con_ia(imagen_desde_upload(img_f))
+                    from modulos.util_imagen import imagenes_desde_upload
+                    datos = procesar_factura_con_ia(imagenes_desde_upload(img_f))
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):
                             art["codigo_proveedor"] = art.get("codigo", "")
@@ -78,8 +78,8 @@ def render_control_factura_remito():
         if img_r and st.button("Leer remito", key="btn_leer_rem_ctrl", use_container_width=True):
             with st.spinner("Leyendo remito..."):
                 try:
-                    from modulos.util_imagen import imagen_desde_upload
-                    datos = procesar_remito_con_ia(imagen_desde_upload(img_r))
+                    from modulos.util_imagen import imagenes_desde_upload
+                    datos = procesar_remito_con_ia(imagenes_desde_upload(img_r))
                     for art in datos.get("articulos", []):
                         if isinstance(art, dict):
                             art["codigo_proveedor"] = art.get("codigo", "")
