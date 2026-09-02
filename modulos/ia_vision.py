@@ -142,10 +142,10 @@ def _normalizar_datos_documento(data: dict, tipo: str) -> dict:
 
 
 def _reintentar_json_con_ia(texto_roto: str) -> dict:
+    # anthropic>=1.0 ya no acepta temperature= en messages.create()
     respuesta = _anthropic_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=_MAX_TOKENS_DOCUMENTO,
-        temperature=0.0,
         messages=[
             {
                 "role": "user",
@@ -221,7 +221,6 @@ def _procesar_documento_ia(imagen_pil, prompt, tipo="factura"):
     respuesta = _anthropic_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=_MAX_TOKENS_DOCUMENTO,
-        temperature=0.0,
         messages=[{"role": "user", "content": content}],
     )
     texto_limpio = ""
