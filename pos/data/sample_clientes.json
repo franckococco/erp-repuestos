@@ -1,0 +1,7 @@
+[
+  {"cuit": "20111111112", "nombre": "JUAN PEREZ", "descuento": 0, "tipo_cliente": "ocasional"},
+  {"cuit": "27222222223", "nombre": "MARIA GONZALEZ", "descuento": 5, "tipo_cliente": "mecanico", "etiqueta_descuento": "TALLER"},
+  {"cuit": "20333333334", "nombre": "TALLER EL CRUCE", "descuento": 10, "tipo_cliente": "mecanico", "etiqueta_descuento": "MAYORISTA"},
+  {"cuit": "27444444445", "nombre": "CARLOS ALBERTO POCCIA", "descuento": 0, "tipo_cliente": "ocasional"},
+  {"cuit": "30555555556", "nombre": "AUTOMOTORES DEL SUR SA", "descuento": 15, "tipo_cliente": "cuenta_corriente"}
+]

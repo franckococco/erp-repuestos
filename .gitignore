@@ -1,6 +1,7 @@
 # Archivos de configuración local (SECRETOS)
 .env
 *.json
+!pos/data/sample_*.json
 
 # Streamlit: permitir config.toml, ignorar secretos locales
 .streamlit/*

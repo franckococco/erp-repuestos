@@ -1,0 +1,16 @@
+[
+  {"id": "111_GENERICO", "codigo": "111", "marca": "GENERICO", "descripcion": "FILTRO ACEITE UNIVERSAL", "vehiculo": "UNIVERSAL", "precio_venta": 4500.0, "stock": 12},
+  {"id": "111_MANN", "codigo": "111", "marca": "MANN", "descripcion": "FILTRO ACEITE UNIVERSAL", "vehiculo": "UNIVERSAL", "precio_venta": 6200.0, "stock": 5},
+  {"id": "BIELETA207_NAKATA", "codigo": "BIELETA207", "marca": "NAKATA", "descripcion": "BIELETA SUSPENSION DELANTERA", "vehiculo": "207", "precio_venta": 18500.0, "stock": 4},
+  {"id": "BIELETA207_TRW", "codigo": "BIELETA207", "marca": "TRW", "descripcion": "BIELETA SUSPENSION DELANTERA", "vehiculo": "207 / 208", "precio_venta": 21000.0, "stock": 2},
+  {"id": "ARRANQUEGOLD_GENERICO", "codigo": "ARRANQUEGOLD", "marca": "GENERICO", "descripcion": "ARRANQUE GOLD TREND", "vehiculo": "GOL TREND", "precio_venta": 89000.0, "stock": 2},
+  {"id": "BOMBAAGUA_SKF", "codigo": "BOMBAAGUA", "marca": "SKF", "descripcion": "BOMBA DE AGUA", "vehiculo": "GOL / VOYAGE", "precio_venta": 32000.0, "stock": 6},
+  {"id": "ROTULA_NAKATA", "codigo": "3640730-N", "marca": "NAKATA", "descripcion": "ROTULA SUSPENSION NAKATA 10408", "vehiculo": "UNIVERSAL", "precio_venta": 9800.0, "stock": 9},
+  {"id": "PASTILLA_MAHLE", "codigo": "PASTILLAFR", "marca": "MAHLE", "descripcion": "PASTILLA FRENO DELANTERA", "vehiculo": "AMAROK", "precio_venta": 27500.0, "stock": 7},
+  {"id": "CORREA_GATES", "codigo": "CORREA6PK", "marca": "GATES", "descripcion": "CORREA POLY V 6PK", "vehiculo": "UNIVERSAL", "precio_venta": 15200.0, "stock": 15},
+  {"id": "AMORT_MONROE", "codigo": "AMORTDEL", "marca": "MONROE", "descripcion": "AMORTIGUADOR DELANTERO", "vehiculo": "CRUZE", "precio_venta": 64000.0, "stock": 3},
+  {"id": "KITDIST_GATES", "codigo": "KITDIST", "marca": "GATES", "descripcion": "KIT DISTRIBUCION CON BOMBA", "vehiculo": "GOL TREND / VOYAGE", "precio_venta": 125000.0, "stock": 3},
+  {"id": "EMBRAGUE_LUK", "codigo": "EMBRAGUE", "marca": "LUK", "descripcion": "KIT EMBRAGUE COMPLETO", "vehiculo": "CORSA / CELTA", "precio_venta": 98000.0, "stock": 2},
+  {"id": "FARODER_VALEO", "codigo": "FARODER", "marca": "VALEO", "descripcion": "FARO DELANTERO DERECHO", "vehiculo": "207", "precio_venta": 145000.0, "stock": 1},
+  {"id": "SENSORABS_BOSCH", "codigo": "SENSORABS", "marca": "BOSCH", "descripcion": "SENSOR ABS RUEDA DELANTERA", "vehiculo": "AMAROK / GOLF", "precio_venta": 42000.0, "stock": 4}
+]
