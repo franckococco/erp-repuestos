@@ -1,0 +1,29 @@
+Pegá este bloque entero en un chat nuevo de Cursor (en la carpeta erp-repuestos):
+
+---
+Seguí el trabajo del Mostrador POS en `pos/` (FastAPI + HTML/JS). Contexto:
+
+OBJETIVO: caja/mostrador rápida para presupuestos. Streamlit queda para admin. ARCA/factura al final.
+
+YA HECHO:
+- Emulador local en http://127.0.0.1:8766 (`pos/ABRIR_POS.bat`)
+- Búsqueda rápida (misma lógica `util_busqueda`), carrito sin full reload
+- Tip `codigo*cantidad` + Enter; atajos F2/F3/F4/F6/Esc; Ctrl+Z deshacer
+- Carritos en espera; precio/cant/desc editables; ítem manual; clientes muestra
+- PDF presupuesto; historial local (cargar/duplicar/actualizar mismo nº/anular/filtro)
+- Banner "Conectar Firebase" + `POST /api/inventario/recargar`
+- Si existe `firebase_claves.json` en raíz del repo → inventario/clientes/presupuestos reales
+- Factura ARCA deshabilitada a propósito (501)
+
+ARCHIVOS CLAVE:
+- pos/server.py, inventory.py, presupuestos.py, clientes.py, ventas.py
+- pos/static/{index.html,app.js,styles.css}
+- pos/LEEME.txt (instrucciones humanas)
+
+SIGUIENTE PASO NATURAL:
+1) Verificar/conectar Firebase en esta PC (firebase_claves.json junto a app.py)
+2) Probar presupuestos con datos reales
+3) Recién después ARCA + stock + ticket
+
+Leé `pos/LEEME.txt` y el código actual antes de cambiar nada. Continuá desde Firebase real si las claves están; si no, ayudame a conectarlas. No inventes features Magnum aparte. No commits con secretos.
+---
