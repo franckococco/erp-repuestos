@@ -907,10 +907,15 @@ async function actualizarBannerFirebase(h) {
     btn.textContent = "Recargar inventario";
   } else {
     box.classList.remove("ok");
-    titulo.textContent = "Modo emulador (sin Firebase en esta PC)";
-    det.textContent =
-      h.instruccion ||
-      "Copiá firebase_claves.json a la carpeta erp-repuestos y tocá Conectar Firebase.";
+    if (h.tiene_claves && h.error_firebase) {
+      titulo.textContent = "Firebase temporalmente no disponible";
+      det.textContent = h.error_firebase;
+    } else {
+      titulo.textContent = "Modo emulador (sin Firebase en esta PC)";
+      det.textContent =
+        h.instruccion ||
+        "Copiá firebase_claves.json a la carpeta erp-repuestos y tocá Conectar Firebase.";
+    }
     btn.textContent = "Conectar Firebase";
   }
 }
@@ -924,6 +929,8 @@ async function conectarFirebase() {
       inventario: r.inventario || r.productos || 0,
       ruta_claves: r.ruta_claves,
       instruccion: r.instruccion,
+      tiene_claves: r.tiene_claves,
+      error_firebase: r.error_firebase,
       etiqueta: r.firebase ? "Firebase real" : "inventario de muestra",
     };
     $("statusPill").textContent = `OK · ${h.inventario} · ${h.etiqueta}`;
@@ -931,7 +938,10 @@ async function conectarFirebase() {
     if (h.firebase) {
       showMsg(`Firebase OK · ${h.inventario} productos`);
     } else {
-      showMsg(r.instruccion || "Todavía no hay firebase_claves.json", true);
+      showMsg(
+        r.error_firebase || r.instruccion || "Todavía no hay firebase_claves.json",
+        true
+      );
     }
   } catch (err) {
     showMsg(err.message, true);

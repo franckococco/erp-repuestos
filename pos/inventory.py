@@ -19,6 +19,7 @@ STOCK_CRITICO_DEFAULT = 3
 _MODO = "emulador"
 _INVENTARIO: List[Dict[str, Any]] = []
 _CARGADO = False
+_ERROR_FIREBASE: str | None = None
 
 
 def _cred_path() -> Path | None:
@@ -116,6 +117,7 @@ def estado_conexion() -> Dict[str, Any]:
         "modo": modo,
         "firebase": modo == "firebase",
         "tiene_claves": cred is not None,
+        "error_firebase": _ERROR_FIREBASE,
         "ruta_claves": str(cred) if cred else None,
         "productos": len(inv),
         "donde_buscar": [
@@ -136,7 +138,7 @@ def estado_conexion() -> Dict[str, Any]:
 
 def cargar_inventario(force: bool = False) -> Tuple[List[Dict[str, Any]], str]:
     """Devuelve (items, modo) donde modo es 'firebase' o 'emulador'."""
-    global _INVENTARIO, _MODO, _CARGADO
+    global _INVENTARIO, _MODO, _CARGADO, _ERROR_FIREBASE
     if _CARGADO and not force:
         return _INVENTARIO, _MODO
 
@@ -146,13 +148,17 @@ def cargar_inventario(force: bool = False) -> Tuple[List[Dict[str, Any]], str]:
             _INVENTARIO = _cargar_firebase(cred)
             _MODO = "firebase"
             _CARGADO = True
+            _ERROR_FIREBASE = None
             print(f"[POS] Firebase OK · {len(_INVENTARIO)} productos · {cred}", flush=True)
             return _INVENTARIO, _MODO
         except Exception as exc:
             print(f"[POS] Firebase falló ({exc}); uso inventario de muestra.", flush=True)
             _MODO = "emulador"
+            _ERROR_FIREBASE = str(exc)
             # no marcar _CARGADO con firebase fallido permanente si force:
             # cargamos sample pero permitimos reintentar
+    else:
+        _ERROR_FIREBASE = None
 
     _INVENTARIO = _cargar_sample()
     _MODO = "emulador"
@@ -162,7 +168,7 @@ def cargar_inventario(force: bool = False) -> Tuple[List[Dict[str, Any]], str]:
 
 def forzar_recarga() -> Dict[str, Any]:
     """Vuelve a leer claves e inventario (útil apenas copiás firebase_claves.json)."""
-    global _CARGADO, _INVENTARIO, _MODO
+    global _CARGADO, _INVENTARIO, _MODO, _ERROR_FIREBASE
     _CARGADO = False
     _INVENTARIO = []
     inv, modo = cargar_inventario(force=True)
