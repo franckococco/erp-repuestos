@@ -725,8 +725,8 @@ async function conectarFirebase() {
 }
 
 async function boot() {
-  bind();
   try {
+    bind();
     try {
       const vendLs = localStorage.getItem(LS_VEND);
       if (vendLs) $("vendedor").value = vendLs;

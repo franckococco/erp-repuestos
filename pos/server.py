@@ -32,6 +32,16 @@ from clientes import buscar as buscar_clientes  # noqa: E402
 
 app = FastAPI(title="HAFID POS", version="0.4.0")
 
+
+@app.middleware("http")
+async def evitar_cache_pos(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 _CARRITO: List[Dict[str, Any]] = []
 _CLIENTE: Dict[str, Any] = {
     "nombre": "CONSUMIDOR FINAL",
