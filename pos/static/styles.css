@@ -112,7 +112,7 @@ body {
   align-items: end;
 }
 .cliente-row.cliente-presu {
-  grid-template-columns: 1.1fr 1.1fr 0.7fr 0.4fr 0.9fr auto;
+  grid-template-columns: 1.1fr 1fr 0.7fr 0.7fr 0.4fr 0.8fr auto;
   position: relative;
 }
 .cli-busca { position: relative; }
@@ -151,7 +151,7 @@ label {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], select {
   width: 100%;
   border: 1.5px solid var(--line);
   border-radius: 10px;
@@ -161,7 +161,7 @@ input[type="text"], input[type="number"] {
   color: var(--ink);
   background: #fff;
 }
-input:focus {
+input:focus, select:focus {
   outline: 2px solid #93c5fd;
   border-color: var(--blue);
 }
@@ -445,6 +445,20 @@ h2 {
   gap: 8px;
   margin-top: 12px;
 }
+.factura-box {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.45fr) 1fr;
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+}
+.facturar {
+  background: linear-gradient(180deg, #16a34a, #166534);
+  color: #fff;
+  padding: 14px;
+  font-size: 1.05rem;
+}
+.facturar:disabled { opacity: 0.55; cursor: wait; }
 .msg {
   margin-top: 10px;
   padding: 10px 12px;
@@ -496,6 +510,9 @@ h2 {
   flex: none;
   padding: 9px 16px;
   font-size: 0.9rem;
+}
+.hist-tools.factura-tools {
+  grid-template-columns: minmax(220px, 1fr) 150px 150px auto auto;
 }
 .chk {
   display: flex;
@@ -567,6 +584,7 @@ kbd {
 @media (max-width: 900px) {
   .grid, .cliente-row, .cliente-row.cliente-presu { grid-template-columns: 1fr; }
   .hist-tools { grid-template-columns: 1fr 1fr; }
+  .hist-tools.factura-tools { grid-template-columns: 1fr 1fr; }
   .tipo-btns { width: 100%; }
   .tipo { flex: 1; }
   .presu-row { grid-template-columns: 1fr; }

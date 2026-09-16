@@ -29,6 +29,11 @@ from presupuestos import (  # noqa: E402
     regenerar_pdf,
 )
 from clientes import buscar as buscar_clientes  # noqa: E402
+from ventas import (  # noqa: E402
+    emitir_factura,
+    listar_facturas,
+    regenerar_ticket_factura,
+)
 
 app = FastAPI(title="HAFID POS", version="0.4.0")
 
@@ -121,12 +126,20 @@ class ClienteIn(BaseModel):
     cuit: str = ""
     tipo_comprobante: str = "6"
     descuento: float = 0.0
+    telefono: str = ""
+    condicion_iva: str = ""
 
 
 class PresupuestoIn(BaseModel):
     nota: str = ""
     vendedor: str = ""
     actualizar: bool = False
+
+
+class FacturaIn(BaseModel):
+    forma_pago: str = "Contado"
+    observacion: str = ""
+    confirmar: bool = False
 
 
 class VendedorIn(BaseModel):
@@ -499,7 +512,8 @@ def get_cliente():
 def put_cliente(body: ClienteIn):
     _CLIENTE.update(body.model_dump())
     _CLIENTE["descuento"] = max(0.0, min(100.0, float(_CLIENTE.get("descuento") or 0)))
-    _CLIENTE["tipo_comprobante"] = "6"
+    if str(_CLIENTE.get("tipo_comprobante")) not in ("1", "6"):
+        _CLIENTE["tipo_comprobante"] = "6"
     return _CLIENTE
 
 
@@ -629,11 +643,61 @@ def api_presupuesto_compat(body: PresupuestoIn = PresupuestoIn()):
 
 
 @app.post("/api/venta/factura")
-def api_factura_deshabilitada():
-    raise HTTPException(
-        501,
-        "Factura ARCA queda para más adelante. Por ahora usá solo Presupuesto.",
-    )
+def api_emitir_factura(body: FacturaIn):
+    global _CARRITO, _CLIENTE, _PRESUPUESTO_CARGADO
+    if not body.confirmar:
+        raise HTTPException(400, "Confirmá que querés emitir una factura real")
+    if not _CARRITO:
+        raise HTTPException(400, "Carrito vacío")
+    try:
+        resultado = emitir_factura(
+            [dict(i) for i in _CARRITO],
+            dict(_CLIENTE),
+            forma_pago=body.forma_pago,
+            vendedor=_VENDEDOR,
+            observacion=body.observacion,
+            presupuesto_id=_PRESUPUESTO_CARGADO,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    _CARRITO = []
+    _CLIENTE = {
+        "nombre": "CONSUMIDOR FINAL",
+        "cuit": "",
+        "tipo_comprobante": "6",
+        "descuento": 0.0,
+        "telefono": "",
+        "condicion_iva": "",
+    }
+    _PRESUPUESTO_CARGADO = None
+    return resultado
+
+
+@app.get("/api/facturas")
+def api_listar_facturas(
+    limite: int = 40,
+    q: str = Query(""),
+    fecha_desde: str = Query(""),
+    fecha_hasta: str = Query(""),
+):
+    return {
+        "resultados": listar_facturas(
+            limite=limite,
+            q=q,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+        )
+    }
+
+
+@app.get("/api/facturas/{factura_id}/ticket")
+def api_ticket_factura(factura_id: str):
+    try:
+        return regenerar_ticket_factura(factura_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")

@@ -299,7 +299,12 @@ def _ticket_simulado(
 
 
 def emitir_factura(
-    carrito: List[Dict[str, Any]], cliente: Dict[str, Any], forma_pago: str = "Contado"
+    carrito: List[Dict[str, Any]],
+    cliente: Dict[str, Any],
+    forma_pago: str = "Contado",
+    vendedor: str = VENDEDOR_POS,
+    observacion: str = "",
+    presupuesto_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not carrito:
         raise ValueError("Carrito vacío")
@@ -308,8 +313,20 @@ def emitir_factura(
         dig = re.sub(r"\D", "", cli["cuit"])
         if len(dig) != 11 or set(dig) <= {"0"}:
             raise ValueError("Factura A requiere CUIT de 11 dígitos")
+    for item in carrito:
+        if item.get("manual"):
+            continue
+        stock = item.get("stock")
+        cantidad = max(1, int(item.get("cantidad") or 1))
+        if stock is not None and cantidad > int(stock):
+            raise ValueError(
+                f"Stock insuficiente para {item.get('descripcion') or item.get('codigo')}: "
+                f"hay {stock} y se pidieron {cantidad}"
+            )
 
     bruto, desc, final = _totales(carrito, cli)
+    if final <= 0:
+        raise ValueError("El total de la factura debe ser mayor a cero")
     items_fc = _items_factura(carrito, desc)
     datos_cli = {
         "cuit": cli["cuit"],
@@ -320,103 +337,183 @@ def emitir_factura(
     }
     letra = "A" if cli["tipo_comprobante"] == "1" else "B"
 
-    r: Dict[str, Any] = {"success": False, "error": "ARCA deshabilitado en emulador"}
-    if arca_habilitado():
-        try:
-            from modulos.factura_arca_client import generar_factura
+    if not arca_habilitado():
+        raise RuntimeError("ARCA no está habilitado en esta PC")
+    db = _db()
 
-            r = generar_factura(
-                CUIT_EMISOR_ARCA, CLAVE_EMISOR_ARCA, datos_cli, items_fc, forma_pago
-            )
-        except Exception as exc:
-            r = {"success": False, "error": str(exc)}
-    else:
-        r = {
-            "success": False,
-            "error": "Emulador: poné firebase_claves.json o POS_ARCA_REAL=1 para ARCA real",
-        }
+    try:
+        from modulos.factura_arca_client import generar_factura
 
-    if r.get("success") and isinstance(r.get("data"), dict):
-        data = r["data"]
-        stock_ok = False
-        stock_msg = ""
-        if firebase_disponible():
-            try:
-                _descontar_stock(carrito)
-                stock_ok = True
-                stock_msg = "Stock descontado"
-                try:
-                    db = _db()
-                    db.collection("comprobantes_arca").document().set(
-                        {
-                            "vendedor": VENDEDOR_POS,
-                            "cliente": datos_cli,
-                            "cae": data.get("cae"),
-                            "vencimiento_cae": data.get("vencimiento_cae"),
-                            "punto_venta": data.get("punto_venta"),
-                            "numero_factura": data.get("numero_factura"),
-                            "nombre_empresa": data.get("nombre_empresa"),
-                            "direccion_empresa": data.get("direccion_empresa"),
-                            "items": items_fc,
-                            "forma_pago": forma_pago,
-                            "total": float(final),
-                            "origen": "pos_caja",
-                            "fecha": datetime.now(timezone.utc),
-                        }
-                    )
-                except Exception:
-                    pass
-            except Exception as exc:
-                stock_msg = f"CAE OK pero stock no descontado: {exc}"
-        else:
-            stock_msg = "CAE OK · stock no descontado (sin Firebase en esta PC)"
-
-        from modulos.factura_arca_ticket_html import crear_ticket_html
-
-        html = crear_ticket_html(
-            data, datos_cli, items_fc, forma_pago=forma_pago, vendedor=VENDEDOR_POS
+        r = generar_factura(
+            CUIT_EMISOR_ARCA, CLAVE_EMISOR_ARCA, datos_cli, items_fc, forma_pago
         )
-        if "</body>" in html:
-            html = html.replace(
-                "</body>",
-                "<script>window.onload=function(){setTimeout(function(){window.print()},400)}</script></body>",
-            )
-        try:
-            pto = int(float(data.get("punto_venta") or 0))
-            nro = int(float(data.get("numero_factura") or 0))
-            nro_txt = f"{pto:04d}-{nro:08d}"
-        except (TypeError, ValueError):
-            nro_txt = "—"
-        return {
-            "ok": True,
-            "simulado": False,
-            "mensaje": f"Factura {letra} {nro_txt} · CAE {data.get('cae')}",
-            "nro": nro_txt,
-            "cae": data.get("cae"),
-            "total": final,
-            "total_txt": f"${final:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-            "ticket_html": html,
-            "stock_ok": stock_ok,
-            "stock_msg": stock_msg,
-            "cliente": cli["nombre"],
-        }
+    except Exception as exc:
+        raise RuntimeError(f"No se pudo consultar ARCA: {exc}") from exc
 
-    # Fallback emulador
-    html = _ticket_simulado(carrito, cli, final)
-    err = (r.get("error") or "ARCA no disponible")[:180]
+    if not r.get("success") or not isinstance(r.get("data"), dict):
+        raise RuntimeError(str(r.get("error") or "ARCA rechazó la factura"))
+    data = r["data"]
+    if not data.get("cae"):
+        raise RuntimeError("ARCA no devolvió un CAE")
+
+    ahora = datetime.now(timezone.utc)
+    ref = db.collection("comprobantes_arca").document()
+    ref.set(
+        {
+            "vendedor": str(vendedor or VENDEDOR_POS),
+            "cliente": datos_cli,
+            "cae": data.get("cae"),
+            "vencimiento_cae": data.get("vencimiento_cae"),
+            "punto_venta": data.get("punto_venta"),
+            "numero_factura": data.get("numero_factura"),
+            "nombre_empresa": data.get("nombre_empresa"),
+            "direccion_empresa": data.get("direccion_empresa"),
+            "items": items_fc,
+            "forma_pago": forma_pago,
+            "total": float(final),
+            "observacion": str(observacion or "").strip(),
+            "tipo_comprobante": cli["tipo_comprobante"],
+            "presupuesto_id": presupuesto_id,
+            "origen": "pos_caja",
+            "fecha": ahora,
+        }
+    )
+
+    stock_ok = False
+    stock_msg = ""
+    try:
+        _descontar_stock(carrito)
+        stock_ok = True
+        stock_msg = "Stock descontado"
+    except Exception as exc:
+        stock_msg = f"CAE OK pero stock no descontado: {exc}"
+
+    if presupuesto_id:
+        try:
+            db.collection("presupuestos_guardados").document(str(presupuesto_id)).update(
+                {"estado": "facturado", "factura_id": ref.id, "actualizado": ahora}
+            )
+        except Exception:
+            pass
+
+    from modulos.factura_arca_ticket_html import crear_ticket_html
+
+    html = crear_ticket_html(
+        data,
+        datos_cli,
+        items_fc,
+        forma_pago=forma_pago,
+        vendedor=str(vendedor or VENDEDOR_POS),
+    )
+    if "</body>" in html:
+        html = html.replace(
+            "</body>",
+            "<script>window.onload=function(){setTimeout(function(){window.print()},400)}</script></body>",
+        )
+    try:
+        pto = int(float(data.get("punto_venta") or 0))
+        nro = int(float(data.get("numero_factura") or 0))
+        nro_txt = f"{pto:04d}-{nro:08d}"
+    except (TypeError, ValueError):
+        nro_txt = "—"
     return {
         "ok": True,
-        "simulado": True,
-        "mensaje": f"Emulador factura {letra} (ARCA: {err})",
-        "nro": f"0007-{len(carrito):08d}",
+        "simulado": False,
+        "mensaje": f"Factura {letra} {nro_txt} · CAE {data.get('cae')}",
+        "id": ref.id,
+        "nro": nro_txt,
+        "cae": data.get("cae"),
         "total": final,
         "total_txt": f"${final:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
         "ticket_html": html,
-        "stock_ok": False,
-        "stock_msg": "Simulación · sin descontar stock",
+        "stock_ok": stock_ok,
+        "stock_msg": stock_msg,
         "cliente": cli["nombre"],
-        "nota": err,
     }
+
+
+def listar_facturas(
+    limite: int = 40,
+    q: str = "",
+    fecha_desde: str = "",
+    fecha_hasta: str = "",
+) -> List[Dict[str, Any]]:
+    if not firebase_disponible():
+        return []
+    from firebase_admin import firestore
+
+    docs = (
+        _db()
+        .collection("comprobantes_arca")
+        .order_by("fecha", direction=firestore.Query.DESCENDING)  # type: ignore
+        .limit(max(120, limite * 3))
+        .stream()
+    )
+    texto = str(q or "").strip().upper()
+    digitos = re.sub(r"\D", "", str(q or ""))
+    desde = str(fecha_desde or "")[:10]
+    hasta = str(fecha_hasta or "")[:10]
+    resultados: List[Dict[str, Any]] = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        cli = data.get("cliente") or {}
+        raw_fecha = data.get("fecha")
+        fecha = raw_fecha.date().isoformat() if isinstance(raw_fecha, datetime) else str(raw_fecha or "")[:10]
+        if desde and fecha < desde:
+            continue
+        if hasta and fecha > hasta:
+            continue
+        try:
+            nro = f"{int(float(data.get('punto_venta') or 0)):04d}-{int(float(data.get('numero_factura') or 0)):08d}"
+        except (TypeError, ValueError):
+            nro = "—"
+        blob = f"{nro} {data.get('cae','')} {cli.get('nombre','')} {cli.get('cuit','')}".upper()
+        if texto and texto not in blob and (not digitos or digitos not in re.sub(r"\D", "", blob)):
+            continue
+        total = float(data.get("total") or 0)
+        resultados.append(
+            {
+                "id": doc.id,
+                "numero": nro,
+                "letra": "A" if str(data.get("tipo_comprobante") or cli.get("cbte_tipo")) == "1" else "B",
+                "cliente": cli.get("nombre") or "CONSUMIDOR FINAL",
+                "cuit": cli.get("cuit") or "",
+                "fecha": fecha,
+                "cae": str(data.get("cae") or ""),
+                "forma_pago": data.get("forma_pago") or "",
+                "total": total,
+                "total_txt": f"${total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+            }
+        )
+        if len(resultados) >= limite:
+            break
+    return resultados
+
+
+def regenerar_ticket_factura(factura_id: str) -> Dict[str, Any]:
+    doc = _db().collection("comprobantes_arca").document(str(factura_id)).get()
+    if not doc.exists:
+        raise ValueError("Factura no encontrada")
+    data = doc.to_dict() or {}
+    cli = data.get("cliente") or {}
+    respuesta = {
+        "cae": data.get("cae"),
+        "vencimiento_cae": data.get("vencimiento_cae"),
+        "punto_venta": data.get("punto_venta"),
+        "numero_factura": data.get("numero_factura"),
+        "nombre_empresa": data.get("nombre_empresa"),
+        "direccion_empresa": data.get("direccion_empresa"),
+    }
+    from modulos.factura_arca_ticket_html import crear_ticket_html
+
+    html = crear_ticket_html(
+        respuesta,
+        cli,
+        data.get("items") or [],
+        forma_pago=data.get("forma_pago") or "Contado",
+        vendedor=data.get("vendedor") or VENDEDOR_POS,
+    )
+    return {"ok": True, "ticket_html": html}
 
 
 def buscar_cliente(termino: str, limite: int = 15) -> List[Dict[str, Any]]:

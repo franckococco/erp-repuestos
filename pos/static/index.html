@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>HAFID · Presupuestos POS</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260916-1" />
+  <title>HAFID · Ventas POS</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260916-2" />
 </head>
 <body>
   <div class="app">
     <header class="top">
       <div>
         <div class="brand">HAFID AUTOPARTES</div>
-        <div class="sub">Mostrador POS · presupuestos</div>
+        <div class="sub">Mostrador POS · ventas y presupuestos</div>
       </div>
       <div class="top-right">
         <label class="vend">
@@ -44,6 +44,13 @@
         <label>
           CUIT/DNI
           <input id="cliCuit" type="text" inputmode="numeric" placeholder="opcional" />
+        </label>
+        <label>
+          Comprobante
+          <select id="cliTipo">
+            <option value="6">Factura B</option>
+            <option value="1">Factura A</option>
+          </select>
         </label>
         <label>
           Desc. %
@@ -105,6 +112,19 @@
         <div class="acciones">
           <button type="button" class="primary" id="btnPresu">Generar presupuesto PDF</button>
         </div>
+        <div class="factura-box">
+          <label>
+            Forma de pago
+            <select id="formaPago">
+              <option>Contado</option>
+              <option>Transferencia</option>
+              <option>Tarjeta</option>
+              <option>MercadoPago</option>
+              <option>Cheque</option>
+            </select>
+          </label>
+          <button type="button" class="facturar" id="btnFactura">Facturar ARCA</button>
+        </div>
         <div id="msg" class="msg" hidden></div>
       </section>
     </main>
@@ -133,11 +153,31 @@
       </div>
     </details>
 
+    <details class="historial card" id="buscadorFacturas">
+      <summary>Buscar facturas ARCA</summary>
+      <div class="hist-tools factura-tools">
+        <input id="facturaQ" type="text" placeholder="Cliente, DNI/CUIT, nº o CAE…" />
+        <label>
+          Desde
+          <input id="facturaDesde" type="date" />
+        </label>
+        <label>
+          Hasta
+          <input id="facturaHasta" type="date" />
+        </label>
+        <button type="button" class="primary buscar-comp" id="btnBuscarFactura">Buscar</button>
+        <button type="button" class="ghost" id="btnLimpiarFactura">Limpiar</button>
+      </div>
+      <div id="listaFacturas" class="lista-presu">
+        <div class="empty">Ingresá cliente, DNI/CUIT, número, CAE o fechas y tocá Buscar.</div>
+      </div>
+    </details>
+
     <footer class="foot">
-      <kbd>F2</kbd> buscar · <kbd>F3</kbd> cliente · <kbd>F4</kbd> presupuesto · <kbd>F6</kbd> en espera · <kbd>Esc</kbd> limpia ·
+      <kbd>F2</kbd> buscar · <kbd>F3</kbd> cliente · <kbd>F4</kbd> presupuesto · <kbd>F5</kbd> factura · <kbd>F6</kbd> en espera · <kbd>Esc</kbd> limpia ·
       <kbd>Enter</kbd> agrega · tip: <code>111*3</code> · <kbd>Ctrl</kbd>+<kbd>Z</kbd> deshacer
     </footer>
   </div>
-  <script src="/static/app.js?v=20260916-1"></script>
+  <script src="/static/app.js?v=20260916-2"></script>
 </body>
 </html>

@@ -57,6 +57,17 @@ function abrirPdfBase64(b64, nombre) {
   window.open(url, "_blank");
 }
 
+function abrirTicketHtml(html, ventana) {
+  const w = ventana || window.open("", "_blank");
+  if (!w) {
+    showMsg("El navegador bloqueó la impresión. Habilitá ventanas emergentes.", true);
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
 function guardarBorrador(data) {
   try {
     localStorage.setItem(
@@ -91,8 +102,9 @@ async function syncCliente() {
     body: JSON.stringify({
       nombre: $("cliNombre").value || "CONSUMIDOR FINAL",
       cuit: $("cliCuit").value || "",
-      tipo_comprobante: "6",
+      tipo_comprobante: $("cliTipo").value || "6",
       descuento: parseFloat($("cliDesc").value || "0") || 0,
+      condicion_iva: $("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "",
     }),
   });
 }
@@ -114,6 +126,7 @@ function aplicarClienteEnForm(cli) {
   $("cliNombre").value = cli.nombre || "CONSUMIDOR FINAL";
   $("cliCuit").value = cli.cuit && cli.cuit !== "00000000000" ? cli.cuit : "";
   $("cliDesc").value = String(cli.descuento || 0);
+  $("cliTipo").value = String(cli.tipo_comprobante || cli.cbte_tipo || "6");
 }
 
 function renderCliHits(lista) {
@@ -397,6 +410,57 @@ async function refreshPresupuestos(q) {
   renderListaPresu(data.resultados || []);
 }
 
+function renderFacturas(lista) {
+  const box = $("listaFacturas");
+  if (!lista.length) {
+    box.innerHTML = '<div class="empty">No se encontraron facturas.</div>';
+    return;
+  }
+  box.innerHTML = lista
+    .map(
+      (f) => `
+      <div class="presu-row">
+        <div>
+          <div class="cod">Factura ${f.letra} ${f.numero} · ${f.cliente}</div>
+          <div class="meta">${f.fecha} · ${f.cuit || "sin DNI/CUIT"} · ${f.forma_pago} · ${f.total_txt} · CAE ${f.cae}</div>
+        </div>
+        <div class="presu-actions">
+          <button type="button" data-ticket="${f.id}">Reimprimir</button>
+        </div>
+      </div>`
+    )
+    .join("");
+  box.querySelectorAll("button[data-ticket]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const w = window.open("", "_blank");
+      try {
+        const r = await api(`/api/facturas/${encodeURIComponent(btn.dataset.ticket)}/ticket`);
+        abrirTicketHtml(r.ticket_html, w);
+      } catch (err) {
+        if (w) w.close();
+        showMsg(err.message, true);
+      }
+    });
+  });
+}
+
+async function buscarFacturas() {
+  const term = $("facturaQ").value || "";
+  const desde = $("facturaDesde").value || "";
+  const hasta = $("facturaHasta").value || "";
+  if (!term.trim() && !desde && !hasta) {
+    $("listaFacturas").innerHTML =
+      '<div class="empty">Ingresá cliente, DNI/CUIT, número, CAE o fechas y tocá Buscar.</div>';
+    return;
+  }
+  const data = await api(
+    `/api/facturas?q=${encodeURIComponent(term)}` +
+      `&fecha_desde=${encodeURIComponent(desde)}` +
+      `&fecha_hasta=${encodeURIComponent(hasta)}`
+  );
+  renderFacturas(data.resultados || []);
+}
+
 async function addItem(id, cantOverride) {
   const cant = Math.max(
     1,
@@ -479,10 +543,25 @@ function bind() {
       '<div class="empty">Ingresá cliente, DNI/CUIT, número o fechas y tocá Buscar.</div>';
   });
 
+  $("facturaQ").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    buscarFacturas();
+  });
+  $("btnBuscarFactura").addEventListener("click", buscarFacturas);
+  $("btnLimpiarFactura").addEventListener("click", () => {
+    $("facturaQ").value = "";
+    $("facturaDesde").value = "";
+    $("facturaHasta").value = "";
+    $("listaFacturas").innerHTML =
+      '<div class="empty">Ingresá cliente, DNI/CUIT, número, CAE o fechas y tocá Buscar.</div>';
+  });
+
   $("cliDesc").addEventListener("change", async () => {
     await syncCliente();
     await refreshCarrito();
   });
+  $("cliTipo").addEventListener("change", syncCliente);
 
   $("btnGuardarCli").addEventListener("click", async () => {
     await syncCliente();
@@ -546,6 +625,7 @@ function bind() {
   });
 
   $("btnPresu").addEventListener("click", emitirPresupuesto);
+  $("btnFactura").addEventListener("click", emitirFactura);
 
   $("btnFirebase").addEventListener("click", conectarFirebase);
 
@@ -569,6 +649,9 @@ function bind() {
     } else if (e.key === "F4") {
       e.preventDefault();
       emitirPresupuesto();
+    } else if (e.key === "F5") {
+      e.preventDefault();
+      emitirFactura();
     } else if (e.key === "F6") {
       e.preventDefault();
       $("btnEspera").click();
@@ -674,6 +757,48 @@ async function emitirPresupuesto() {
     showMsg(err.message, true);
   } finally {
     $("btnPresu").disabled = false;
+  }
+}
+
+async function emitirFactura() {
+  const letra = $("cliTipo").value === "1" ? "A" : "B";
+  const cliente = $("cliNombre").value || "CONSUMIDOR FINAL";
+  const cuit = $("cliCuit").value || "sin DNI/CUIT";
+  const total = $("tTotal").textContent || "$0,00";
+  const pago = $("formaPago").value || "Contado";
+  const ok = confirm(
+    `FACTURA REAL ARCA\n\nFactura ${letra}\nCliente: ${cliente}\nDNI/CUIT: ${cuit}\nPago: ${pago}\nTotal: ${total}\n\n¿Emitir y solicitar CAE?`
+  );
+  if (!ok) return;
+
+  const ventana = window.open("", "_blank");
+  try {
+    $("btnFactura").disabled = true;
+    $("btnFactura").textContent = "Consultando ARCA…";
+    await syncCliente();
+    await syncVendedor();
+    const r = await api("/api/venta/factura", {
+      method: "POST",
+      body: JSON.stringify({
+        forma_pago: pago,
+        observacion: $("nota").value || "",
+        confirmar: true,
+      }),
+    });
+    abrirTicketHtml(r.ticket_html, ventana);
+    showMsg(`${r.mensaje} · ${r.total_txt} · ${r.stock_msg || ""}`);
+    $("nota").value = "";
+    $("cliBusca").value = "";
+    presupuestoCargadoId = null;
+    presupuestoCargadoNro = null;
+    limpiarBorrador();
+    await refreshCarrito();
+  } catch (err) {
+    if (ventana) ventana.close();
+    showMsg(`No se emitió la factura: ${err.message}`, true);
+  } finally {
+    $("btnFactura").disabled = false;
+    $("btnFactura").textContent = "Facturar ARCA";
   }
 }
 
