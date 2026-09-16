@@ -10,6 +10,7 @@
 # Carpetas temporales de Python
 __pycache__/
 *.pyc
+.venv/
 
 # Archivos del sistema
 .DS_Store
