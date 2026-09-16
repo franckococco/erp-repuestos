@@ -330,12 +330,20 @@ def _resumen(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def listar(limite: int = 30, q: str = "", incluir_anulados: bool = False) -> List[Dict[str, Any]]:
+def listar(
+    limite: int = 30,
+    q: str = "",
+    incluir_anulados: bool = False,
+    fecha_desde: str = "",
+    fecha_hasta: str = "",
+) -> List[Dict[str, Any]]:
     """Lista presupuestos: abiertos (+ anulados si se pide)."""
     out: List[Dict[str, Any]] = []
     vistos = set()
     filtro = (q or "").strip().upper()
     dig = "".join(c for c in (q or "") if c.isdigit())
+    desde = str(fecha_desde or "").strip()[:10]
+    hasta = str(fecha_hasta or "").strip()[:10]
 
     def _pasa_filtro(res: Dict[str, Any]) -> bool:
         if not filtro and not dig:
@@ -353,6 +361,20 @@ def listar(limite: int = 30, q: str = "", incluir_anulados: bool = False) -> Lis
             return est in ("abierto", "anulado", "")
         return est in ("abierto", "")
 
+    def _pasa_fecha(data: Dict[str, Any]) -> bool:
+        raw = data.get("creado")
+        if isinstance(raw, datetime):
+            fecha = raw.date().isoformat()
+        else:
+            fecha = str(raw or "")[:10]
+        if not fecha:
+            return not (desde or hasta)
+        if desde and fecha < desde:
+            return False
+        if hasta and fecha > hasta:
+            return False
+        return True
+
     if firebase_disponible():
         try:
             db = _db()
@@ -367,6 +389,8 @@ def listar(limite: int = 30, q: str = "", incluir_anulados: bool = False) -> Lis
             for d in docs:
                 data = {"id": d.id, **(d.to_dict() or {})}
                 if not _pasa_estado(data.get("estado")):
+                    continue
+                if not _pasa_fecha(data):
                     continue
                 res = _resumen(data)
                 if not _pasa_filtro(res):
@@ -383,6 +407,8 @@ def listar(limite: int = 30, q: str = "", incluir_anulados: bool = False) -> Lis
         if pid in vistos:
             continue
         if not _pasa_estado(p.get("estado")):
+            continue
+        if not _pasa_fecha(p):
             continue
         res = _resumen(p)
         if not _pasa_filtro(res):

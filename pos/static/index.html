@@ -109,22 +109,29 @@
       </section>
     </main>
 
-    <section class="historial card">
-      <div class="carrito-head">
-        <h2>3 · Presupuestos guardados</h2>
-        <div class="hist-tools">
-          <input id="presuQ" type="text" placeholder="Filtrar por cliente o nº…" />
-          <label class="chk">
-            <input type="checkbox" id="chkAnulados" />
-            Anulados
-          </label>
-          <button type="button" class="ghost" id="btnRefreshPresu">Actualizar</button>
-        </div>
+    <details class="historial card" id="buscadorComprobantes">
+      <summary>Buscar presupuestos anteriores</summary>
+      <div class="hist-tools">
+        <input id="presuQ" type="text" placeholder="Cliente, DNI/CUIT o nº…" />
+        <label>
+          Desde
+          <input id="presuDesde" type="date" />
+        </label>
+        <label>
+          Hasta
+          <input id="presuHasta" type="date" />
+        </label>
+        <label class="chk">
+          <input type="checkbox" id="chkAnulados" />
+          Incluir anulados
+        </label>
+        <button type="button" class="primary buscar-comp" id="btnBuscarPresu">Buscar</button>
+        <button type="button" class="ghost" id="btnLimpiarPresu">Limpiar</button>
       </div>
       <div id="listaPresu" class="lista-presu">
-        <div class="empty">Todavía no hay presupuestos en esta PC</div>
+        <div class="empty">Ingresá cliente, DNI/CUIT, número o fechas y tocá Buscar.</div>
       </div>
-    </section>
+    </details>
 
     <footer class="foot">
       <kbd>F2</kbd> buscar · <kbd>F3</kbd> cliente · <kbd>F4</kbd> presupuesto · <kbd>F6</kbd> en espera · <kbd>Esc</kbd> limpia ·

@@ -4,7 +4,7 @@ const LS_VEND = "hafid_pos_vendedor";
 
 let debounceTimer = null;
 let cliTimer = null;
-let presuTimer = null;
+let busquedaPresuActiva = false;
 let presupuestoCargadoId = null;
 let presupuestoCargadoNro = null;
 let lastResultados = [];
@@ -326,7 +326,7 @@ function renderListaPresu(lista) {
         <div class="cod">Nº ${p.numero_txt} · ${p.cliente}${
           anulado ? ' <span class="estado-anulado">ANULADO</span>' : ""
         }</div>
-        <div class="meta">${p.creado} · ${p.items} ítem(s) · ${p.total_txt} · ${p.origen}</div>
+        <div class="meta">${p.creado} · ${p.cuit || "sin DNI/CUIT"} · ${p.items} ítem(s) · ${p.total_txt}</div>
       </div>
       <div class="presu-actions">${acciones}</div>
     </div>`;
@@ -379,8 +379,20 @@ async function refreshCarrito() {
 async function refreshPresupuestos(q) {
   const term = q != null ? q : $("presuQ")?.value || "";
   const anul = $("chkAnulados")?.checked ? "true" : "false";
+  const desde = $("presuDesde")?.value || "";
+  const hasta = $("presuHasta")?.value || "";
+  if (!term.trim() && !desde && !hasta) {
+    busquedaPresuActiva = false;
+    $("listaPresu").innerHTML =
+      '<div class="empty">Ingresá cliente, DNI/CUIT, número o fechas y tocá Buscar.</div>';
+    return;
+  }
+  busquedaPresuActiva = true;
   const data = await api(
-    `/api/presupuestos?q=${encodeURIComponent(term)}&incluir_anulados=${anul}`
+    `/api/presupuestos?q=${encodeURIComponent(term)}` +
+      `&fecha_desde=${encodeURIComponent(desde)}` +
+      `&fecha_hasta=${encodeURIComponent(hasta)}` +
+      `&incluir_anulados=${anul}`
   );
   renderListaPresu(data.resultados || []);
 }
@@ -449,12 +461,23 @@ function bind() {
     cliTimer = setTimeout(() => buscarClientes($("cliBusca").value), 200);
   });
 
-  $("presuQ").addEventListener("input", () => {
-    clearTimeout(presuTimer);
-    presuTimer = setTimeout(() => refreshPresupuestos($("presuQ").value), 200);
+  $("presuQ").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    refreshPresupuestos();
   });
 
-  $("chkAnulados").addEventListener("change", () => refreshPresupuestos());
+  $("btnBuscarPresu").addEventListener("click", () => refreshPresupuestos());
+
+  $("btnLimpiarPresu").addEventListener("click", () => {
+    $("presuQ").value = "";
+    $("presuDesde").value = "";
+    $("presuHasta").value = "";
+    $("chkAnulados").checked = false;
+    busquedaPresuActiva = false;
+    $("listaPresu").innerHTML =
+      '<div class="empty">Ingresá cliente, DNI/CUIT, número o fechas y tocá Buscar.</div>';
+  });
 
   $("cliDesc").addEventListener("change", async () => {
     await syncCliente();
@@ -521,8 +544,6 @@ function bind() {
     await syncVendedor();
     await refreshCarrito();
   });
-
-  $("btnRefreshPresu").addEventListener("click", () => refreshPresupuestos());
 
   $("btnPresu").addEventListener("click", emitirPresupuesto);
 
@@ -648,7 +669,7 @@ async function emitirPresupuesto() {
     presupuestoCargadoNro = null;
     limpiarBorrador();
     await refreshCarrito();
-    await refreshPresupuestos();
+    if (busquedaPresuActiva) await refreshPresupuestos();
   } catch (err) {
     showMsg(err.message, true);
   } finally {

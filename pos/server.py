@@ -510,10 +510,16 @@ def api_listar_presupuestos(
     limite: int = 30,
     q: str = Query(""),
     incluir_anulados: bool = False,
+    fecha_desde: str = Query(""),
+    fecha_hasta: str = Query(""),
 ):
     return {
         "resultados": listar_presupuestos(
-            limite=limite, q=q, incluir_anulados=incluir_anulados
+            limite=limite,
+            q=q,
+            incluir_anulados=incluir_anulados,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
         )
     }
 
