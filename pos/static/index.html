@@ -4,9 +4,28 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HAFID · Ventas POS</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260916-2" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260916-3" />
 </head>
 <body>
+  <div id="loginOverlay" class="login-overlay">
+    <form id="loginForm" class="login-card">
+      <div class="brand">HAFID AUTOPARTES</div>
+      <h1>Ingreso al mostrador</h1>
+      <label>Usuario<input id="loginUsuario" type="text" autocomplete="username" required /></label>
+      <label>Clave<input id="loginClave" type="password" autocomplete="current-password" required /></label>
+      <button type="submit" class="primary">Entrar</button>
+      <div id="loginError" class="login-error" hidden></div>
+    </form>
+    <form id="cambioInicialForm" class="login-card" hidden>
+      <div class="brand">HAFID AUTOPARTES</div>
+      <h1>Cambiar clave inicial</h1>
+      <p>Por seguridad, elegí una clave personal antes de continuar.</p>
+      <label>Nueva clave<input id="claveNuevaInicial" type="password" minlength="4" required /></label>
+      <label>Repetir clave<input id="claveNuevaRepetir" type="password" minlength="4" required /></label>
+      <button type="submit" class="primary">Guardar mi clave</button>
+      <div id="cambioInicialError" class="login-error" hidden></div>
+    </form>
+  </div>
   <div class="app">
     <header class="top">
       <div>
@@ -14,6 +33,11 @@
         <div class="sub">Mostrador POS · ventas y presupuestos</div>
       </div>
       <div class="top-right">
+        <div class="usuario-box" id="usuarioBox" hidden>
+          <strong id="usuarioNombre"></strong>
+          <button type="button" class="ghost" id="btnClave">Cambiar clave</button>
+          <button type="button" class="ghost" id="btnLogout">Salir</button>
+        </div>
         <label class="vend">
           Vendedor
           <input id="vendedor" type="text" value="CAJA" maxlength="24" />
@@ -57,8 +81,8 @@
           <input id="cliDesc" type="number" min="0" max="100" step="0.5" value="0" />
         </label>
         <label>
-          Nota
-          <input id="nota" type="text" placeholder="opcional" />
+          Leyenda / observación
+          <input id="nota" type="text" placeholder="Ej.: Entregar por la tarde" />
         </label>
         <button type="button" class="ghost" id="btnGuardarCli">Aplicar</button>
       </div>
@@ -125,6 +149,21 @@
           </label>
           <button type="button" class="facturar" id="btnFactura">Facturar ARCA</button>
         </div>
+        <div id="tarjetaOpts" class="tarjeta-opts" hidden>
+          <label>
+            Cuotas
+            <input id="tarjetaCuotas" type="number" min="1" max="48" value="1" />
+          </label>
+          <label>
+            Interés %
+            <input id="tarjetaInteres" type="number" min="0" max="100" step="0.5" value="0" />
+          </label>
+          <div class="financiado">
+            <span>Total financiado</span>
+            <strong id="totalFinanciado">$0,00</strong>
+            <small id="valorCuota">1 cuota de $0,00</small>
+          </div>
+        </div>
         <div id="msg" class="msg" hidden></div>
       </section>
     </main>
@@ -153,6 +192,13 @@
       </div>
     </details>
 
+    <details class="historial card" id="panelAdminPuntos" hidden>
+      <summary>Administración · puntos de vendedores</summary>
+      <div id="listaPuntos" class="lista-presu">
+        <div class="empty">Cargando puntos…</div>
+      </div>
+    </details>
+
     <details class="historial card" id="buscadorFacturas">
       <summary>Buscar facturas ARCA</summary>
       <div class="hist-tools factura-tools">
@@ -178,6 +224,6 @@
       <kbd>Enter</kbd> agrega · tip: <code>111*3</code> · <kbd>Ctrl</kbd>+<kbd>Z</kbd> deshacer
     </footer>
   </div>
-  <script src="/static/app.js?v=20260916-2"></script>
+  <script src="/static/app.js?v=20260916-3"></script>
 </body>
 </html>

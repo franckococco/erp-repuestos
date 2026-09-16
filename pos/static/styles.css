@@ -14,6 +14,31 @@
 }
 
 * { box-sizing: border-box; }
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: linear-gradient(135deg, #dbeafe, #eef2f6);
+}
+.login-overlay[hidden] { display: none; }
+.login-card {
+  width: min(390px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+.login-card[hidden] { display: none; }
+.login-card h1 { margin: 0; font-size: 1.25rem; }
+.login-card .primary { width: 100%; flex: none; }
+.login-error { color: var(--danger); font-weight: 700; }
 body {
   margin: 0;
   background:
@@ -39,6 +64,13 @@ body {
   align-items: center;
   gap: 10px;
 }
+.usuario-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+.usuario-box .ghost { padding: 7px 10px; }
 .vend {
   display: flex;
   flex-direction: column;
@@ -151,7 +183,7 @@ label {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-input[type="text"], input[type="number"], select {
+input[type="text"], input[type="password"], input[type="number"], select {
   width: 100%;
   border: 1.5px solid var(--line);
   border-radius: 10px;
@@ -459,6 +491,25 @@ h2 {
   font-size: 1.05rem;
 }
 .facturar:disabled { opacity: 0.55; cursor: wait; }
+.tarjeta-opts {
+  display: grid;
+  grid-template-columns: 110px 130px minmax(180px, 1fr);
+  gap: 8px;
+  align-items: end;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+}
+.tarjeta-opts[hidden] { display: none; }
+.financiado {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.financiado span, .financiado small { color: var(--muted); font-weight: 700; }
+.financiado strong { color: var(--blue-dark); font-size: 1.2rem; }
 .msg {
   margin-top: 10px;
   padding: 10px 12px;
@@ -585,6 +636,8 @@ kbd {
   .grid, .cliente-row, .cliente-row.cliente-presu { grid-template-columns: 1fr; }
   .hist-tools { grid-template-columns: 1fr 1fr; }
   .hist-tools.factura-tools { grid-template-columns: 1fr 1fr; }
+  .tarjeta-opts { grid-template-columns: 1fr 1fr; }
+  .financiado { align-items: flex-start; grid-column: 1 / -1; }
   .tipo-btns { width: 100%; }
   .tipo { flex: 1; }
   .presu-row { grid-template-columns: 1fr; }

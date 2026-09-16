@@ -298,6 +298,57 @@ def _ticket_simulado(
     return html
 
 
+def _registrar_puntos_vendedor(db, vendedor: str, monto: float, ref_id: str) -> str:
+    vendedor_id = str(vendedor or "").strip().lower().replace(" ", "_")[:80]
+    if not vendedor_id or not ref_id:
+        return ""
+    ya = (
+        db.collection("puntos_movimientos")
+        .where("ref_id", "==", str(ref_id))
+        .limit(1)
+        .stream()
+    )
+    if list(ya):
+        return "Puntos ya registrados"
+    ref = db.collection("vendedores").document(vendedor_id)
+    snap = ref.get()
+    data = snap.to_dict() or {}
+    acumulado = float(data.get("ventas_acumuladas") or 0) + float(monto or 0)
+    puntos_antes = int(data.get("puntos") or 0)
+    ganados = int(acumulado // 100_000)
+    acumulado = round(acumulado % 100_000, 2)
+    puntos_total = puntos_antes + ganados
+    ahora = datetime.now(timezone.utc)
+    ref.set(
+        {
+            "nombre": data.get("nombre") or str(vendedor).title(),
+            "rol": "vendedor",
+            "puntos": puntos_total,
+            "ventas_acumuladas": acumulado,
+            "activo": True,
+            "ultima_venta": ahora,
+        },
+        merge=True,
+    )
+    db.collection("puntos_movimientos").add(
+        {
+            "vendedor_id": vendedor_id,
+            "monto": float(monto),
+            "puntos_ganados": ganados,
+            "puntos_total_despues": puntos_total,
+            "ventas_acumuladas_despues": acumulado,
+            "origen": "comprobante_arca_pos",
+            "ref_id": str(ref_id),
+            "fecha": ahora,
+        }
+    )
+    return (
+        f"+{ganados} punto(s)"
+        if ganados
+        else f"Faltan ${100_000 - acumulado:,.0f} para el próximo punto"
+    )
+
+
 def emitir_factura(
     carrito: List[Dict[str, Any]],
     cliente: Dict[str, Any],
@@ -305,6 +356,8 @@ def emitir_factura(
     vendedor: str = VENDEDOR_POS,
     observacion: str = "",
     presupuesto_id: Optional[str] = None,
+    cuotas: int = 1,
+    interes_pct: float = 0.0,
 ) -> Dict[str, Any]:
     if not carrito:
         raise ValueError("Carrito vacío")
@@ -324,10 +377,27 @@ def emitir_factura(
                 f"hay {stock} y se pidieron {cantidad}"
             )
 
-    bruto, desc, final = _totales(carrito, cli)
+    bruto, desc, final_base = _totales(carrito, cli)
+    forma_pago_base = str(forma_pago or "Contado")
+    es_tarjeta = forma_pago_base.lower() == "tarjeta"
+    cuotas = max(1, min(48, int(cuotas or 1))) if es_tarjeta else 1
+    interes_pct = (
+        max(0.0, min(100.0, float(interes_pct or 0))) if es_tarjeta else 0.0
+    )
+    final = round(final_base * (1 + interes_pct / 100.0), 2)
     if final <= 0:
         raise ValueError("El total de la factura debe ser mayor a cero")
     items_fc = _items_factura(carrito, desc)
+    if interes_pct:
+        factor = 1 + interes_pct / 100.0
+        for item in items_fc:
+            item["precio_unitario"] = round(float(item["precio_unitario"]) * factor, 2)
+            item["precio"] = round(float(item["precio"]) * factor, 2)
+    forma_pago = forma_pago_base
+    if es_tarjeta:
+        forma_pago = f"Tarjeta · {cuotas} cuota(s)"
+        if interes_pct:
+            forma_pago += f" · interés {interes_pct:g}%"
     datos_cli = {
         "cuit": cli["cuit"],
         "nombre": cli["nombre"],
@@ -370,6 +440,9 @@ def emitir_factura(
             "direccion_empresa": data.get("direccion_empresa"),
             "items": items_fc,
             "forma_pago": forma_pago,
+            "cuotas": cuotas,
+            "interes_pct": interes_pct,
+            "total_base": float(final_base),
             "total": float(final),
             "observacion": str(observacion or "").strip(),
             "tipo_comprobante": cli["tipo_comprobante"],
@@ -396,6 +469,11 @@ def emitir_factura(
         except Exception:
             pass
 
+    try:
+        puntos_msg = _registrar_puntos_vendedor(db, vendedor, final, ref.id)
+    except Exception:
+        puntos_msg = ""
+
     from modulos.factura_arca_ticket_html import crear_ticket_html
 
     html = crear_ticket_html(
@@ -404,6 +482,7 @@ def emitir_factura(
         items_fc,
         forma_pago=forma_pago,
         vendedor=str(vendedor or VENDEDOR_POS),
+        observacion=str(observacion or "").strip(),
     )
     if "</body>" in html:
         html = html.replace(
@@ -428,6 +507,11 @@ def emitir_factura(
         "ticket_html": html,
         "stock_ok": stock_ok,
         "stock_msg": stock_msg,
+        "puntos_msg": puntos_msg,
+        "cuotas": cuotas,
+        "interes_pct": interes_pct,
+        "total_base": final_base,
+        "valor_cuota": round(final / cuotas, 2),
         "cliente": cli["nombre"],
     }
 
@@ -512,6 +596,7 @@ def regenerar_ticket_factura(factura_id: str) -> Dict[str, Any]:
         data.get("items") or [],
         forma_pago=data.get("forma_pago") or "Contado",
         vendedor=data.get("vendedor") or VENDEDOR_POS,
+        observacion=data.get("observacion") or "",
     )
     return {"ok": True, "ticket_html": html}
 

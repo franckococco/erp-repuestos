@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import os
-import secrets
 import sys
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -34,6 +31,14 @@ from presupuestos import (  # noqa: E402
     regenerar_pdf,
 )
 from clientes import buscar as buscar_clientes  # noqa: E402
+from auth_pos import (  # noqa: E402
+    cambiar_clave,
+    crear_token,
+    inicializar_usuarios,
+    leer_token,
+    resumen_puntos_admin,
+    validar_credenciales,
+)
 from ventas import (  # noqa: E402
     emitir_factura,
     listar_facturas,
@@ -102,31 +107,23 @@ def _cargar_estado(estado: Dict[str, Any] | None) -> None:
     _UNDO_SNAP = dict(data["undo"]) if data.get("undo") else None
 
 
-def _autorizado(request: Request) -> bool:
-    password = os.getenv("POS_ACCESS_PASSWORD", "").strip()
-    if not password:
-        return True
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Basic "):
-        return False
-    try:
-        raw = base64.b64decode(header[6:]).decode("utf-8")
-        usuario, clave = raw.split(":", 1)
-    except Exception:
-        return False
-    esperado = os.getenv("POS_ACCESS_USER", "hafid").strip() or "hafid"
-    return secrets.compare_digest(usuario, esperado) and secrets.compare_digest(
-        clave, password
-    )
-
-
 @app.middleware("http")
 async def proteger_y_separar_cajas(request: Request, call_next):
-    if request.url.path != "/healthz" and not _autorizado(request):
-        return Response(
-            "Acceso restringido",
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="HAFID POS"'},
+    publicas = {"/", "/healthz", "/api/auth/login"}
+    es_publica = request.url.path in publicas or request.url.path.startswith("/static/")
+    usuario = leer_token(request.cookies.get("pos_auth", ""))
+    request.state.usuario = usuario
+    if not es_publica and not usuario:
+        return JSONResponse({"detail": "Iniciá sesión"}, status_code=401)
+    if (
+        usuario
+        and usuario.get("debe_cambiar_clave")
+        and request.url.path
+        not in {"/api/auth/me", "/api/auth/logout", "/api/auth/cambiar-clave"}
+    ):
+        return JSONResponse(
+            {"detail": "Debés cambiar la clave inicial antes de continuar"},
+            status_code=403,
         )
     if not request.url.path.startswith("/api/") or request.url.path == "/api/health":
         return await call_next(request)
@@ -134,6 +131,9 @@ async def proteger_y_separar_cajas(request: Request, call_next):
     session_id = request.cookies.get("pos_session") or uuid.uuid4().hex
     async with _SESSION_LOCK:
         _cargar_estado(_SESSION_STATES.get(session_id))
+        if usuario and usuario.get("rol") == "vendedor":
+            global _VENDEDOR
+            _VENDEDOR = str(usuario.get("vendedor_id") or usuario["usuario"]).upper()
         response = await call_next(request)
         _SESSION_STATES[session_id] = _estado_actual()
     response.set_cookie(
@@ -224,6 +224,8 @@ class PresupuestoIn(BaseModel):
 class FacturaIn(BaseModel):
     forma_pago: str = "Contado"
     observacion: str = ""
+    cuotas: int = Field(1, ge=1, le=48)
+    interes_pct: float = Field(0, ge=0, le=100)
     confirmar: bool = False
 
 
@@ -242,6 +244,16 @@ class EsperarIn(BaseModel):
     etiqueta: str = ""
 
 
+class LoginIn(BaseModel):
+    usuario: str
+    clave: str
+
+
+class CambiarClaveIn(BaseModel):
+    actual: str
+    nueva: str
+
+
 @app.on_event("startup")
 def startup():
     global _MODO
@@ -250,6 +262,8 @@ def startup():
         f"[POS] modo={_MODO} productos={len(inv)} firebase={firebase_disponible()}",
         flush=True,
     )
+    if firebase_disponible():
+        inicializar_usuarios()
 
 
 @app.get("/")
@@ -260,6 +274,70 @@ def index():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginIn, request: Request):
+    usuario = validar_credenciales(body.usuario, body.clave)
+    if not usuario:
+        raise HTTPException(401, "Usuario o clave incorrectos")
+    response = JSONResponse({"ok": True, **usuario})
+    response.set_cookie(
+        "pos_auth",
+        crear_token(usuario),
+        max_age=12 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    response.set_cookie(
+        "pos_session",
+        uuid.uuid4().hex,
+        max_age=30 * 24 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return response
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    return {"ok": True, **request.state.usuario}
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("pos_auth")
+    return response
+
+
+@app.post("/api/auth/cambiar-clave")
+def auth_cambiar_clave(body: CambiarClaveIn, request: Request):
+    ok, mensaje = cambiar_clave(
+        request.state.usuario["usuario"], body.actual, body.nueva
+    )
+    if not ok:
+        raise HTTPException(400, mensaje)
+    usuario = {**request.state.usuario, "debe_cambiar_clave": False}
+    response = JSONResponse({"ok": True, "mensaje": mensaje})
+    response.set_cookie(
+        "pos_auth",
+        crear_token(usuario),
+        max_age=12 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return response
+
+
+@app.get("/api/admin/puntos")
+def api_puntos_admin(request: Request):
+    if request.state.usuario.get("rol") != "admin":
+        raise HTTPException(403, "Solo el administrador puede ver los puntos")
+    return {"resultados": resumen_puntos_admin()}
 
 
 @app.get("/api/health")
@@ -552,7 +630,7 @@ def borrar_espera(esp_id: str):
 
 
 @app.post("/api/carrito/restaurar")
-def restaurar(body: RestaurarCarrito):
+def restaurar(body: RestaurarCarrito, request: Request):
     """Restaura carrito desde el navegador (tras F5)."""
     global _CARRITO, _CLIENTE, _NOTA, _PRESUPUESTO_CARGADO, _VENDEDOR
     items = []
@@ -578,9 +656,10 @@ def restaurar(body: RestaurarCarrito):
     if body.cliente:
         _CLIENTE.update(body.cliente.model_dump())
         _CLIENTE["descuento"] = max(0.0, min(100.0, float(_CLIENTE.get("descuento") or 0)))
-        _CLIENTE["tipo_comprobante"] = "6"
+        if str(_CLIENTE.get("tipo_comprobante")) not in ("1", "6"):
+            _CLIENTE["tipo_comprobante"] = "6"
     _NOTA = str(body.nota or "")
-    if body.vendedor:
+    if body.vendedor and request.state.usuario.get("rol") == "admin":
         _VENDEDOR = str(body.vendedor).strip() or _VENDEDOR
     _PRESUPUESTO_CARGADO = None
     return {
@@ -613,9 +692,13 @@ def get_vendedor():
 
 
 @app.put("/api/vendedor")
-def put_vendedor(body: VendedorIn):
+def put_vendedor(body: VendedorIn, request: Request):
     global _VENDEDOR
-    _VENDEDOR = (body.vendedor or "CAJA").strip().upper() or "CAJA"
+    usuario = request.state.usuario
+    if usuario.get("rol") == "vendedor":
+        _VENDEDOR = str(usuario.get("vendedor_id") or usuario["usuario"]).upper()
+    else:
+        _VENDEDOR = (body.vendedor or "CAJA").strip().upper() or "CAJA"
     return {"vendedor": _VENDEDOR}
 
 
@@ -747,6 +830,8 @@ def api_emitir_factura(body: FacturaIn):
             vendedor=_VENDEDOR,
             observacion=body.observacion,
             presupuesto_id=_PRESUPUESTO_CARGADO,
+            cuotas=body.cuotas,
+            interes_pct=body.interes_pct,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

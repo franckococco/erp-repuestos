@@ -8,6 +8,10 @@ let busquedaPresuActiva = false;
 let presupuestoCargadoId = null;
 let presupuestoCargadoNro = null;
 let lastResultados = [];
+let usuarioSesion = null;
+let eventosPosVinculados = false;
+let ultimoTotal = 0;
+let cambioInicialPendiente = null;
 
 function parseBusqueda(raw) {
   const t = String(raw || "").trim();
@@ -39,6 +43,51 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return data;
+}
+
+function aplicarSesion(usuario) {
+  usuarioSesion = usuario;
+  $("loginOverlay").hidden = true;
+  $("usuarioBox").hidden = false;
+  $("usuarioNombre").textContent = `${usuario.nombre} · ${usuario.rol}`;
+  const esVendedor = usuario.rol === "vendedor";
+  $("vendedor").readOnly = esVendedor;
+  if (esVendedor) {
+    $("vendedor").value = String(usuario.vendedor_id || usuario.usuario).toUpperCase();
+  }
+  $("panelAdminPuntos").hidden = usuario.rol !== "admin";
+}
+
+async function cargarPuntosAdmin() {
+  if (!usuarioSesion || usuarioSesion.rol !== "admin") return;
+  const data = await api("/api/admin/puntos");
+  const box = $("listaPuntos");
+  box.innerHTML = (data.resultados || [])
+    .map(
+      (v) => `
+      <div class="presu-row">
+        <div>
+          <div class="cod">${v.nombre}</div>
+          <div class="meta">Acumulado actual: ${money(v.ventas_acumuladas)} · faltan ${money(v.faltan_proximo)}</div>
+        </div>
+        <strong>${v.puntos} punto(s)</strong>
+      </div>`
+    )
+    .join("") || '<div class="empty">No hay vendedores registrados.</div>';
+}
+
+function actualizarFinanciacion() {
+  const esTarjeta = $("formaPago").value === "Tarjeta";
+  $("tarjetaOpts").hidden = !esTarjeta;
+  const cuotas = esTarjeta
+    ? Math.max(1, parseInt($("tarjetaCuotas").value || "1", 10))
+    : 1;
+  const interes = esTarjeta
+    ? Math.max(0, parseFloat($("tarjetaInteres").value || "0"))
+    : 0;
+  const total = ultimoTotal * (1 + interes / 100);
+  $("totalFinanciado").textContent = money(total);
+  $("valorCuota").textContent = `${cuotas} cuota(s) de ${money(total / cuotas)}`;
 }
 
 function showMsg(text, err = false) {
@@ -307,6 +356,8 @@ function renderCarrito(data) {
   $("tBruto").textContent = t.bruto_txt || money(0);
   $("tDesc").textContent = t.descuento_txt || money(0);
   $("tTotal").textContent = t.total_txt || money(0);
+  ultimoTotal = Number(t.total || 0);
+  actualizarFinanciacion();
   if (data.cliente) aplicarClienteEnForm(data.cliente);
   if (data.vendedor && $("vendedor") && document.activeElement !== $("vendedor")) {
     $("vendedor").value = data.vendedor;
@@ -495,6 +546,8 @@ async function buscarClientes(q) {
 }
 
 function bind() {
+  if (eventosPosVinculados) return;
+  eventosPosVinculados = true;
   $("q").addEventListener("input", () => {
     clearTimeout(debounceTimer);
     const raw = $("q").value;
@@ -626,6 +679,33 @@ function bind() {
 
   $("btnPresu").addEventListener("click", emitirPresupuesto);
   $("btnFactura").addEventListener("click", emitirFactura);
+  $("formaPago").addEventListener("change", actualizarFinanciacion);
+  $("tarjetaCuotas").addEventListener("input", actualizarFinanciacion);
+  $("tarjetaInteres").addEventListener("input", actualizarFinanciacion);
+  $("panelAdminPuntos").addEventListener("toggle", () => {
+    if ($("panelAdminPuntos").open) {
+      cargarPuntosAdmin().catch((err) => showMsg(err.message, true));
+    }
+  });
+  $("btnLogout").addEventListener("click", async () => {
+    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+    location.reload();
+  });
+  $("btnClave").addEventListener("click", async () => {
+    const actual = prompt("Clave actual:");
+    if (actual == null) return;
+    const nueva = prompt("Nueva clave (mínimo 4 caracteres):");
+    if (!nueva) return;
+    try {
+      const r = await api("/api/auth/cambiar-clave", {
+        method: "POST",
+        body: JSON.stringify({ actual, nueva }),
+      });
+      showMsg(r.mensaje);
+    } catch (err) {
+      showMsg(err.message, true);
+    }
+  });
 
   $("btnFirebase").addEventListener("click", conectarFirebase);
 
@@ -764,10 +844,19 @@ async function emitirFactura() {
   const letra = $("cliTipo").value === "1" ? "A" : "B";
   const cliente = $("cliNombre").value || "CONSUMIDOR FINAL";
   const cuit = $("cliCuit").value || "sin DNI/CUIT";
-  const total = $("tTotal").textContent || "$0,00";
   const pago = $("formaPago").value || "Contado";
+  const cuotas = pago === "Tarjeta"
+    ? Math.max(1, parseInt($("tarjetaCuotas").value || "1", 10))
+    : 1;
+  const interes = pago === "Tarjeta"
+    ? Math.max(0, parseFloat($("tarjetaInteres").value || "0"))
+    : 0;
+  const totalFinal = ultimoTotal * (1 + interes / 100);
+  const detalleTarjeta = pago === "Tarjeta"
+    ? `\nCuotas: ${cuotas}\nInterés: ${interes}%\nValor por cuota: ${money(totalFinal / cuotas)}`
+    : "";
   const ok = confirm(
-    `FACTURA REAL ARCA\n\nFactura ${letra}\nCliente: ${cliente}\nDNI/CUIT: ${cuit}\nPago: ${pago}\nTotal: ${total}\n\n¿Emitir y solicitar CAE?`
+    `FACTURA REAL ARCA\n\nFactura ${letra}\nCliente: ${cliente}\nDNI/CUIT: ${cuit}\nPago: ${pago}${detalleTarjeta}\nTotal: ${money(totalFinal)}\n\n¿Emitir y solicitar CAE?`
   );
   if (!ok) return;
 
@@ -782,6 +871,8 @@ async function emitirFactura() {
       body: JSON.stringify({
         forma_pago: pago,
         observacion: $("nota").value || "",
+        cuotas,
+        interes_pct: interes,
         confirmar: true,
       }),
     });
@@ -851,6 +942,15 @@ async function conectarFirebase() {
 
 async function boot() {
   try {
+    let sesion;
+    try {
+      sesion = await api("/api/auth/me");
+    } catch (_) {
+      $("loginOverlay").hidden = false;
+      $("statusPill").textContent = "Esperando ingreso";
+      return;
+    }
+    aplicarSesion(sesion);
     bind();
     try {
       const vendLs = localStorage.getItem(LS_VEND);
@@ -885,5 +985,67 @@ async function boot() {
     $("statusPill").classList.add("err");
   }
 }
+
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const error = $("loginError");
+  error.hidden = true;
+  try {
+    const claveActual = $("loginClave").value;
+    const usuario = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        usuario: $("loginUsuario").value,
+        clave: claveActual,
+      }),
+    });
+    if (usuario.debe_cambiar_clave) {
+      cambioInicialPendiente = { usuario, claveActual };
+      $("loginForm").hidden = true;
+      $("cambioInicialForm").hidden = false;
+      $("claveNuevaInicial").focus();
+      return;
+    }
+    $("loginClave").value = "";
+    aplicarSesion(usuario);
+    await boot();
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+});
+
+$("cambioInicialForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const error = $("cambioInicialError");
+  error.hidden = true;
+  const nueva = $("claveNuevaInicial").value;
+  if (nueva !== $("claveNuevaRepetir").value) {
+    error.textContent = "Las claves nuevas no coinciden";
+    error.hidden = false;
+    return;
+  }
+  try {
+    await api("/api/auth/cambiar-clave", {
+      method: "POST",
+      body: JSON.stringify({
+        actual: cambioInicialPendiente.claveActual,
+        nueva,
+      }),
+    });
+    const usuario = { ...cambioInicialPendiente.usuario, debe_cambiar_clave: false };
+    cambioInicialPendiente = null;
+    $("loginClave").value = "";
+    $("claveNuevaInicial").value = "";
+    $("claveNuevaRepetir").value = "";
+    $("cambioInicialForm").hidden = true;
+    $("loginForm").hidden = false;
+    aplicarSesion(usuario);
+    await boot();
+  } catch (err) {
+    error.textContent = err.message;
+    error.hidden = false;
+  }
+});
 
 boot();
