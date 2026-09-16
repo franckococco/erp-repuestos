@@ -218,9 +218,15 @@ function renderCarrito(data) {
           <input class="desc-edit" type="text" value="${String(i.descripcion || "").replace(/"/g, "&quot;")}"
             data-id="${i.id}" title="Descripción" />
           ${stockTxt}
-          <input class="precio-edit" type="number" min="0" step="0.01"
-            value="${Number(i.precio_unitario).toFixed(2)}"
-            data-id="${i.id}" title="Precio unitario" />
+          <label class="precio-label">
+            Precio unitario (editable)
+            <span class="precio-control">
+              <span>$</span>
+              <input class="precio-edit" type="number" min="0" step="0.01"
+                value="${Number(i.precio_unitario).toFixed(2)}"
+                data-id="${i.id}" title="Precio unitario" />
+            </span>
+          </label>
         </div>
         <div class="qty">
           <button type="button" data-act="-" data-id="${i.id}">−</button>
@@ -249,12 +255,19 @@ function renderCarrito(data) {
       });
     });
     box.querySelectorAll(".precio-edit").forEach((inp) => {
-      inp.addEventListener("change", async () => {
+      const guardarPrecio = async () => {
         await api(`/api/carrito/items/${encodeURIComponent(inp.dataset.id)}`, {
           method: "PATCH",
           body: JSON.stringify({ precio_unitario: parseFloat(inp.value || "0") }),
         });
         await refreshCarrito();
+        showMsg("Precio actualizado para este presupuesto");
+      };
+      inp.addEventListener("change", guardarPrecio);
+      inp.addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        await guardarPrecio();
       });
     });
     box.querySelectorAll(".desc-edit").forEach((inp) => {
