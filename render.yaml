@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: hafid-pos
+    runtime: python
+    plan: starter
+    rootDir: pos
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FIREBASE_CREDENTIALS_PATH
+        value: /etc/secrets/firebase_claves.json
+      - key: POS_ACCESS_USER
+        value: hafid
+      - key: POS_ACCESS_PASSWORD
+        sync: false
+      - key: POS_ARCA_CUIT
+        value: "20265010505"
+      - key: POS_ARCA_CLAVE
+        sync: false

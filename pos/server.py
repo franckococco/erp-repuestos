@@ -1,12 +1,17 @@
 """API local del Mostrador POS — foco en presupuestos (ARCA después)."""
 from __future__ import annotations
 
+import asyncio
+import base64
+import os
+import secrets
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -60,6 +65,86 @@ _PRESUPUESTO_CARGADO: str | None = None
 _MODO = "emulador"
 _ESPERA: List[Dict[str, Any]] = []
 _UNDO_SNAP: Dict[str, Any] | None = None
+_SESSION_STATES: Dict[str, Dict[str, Any]] = {}
+_SESSION_LOCK = asyncio.Lock()
+
+
+def _estado_actual() -> Dict[str, Any]:
+    return {
+        "carrito": [dict(i) for i in _CARRITO],
+        "cliente": dict(_CLIENTE),
+        "nota": _NOTA,
+        "vendedor": _VENDEDOR,
+        "presupuesto_cargado": _PRESUPUESTO_CARGADO,
+        "espera": [dict(i) for i in _ESPERA],
+        "undo": dict(_UNDO_SNAP) if _UNDO_SNAP else None,
+    }
+
+
+def _cargar_estado(estado: Dict[str, Any] | None) -> None:
+    global _CARRITO, _CLIENTE, _NOTA, _VENDEDOR
+    global _PRESUPUESTO_CARGADO, _ESPERA, _UNDO_SNAP
+    data = estado or {}
+    _CARRITO = [dict(i) for i in data.get("carrito") or []]
+    _CLIENTE = dict(
+        data.get("cliente")
+        or {
+            "nombre": "CONSUMIDOR FINAL",
+            "cuit": "",
+            "tipo_comprobante": "6",
+            "descuento": 0.0,
+        }
+    )
+    _NOTA = str(data.get("nota") or "")
+    _VENDEDOR = str(data.get("vendedor") or "CAJA")
+    _PRESUPUESTO_CARGADO = data.get("presupuesto_cargado")
+    _ESPERA = [dict(i) for i in data.get("espera") or []]
+    _UNDO_SNAP = dict(data["undo"]) if data.get("undo") else None
+
+
+def _autorizado(request: Request) -> bool:
+    password = os.getenv("POS_ACCESS_PASSWORD", "").strip()
+    if not password:
+        return True
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(header[6:]).decode("utf-8")
+        usuario, clave = raw.split(":", 1)
+    except Exception:
+        return False
+    esperado = os.getenv("POS_ACCESS_USER", "hafid").strip() or "hafid"
+    return secrets.compare_digest(usuario, esperado) and secrets.compare_digest(
+        clave, password
+    )
+
+
+@app.middleware("http")
+async def proteger_y_separar_cajas(request: Request, call_next):
+    if request.url.path != "/healthz" and not _autorizado(request):
+        return Response(
+            "Acceso restringido",
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="HAFID POS"'},
+        )
+    if not request.url.path.startswith("/api/") or request.url.path == "/api/health":
+        return await call_next(request)
+
+    session_id = request.cookies.get("pos_session") or uuid.uuid4().hex
+    async with _SESSION_LOCK:
+        _cargar_estado(_SESSION_STATES.get(session_id))
+        response = await call_next(request)
+        _SESSION_STATES[session_id] = _estado_actual()
+    response.set_cookie(
+        "pos_session",
+        session_id,
+        max_age=60 * 60 * 24 * 30,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return response
 
 
 def _fmt_money(val: float) -> str:
@@ -170,6 +255,11 @@ def startup():
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/api/health")

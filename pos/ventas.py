@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from inventory import _cred_path
 
 VENDEDOR_POS = "POS_CAJA"
-CUIT_EMISOR_ARCA = "20265010505"
-CLAVE_EMISOR_ARCA = "111"
+CUIT_EMISOR_ARCA = os.getenv("POS_ARCA_CUIT", "20265010505").strip()
+CLAVE_EMISOR_ARCA = os.getenv("POS_ARCA_CLAVE", "111").strip()
 
 
 def firebase_disponible() -> bool:
