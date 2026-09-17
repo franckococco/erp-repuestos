@@ -273,7 +273,13 @@ def index():
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    est = estado_conexion()
+    return {
+        "ok": True,
+        "firebase": est["firebase"],
+        "inventario": est["productos"],
+        "modo": est["modo"],
+    }
 
 
 @app.post("/api/auth/login")

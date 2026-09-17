@@ -293,7 +293,7 @@ def _ticket_simulado(
     if "</body>" in html:
         html = html.replace(
             "</body>",
-            "<script>window.onload=function(){setTimeout(function(){window.print()},400)}</script></body>",
+            "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
         )
     return html
 
@@ -487,7 +487,7 @@ def emitir_factura(
     if "</body>" in html:
         html = html.replace(
             "</body>",
-            "<script>window.onload=function(){setTimeout(function(){window.print()},400)}</script></body>",
+            "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
         )
     try:
         pto = int(float(data.get("punto_venta") or 0))

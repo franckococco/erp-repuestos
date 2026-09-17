@@ -97,13 +97,35 @@ function showMsg(text, err = false) {
   el.textContent = text;
 }
 
-function abrirPdfBase64(b64, nombre) {
+function ventanaEspera(texto) {
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(
+      `<title>HAFID</title><body style="font:700 20px Segoe UI;padding:40px;color:#1e3a8a">${texto}</body>`
+    );
+  }
+  return w;
+}
+
+function abrirPdfBase64(b64, nombre, ventana) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const blob = new Blob([bytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
+  const w = ventana || ventanaEspera("Preparando impresión…");
+  if (!w) {
+    showMsg("El navegador bloqueó la impresión. Habilitá ventanas emergentes.", true);
+    return;
+  }
+  w.document.open();
+  w.document.write(
+    `<title>${nombre || "Presupuesto"}</title>` +
+      `<style>html,body,iframe{margin:0;width:100%;height:100%;border:0}</style>` +
+      `<iframe id="pdf" src="${url}"></iframe>` +
+      `<script>document.getElementById("pdf").onload=function(){setTimeout(function(){try{document.getElementById("pdf").contentWindow.print()}catch(e){}},100)}</script>`
+  );
+  w.document.close();
 }
 
 function abrirTicketHtml(html, ventana) {
@@ -111,6 +133,12 @@ function abrirTicketHtml(html, ventana) {
   if (!w) {
     showMsg("El navegador bloqueó la impresión. Habilitá ventanas emergentes.", true);
     return;
+  }
+  if (!String(html).includes("window.print")) {
+    html = String(html).replace(
+      "</body>",
+      "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>"
+    );
   }
   w.document.open();
   w.document.write(html);
@@ -528,12 +556,18 @@ async function addItem(id, cantOverride) {
 
 async function buscar(raw) {
   const parsed = parseBusqueda(raw);
-  if (parsed.cant) $("cant").value = String(parsed.cant);
-  const data = await api(`/api/productos?q=${encodeURIComponent(parsed.q)}`);
-  renderResultados(data.resultados || []);
-  $("hint").textContent = parsed.q
-    ? `${data.total} resultado(s)${parsed.star ? ` · cant ${parsed.cant}` : ""} · click o Enter`
-    : "Escribí arriba. Tip: 111*3 agrega 3 unidades.";
+  try {
+    if (parsed.cant) $("cant").value = String(parsed.cant);
+    const data = await api(`/api/productos?q=${encodeURIComponent(parsed.q)}`);
+    renderResultados(data.resultados || []);
+    $("hint").textContent = parsed.q
+      ? `${data.total} resultado(s)${parsed.star ? ` · cant ${parsed.cant}` : ""} · click o Enter`
+      : "Escribí arriba. Tip: 111*3 agrega 3 unidades.";
+  } catch (err) {
+    renderResultados([]);
+    $("hint").textContent = `No se pudo leer el inventario: ${err.message}`;
+    showMsg(`Error de inventario: ${err.message}`, true);
+  }
 }
 
 async function buscarClientes(q) {
@@ -555,6 +589,17 @@ function bind() {
   });
 
   $("q").addEventListener("keydown", async (e) => {
+    if (
+      e.key === "Tab" &&
+      $("q").value.trim() &&
+      !lastResultados.length
+    ) {
+      e.preventDefault();
+      $("manDesc").value = $("q").value.trim();
+      $("manDesc").focus();
+      $("manDesc").select();
+      return;
+    }
     if (e.key !== "Enter") return;
     e.preventDefault();
     const parsed = parseBusqueda($("q").value);
@@ -811,6 +856,7 @@ async function refreshEspera() {
 }
 
 async function emitirPresupuesto() {
+  const ventana = ventanaEspera("Generando presupuesto…");
   try {
     $("btnPresu").disabled = true;
     await syncCliente();
@@ -825,7 +871,7 @@ async function emitirPresupuesto() {
       }),
     });
     showMsg(`${r.mensaje} · ${r.total_txt || r.total}`);
-    if (r.pdf_base64) abrirPdfBase64(r.pdf_base64, r.pdf_nombre);
+    if (r.pdf_base64) abrirPdfBase64(r.pdf_base64, r.pdf_nombre, ventana);
     $("nota").value = "";
     $("cliBusca").value = "";
     presupuestoCargadoId = null;
@@ -834,6 +880,7 @@ async function emitirPresupuesto() {
     await refreshCarrito();
     if (busquedaPresuActiva) await refreshPresupuestos();
   } catch (err) {
+    if (ventana) ventana.close();
     showMsg(err.message, true);
   } finally {
     $("btnPresu").disabled = false;
@@ -860,7 +907,7 @@ async function emitirFactura() {
   );
   if (!ok) return;
 
-  const ventana = window.open("", "_blank");
+  const ventana = ventanaEspera("Solicitando CAE a ARCA…");
   try {
     $("btnFactura").disabled = true;
     $("btnFactura").textContent = "Consultando ARCA…";
