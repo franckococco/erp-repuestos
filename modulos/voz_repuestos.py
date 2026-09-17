@@ -1,9 +1,17 @@
 """Normalización de repuestos dictados: sinónimos, vehículo y búsqueda compuesta."""
 import re
+import unicodedata
 from typing import FrozenSet, List, Optional, Tuple
 
-from modulos.ia_asistente import normalizar_texto_basico
 from modulos.util_busqueda import normalizar_para_busqueda
+
+
+def normalizar_texto_basico(texto):
+    """Normaliza dictado sin cargar Streamlit ni el asistente completo."""
+    if not texto:
+        return ""
+    normalizado = unicodedata.normalize("NFD", str(texto).lower())
+    return "".join(c for c in normalizado if unicodedata.category(c) != "Mn")
 
 # Raíces canónicas de repuestos (mostrador argentino)
 _REPUESTOS_BASE = (
