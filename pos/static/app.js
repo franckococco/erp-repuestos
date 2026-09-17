@@ -124,13 +124,39 @@ function abrirPdfBase64(b64, nombre, ventana) {
     showMsg("El navegador bloqueó la impresión. Habilitá ventanas emergentes.", true);
     return;
   }
+  // Chrome PDF viewer no dispara afterprint dentro del iframe.
+  // Cerramos al volver el foco después de imprimir/cancelar.
   w.document.open();
-  w.document.write(
-    `<title>${nombre || "Presupuesto"}</title>` +
-      `<style>html,body,iframe{margin:0;width:100%;height:100%;border:0}</style>` +
-      `<iframe id="pdf" src="${url}"></iframe>` +
-      `<script>document.getElementById("pdf").onload=function(){setTimeout(function(){try{var p=document.getElementById("pdf").contentWindow;p.addEventListener("afterprint",function(){window.close()});p.print()}catch(e){}},100)}</script>`
-  );
+  w.document.write(`<!DOCTYPE html><html><head>
+<title>${nombre || "Presupuesto"}</title>
+<style>
+  html,body{margin:0;height:100%;background:#111;color:#fff;font:700 16px Segoe UI,sans-serif}
+  embed{border:0;width:100%;height:100%}
+  .bar{position:fixed;top:8px;right:8px;z-index:2}
+  .bar button{padding:8px 12px;font-weight:700;cursor:pointer}
+  @media print{.bar{display:none}}
+</style></head><body>
+<div class="bar"><button type="button" id="btnCerrar">Cerrar</button></div>
+<embed id="pdf" src="${url}" type="application/pdf" />
+<script>
+(function(){
+  var cerrado=false, imprimio=false;
+  function cerrar(){
+    if(cerrado) return;
+    cerrado=true;
+    try{ window.close(); }catch(e){}
+  }
+  document.getElementById("btnCerrar").onclick=cerrar;
+  window.addEventListener("afterprint", cerrar);
+  window.addEventListener("focus", function(){
+    if(imprimio) setTimeout(cerrar, 250);
+  });
+  setTimeout(function(){
+    imprimio=true;
+    try{ window.print(); }catch(e){}
+  }, 350);
+})();
+</script></body></html>`);
   w.document.close();
 }
 
