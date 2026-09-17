@@ -396,7 +396,12 @@ function renderCarrito(data) {
   if (data.vendedor && $("vendedor") && document.activeElement !== $("vendedor")) {
     $("vendedor").value = data.vendedor;
   }
-  if (data.nota != null && $("nota") && document.activeElement !== $("nota")) {
+  if (
+    data.nota != null &&
+    $("nota") &&
+    !$("nota").value &&
+    document.activeElement !== $("nota")
+  ) {
     $("nota").value = data.nota || "";
   }
   guardarBorrador(data);
