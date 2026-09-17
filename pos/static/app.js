@@ -34,12 +34,18 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
     ...opts,
   });
-  const data = await res.json().catch(() => ({}));
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    data = {};
+  }
   if (!res.ok) {
     const d = data.detail;
     const msg = Array.isArray(d)
       ? d.map((x) => x.msg || JSON.stringify(x)).join("; ")
-      : d || data.message || "Error de API";
+      : d || data.message || raw || `Error HTTP ${res.status}`;
     throw new Error(msg);
   }
   return data;

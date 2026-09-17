@@ -381,7 +381,13 @@ def api_recargar_inventario():
 
 @app.get("/api/productos")
 def buscar_productos(q: str = Query("", min_length=0), limite: int = 25):
-    hits = buscar(q, limite=limite)
+    try:
+        hits = buscar(q, limite=limite)
+    except Exception as exc:
+        print(f"[POS] Error buscando productos: {exc}", flush=True)
+        raise HTTPException(
+            500, f"No se pudo buscar en el inventario: {type(exc).__name__}: {exc}"
+        ) from exc
     from collections import Counter
 
     codigos = Counter(str(p.get("codigo") or "").upper() for p in hits)
