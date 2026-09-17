@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -283,11 +284,23 @@ def index():
 @app.get("/healthz")
 def healthz():
     est = estado_conexion()
+    try:
+        prueba_busqueda = buscar("filtro", limite=1)
+        busqueda_ok = True
+        error_busqueda = None
+    except Exception as exc:
+        prueba_busqueda = []
+        busqueda_ok = False
+        error_busqueda = f"{type(exc).__name__}: {exc}"
     return {
         "ok": True,
         "firebase": est["firebase"],
         "inventario": est["productos"],
         "modo": est["modo"],
+        "busqueda_ok": busqueda_ok,
+        "resultados_prueba": len(prueba_busqueda),
+        "error_busqueda": error_busqueda,
+        "revision": os.getenv("RENDER_GIT_COMMIT", "local")[:8],
     }
 
 
