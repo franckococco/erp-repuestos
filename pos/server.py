@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -43,6 +43,7 @@ from auth_pos import (  # noqa: E402
 from ventas import (  # noqa: E402
     emitir_factura,
     listar_facturas,
+    registrar_puntos_factura,
     regenerar_ticket_factura,
 )
 
@@ -227,6 +228,8 @@ class FacturaIn(BaseModel):
     observacion: str = ""
     cuotas: int = Field(1, ge=1, le=48)
     interes_pct: float = Field(0, ge=0, le=100)
+    cliente: ClienteIn | None = None
+    vendedor: str = ""
     confirmar: bool = False
 
 
@@ -851,12 +854,24 @@ def api_presupuesto_compat(body: PresupuestoIn = PresupuestoIn()):
 
 
 @app.post("/api/venta/factura")
-def api_emitir_factura(body: FacturaIn):
+def api_emitir_factura(
+    body: FacturaIn, request: Request, background_tasks: BackgroundTasks
+):
     global _CARRITO, _CLIENTE, _PRESUPUESTO_CARGADO
     if not body.confirmar:
         raise HTTPException(400, "Confirmá que querés emitir una factura real")
     if not _CARRITO:
         raise HTTPException(400, "Carrito vacío")
+    if body.cliente:
+        _CLIENTE.update(body.cliente.model_dump())
+        _CLIENTE["descuento"] = max(
+            0.0, min(100.0, float(_CLIENTE.get("descuento") or 0))
+        )
+        if str(_CLIENTE.get("tipo_comprobante")) not in ("1", "6"):
+            _CLIENTE["tipo_comprobante"] = "6"
+    if request.state.usuario.get("rol") == "admin" and body.vendedor:
+        global _VENDEDOR
+        _VENDEDOR = body.vendedor.strip().upper() or _VENDEDOR
     try:
         resultado = emitir_factura(
             [dict(i) for i in _CARRITO],
@@ -872,6 +887,13 @@ def api_emitir_factura(body: FacturaIn):
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+    if resultado.get("id"):
+        background_tasks.add_task(
+            registrar_puntos_factura,
+            _VENDEDOR,
+            float(resultado.get("total") or 0),
+            str(resultado["id"]),
+        )
     _CARRITO = []
     _CLIENTE = {
         "nombre": "CONSUMIDOR FINAL",

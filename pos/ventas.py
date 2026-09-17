@@ -158,11 +158,10 @@ def _descontar_stock(carrito: List[Dict[str, Any]]) -> None:
     from firebase_admin import firestore
 
     db = _db()
-    batch = db.batch()
-    n = 0
+    cantidades: Dict[Tuple[str, str], int] = {}
     for item in carrito:
         item_id = str(item.get("id") or "")
-        if item_id.upper().startswith("MANUAL_"):
+        if item.get("manual") or item_id.upper().startswith("MANUAL_"):
             continue
         id_maestro = str(item.get("id_maestro") or item.get("codigo") or "")
         marca = str(item.get("marca") or "")
@@ -171,42 +170,62 @@ def _descontar_stock(carrito: List[Dict[str, Any]]) -> None:
         if not id_maestro or not marca:
             continue
         cant = max(1, int(item.get("cantidad") or 1))
-        ref = db.collection("productos").document(id_maestro)
-        snap = ref.get()
-        if not snap.exists:
+        clave = (id_maestro, marca)
+        cantidades[clave] = cantidades.get(clave, 0) + cant
+
+    ids_maestros = sorted({clave[0] for clave in cantidades})
+    refs = {
+        item_id: db.collection("productos").document(item_id)
+        for item_id in ids_maestros
+    }
+    snaps = {snap.id: snap for snap in db.get_all(list(refs.values()))}
+    batch = db.batch()
+    pendientes = 0
+    ahora = datetime.now(timezone.utc)
+    for id_maestro in ids_maestros:
+        snap = snaps.get(id_maestro)
+        if snap is None or not snap.exists:
             continue
         data = snap.to_dict() or {}
-        ahora = datetime.now(timezone.utc)
+        ref = refs[id_maestro]
+        variantes = {
+            marca: cant
+            for (item_id, marca), cant in cantidades.items()
+            if item_id == id_maestro
+        }
         if "variantes" in data:
-            batch.update(
-                ref,
-                {
+            updates: Dict[str, Any] = {
+                "ultima_actualizacion": ahora,
+            }
+            for marca, cant in variantes.items():
+                updates.update(
+                    {
                     f"variantes.{marca}.stock": firestore.Increment(-cant),  # type: ignore
                     f"variantes.{marca}.last_sale_at": ahora,
-                    "ultima_actualizacion": ahora,
-                },
-            )
+                    }
+                )
+            batch.update(ref, updates)
         else:
+            cant_total = sum(variantes.values())
             batch.update(
                 ref,
                 {
-                    "stock": firestore.Increment(-cant),  # type: ignore
+                    "stock": firestore.Increment(-cant_total),  # type: ignore
                     "last_sale_at": ahora,
                     "ultima_actualizacion": ahora,
                 },
             )
-        n += 1
-        if n % 400 == 0:
+        pendientes += 1
+        if pendientes == 400:
             batch.commit()
             batch = db.batch()
-    if n % 400 != 0:
+            pendientes = 0
+    if pendientes:
         batch.commit()
-    try:
-        from inventory import cargar_inventario
 
-        cargar_inventario(force=True)
-    except Exception:
-        pass
+    from inventory import descontar_stock_local
+
+    descontar_stock_local(carrito)
 
 
 def _pdf_presupuesto_b64(
@@ -293,7 +312,8 @@ def _ticket_simulado(
     if "</body>" in html:
         html = html.replace(
             "</body>",
-            "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
+            "<script>window.addEventListener('afterprint',function(){window.close()});"
+            "window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
         )
     return html
 
@@ -347,6 +367,14 @@ def _registrar_puntos_vendedor(db, vendedor: str, monto: float, ref_id: str) -> 
         if ganados
         else f"Faltan ${100_000 - acumulado:,.0f} para el próximo punto"
     )
+
+
+def registrar_puntos_factura(vendedor: str, monto: float, ref_id: str) -> None:
+    """Tarea posterior a la respuesta: no demora la apertura del ticket."""
+    try:
+        _registrar_puntos_vendedor(_db(), vendedor, monto, ref_id)
+    except Exception as exc:
+        print(f"[POS] No se pudieron registrar puntos de {ref_id}: {exc}", flush=True)
 
 
 def emitir_factura(
@@ -469,11 +497,6 @@ def emitir_factura(
         except Exception:
             pass
 
-    try:
-        puntos_msg = _registrar_puntos_vendedor(db, vendedor, final, ref.id)
-    except Exception:
-        puntos_msg = ""
-
     from modulos.factura_arca_ticket_html import crear_ticket_html
 
     html = crear_ticket_html(
@@ -487,7 +510,8 @@ def emitir_factura(
     if "</body>" in html:
         html = html.replace(
             "</body>",
-            "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
+            "<script>window.addEventListener('afterprint',function(){window.close()});"
+            "window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>",
         )
     try:
         pto = int(float(data.get("punto_venta") or 0))
@@ -507,7 +531,7 @@ def emitir_factura(
         "ticket_html": html,
         "stock_ok": stock_ok,
         "stock_msg": stock_msg,
-        "puntos_msg": puntos_msg,
+        "puntos_pendientes": True,
         "cuotas": cuotas,
         "interes_pct": interes_pct,
         "total_base": final_base,

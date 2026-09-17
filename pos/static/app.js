@@ -129,7 +129,7 @@ function abrirPdfBase64(b64, nombre, ventana) {
     `<title>${nombre || "Presupuesto"}</title>` +
       `<style>html,body,iframe{margin:0;width:100%;height:100%;border:0}</style>` +
       `<iframe id="pdf" src="${url}"></iframe>` +
-      `<script>document.getElementById("pdf").onload=function(){setTimeout(function(){try{document.getElementById("pdf").contentWindow.print()}catch(e){}},100)}</script>`
+      `<script>document.getElementById("pdf").onload=function(){setTimeout(function(){try{var p=document.getElementById("pdf").contentWindow;p.addEventListener("afterprint",function(){window.close()});p.print()}catch(e){}},100)}</script>`
   );
   w.document.close();
 }
@@ -143,7 +143,7 @@ function abrirTicketHtml(html, ventana) {
   if (!String(html).includes("window.print")) {
     html = String(html).replace(
       "</body>",
-      "<script>window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>"
+      "<script>window.addEventListener('afterprint',function(){window.close()});window.onload=function(){setTimeout(function(){window.print()},100)}</script></body>"
     );
   }
   w.document.open();
@@ -179,16 +179,20 @@ function limpiarBorrador() {
   } catch (_) {}
 }
 
+function clienteFormPayload() {
+  return {
+    nombre: $("cliNombre").value || "CONSUMIDOR FINAL",
+    cuit: $("cliCuit").value || "",
+    tipo_comprobante: $("cliTipo").value || "6",
+    descuento: parseFloat($("cliDesc").value || "0") || 0,
+    condicion_iva: $("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "",
+  };
+}
+
 async function syncCliente() {
   await api("/api/cliente", {
     method: "PUT",
-    body: JSON.stringify({
-      nombre: $("cliNombre").value || "CONSUMIDOR FINAL",
-      cuit: $("cliCuit").value || "",
-      tipo_comprobante: $("cliTipo").value || "6",
-      descuento: parseFloat($("cliDesc").value || "0") || 0,
-      condicion_iva: $("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "",
-    }),
+    body: JSON.stringify(clienteFormPayload()),
   });
 }
 
@@ -922,8 +926,6 @@ async function emitirFactura() {
   try {
     $("btnFactura").disabled = true;
     $("btnFactura").textContent = "Consultando ARCA…";
-    await syncCliente();
-    await syncVendedor();
     const r = await api("/api/venta/factura", {
       method: "POST",
       body: JSON.stringify({
@@ -931,6 +933,8 @@ async function emitirFactura() {
         observacion: $("nota").value || "",
         cuotas,
         interes_pct: interes,
+        cliente: clienteFormPayload(),
+        vendedor: $("vendedor").value || "CAJA",
         confirmar: true,
       }),
     });

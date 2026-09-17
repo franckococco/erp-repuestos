@@ -194,3 +194,22 @@ def buscar(q: str, limite: int = 20) -> List[Dict[str, Any]]:
 def producto_por_id(item_id: str) -> Dict[str, Any] | None:
     inv, _ = cargar_inventario()
     return next((p for p in inv if p.get("id") == item_id), None)
+
+
+def descontar_stock_local(items: List[Dict[str, Any]]) -> None:
+    """Actualiza el inventario en memoria sin volver a descargar todo Firebase."""
+    descuentos: Dict[str, int] = {}
+    for item in items:
+        if item.get("manual"):
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id:
+            descuentos[item_id] = descuentos.get(item_id, 0) + max(
+                1, int(item.get("cantidad") or 1)
+            )
+    for producto in _INVENTARIO:
+        item_id = str(producto.get("id") or "")
+        if item_id in descuentos:
+            producto["stock"] = max(
+                0, int(producto.get("stock") or 0) - descuentos[item_id]
+            )
