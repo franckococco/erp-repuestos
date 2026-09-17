@@ -262,8 +262,17 @@ def startup():
         f"[POS] modo={_MODO} productos={len(inv)} firebase={firebase_disponible()}",
         flush=True,
     )
-    if firebase_disponible():
-        inicializar_usuarios()
+    if _MODO == "firebase":
+        try:
+            inicializar_usuarios()
+        except Exception as exc:
+            # Una cuota temporal de Firestore no debe impedir que Render arranque.
+            # Las operaciones que necesiten Firebase informarán su propio error.
+            print(
+                f"[POS] No se pudieron inicializar usuarios ({exc}); "
+                "el servicio continúa activo.",
+                flush=True,
+            )
 
 
 @app.get("/")
@@ -355,6 +364,7 @@ def health():
         "inventario": est["productos"],
         "firebase": est["firebase"],
         "tiene_claves": est["tiene_claves"],
+        "error_firebase": est["error_firebase"],
         "ruta_claves": est["ruta_claves"],
         "instruccion": est["instruccion"],
         "donde_buscar": est["donde_buscar"],
