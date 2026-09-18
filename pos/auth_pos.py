@@ -78,11 +78,31 @@ def inicializar_usuarios() -> None:
                 )
 
 
+def _usuario_local(uid: str, clave: str) -> Optional[Dict[str, Any]]:
+    """Fallback sin Firebase: solo para prueba local del POS."""
+    if str(clave) != CLAVE_INICIAL:
+        return None
+    base = next((u for u in USUARIOS if u["usuario"] == uid), None)
+    if not base:
+        return None
+    return {
+        "usuario": uid,
+        "nombre": str(base.get("nombre") or uid),
+        "rol": str(base.get("rol") or "vendedor"),
+        "vendedor_id": base.get("vendedor_id") or uid,
+        # En emulador no forzamos cambio de clave (no hay Firestore).
+        "debe_cambiar_clave": False,
+    }
+
+
 def validar_credenciales(usuario: str, clave: str) -> Optional[Dict[str, Any]]:
     uid = str(usuario or "").strip().lower()[:40]
     if not uid or not clave:
         return None
-    doc = _db().collection("usuarios_app").document(uid).get()
+    try:
+        doc = _db().collection("usuarios_app").document(uid).get()
+    except Exception:
+        return _usuario_local(uid, clave)
     if not doc.exists:
         return None
     data = doc.to_dict() or {}
