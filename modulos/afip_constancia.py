@@ -40,10 +40,15 @@ def _homo() -> bool:
 def _rutas_cert() -> Tuple[Optional[Path], Optional[Path]]:
     env_crt = os.getenv("POS_AFIP_CERT", "").strip()
     env_key = os.getenv("POS_AFIP_KEY", "").strip()
-    candidatos = []
+    candidatos: list[Tuple[Path, Path]] = []
     if env_crt and env_key:
         candidatos.append((Path(env_crt), Path(env_key)))
-    # Archivos sueltos en la raíz del repo (como los copió el usuario)
+    # Render Secret Files
+    secrets = Path("/etc/secrets")
+    candidatos.append((secrets / "sergiocrt.crt", secrets / "sergiokey.key"))
+    candidatos.append((secrets / "certificado.crt", secrets / "privada.key"))
+    candidatos.append((secrets / "afip.crt", secrets / "afip.key"))
+    # Archivos locales / repo
     candidatos.append((_REPO / "sergiocrt.crt", _REPO / "sergiokey.key"))
     for base in (_REPO / "certificados", _REPO / "pos" / "certificados", _REPO / "afip", _REPO):
         candidatos.append((base / "certificado.crt", base / "privada.key"))
@@ -51,14 +56,27 @@ def _rutas_cert() -> Tuple[Optional[Path], Optional[Path]]:
         candidatos.append((base / "afip.crt", base / "afip.key"))
         candidatos.append((base / "sergiocrt.crt", base / "sergiokey.key"))
     for crt, key in candidatos:
-        if crt.is_file() and key.is_file():
-            return crt, key
+        try:
+            if crt.is_file() and key.is_file():
+                return crt, key
+        except OSError:
+            continue
     return None, None
 
 
-def certificados_disponibles() -> bool:
+def estado_certificados() -> Dict[str, Any]:
     crt, key = _rutas_cert()
-    return crt is not None and key is not None
+    return {
+        "disponibles": crt is not None and key is not None,
+        "cert": str(crt) if crt else None,
+        "key": str(key) if key else None,
+        "env_cert": bool(os.getenv("POS_AFIP_CERT", "").strip()),
+        "env_key": bool(os.getenv("POS_AFIP_KEY", "").strip()),
+    }
+
+
+def certificados_disponibles() -> bool:
+    return estado_certificados()["disponibles"]
 
 
 def _cuit_emisor() -> str:

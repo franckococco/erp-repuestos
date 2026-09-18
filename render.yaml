@@ -21,3 +21,7 @@ services:
         value: "20265010505"
       - key: POS_ARCA_CLAVE
         sync: false
+      - key: POS_AFIP_CERT
+        value: /etc/secrets/sergiocrt.crt
+      - key: POS_AFIP_KEY
+        value: /etc/secrets/sergiokey.key

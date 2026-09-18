@@ -128,11 +128,26 @@ def consultar_cuit(cuit_facturador, clave, cuit_consultar):
     try:
         r = requests.post(url, json=payload, timeout=45)
         if r.status_code == 404:
+            try:
+                from modulos.afip_constancia import estado_certificados
+
+                est = estado_certificados()
+                detalle = (
+                    f"certs={est.get('disponibles')} "
+                    f"ruta={est.get('cert')} "
+                    f"env_cert={est.get('env_cert')} env_key={est.get('env_key')}"
+                )
+            except Exception as exc:
+                detalle = str(exc)
             msg = (
                 local_err
-                or "Faltan certificados AFIP en esta PC "
-                "(POS_AFIP_CERT / POS_AFIP_KEY o carpeta certificados/) "
-                "y el Cloud Function aún no expone /consultar_cuit."
+                or (
+                    "No se pudo consultar el padrón AFIP. "
+                    f"({detalle}). "
+                    "En Render: Secret Files sergiocrt.crt + sergiokey.key "
+                    "y variables POS_AFIP_CERT=/etc/secrets/sergiocrt.crt "
+                    "POS_AFIP_KEY=/etc/secrets/sergiokey.key, luego Redeploy."
+                )
             )
             return {"success": False, "error": msg}
         body = r.json() if r.content else {}

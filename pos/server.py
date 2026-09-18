@@ -318,6 +318,12 @@ def index():
 def healthz():
     est = estado_conexion()
     try:
+        from modulos.afip_constancia import estado_certificados
+
+        afip = estado_certificados()
+    except Exception as exc:
+        afip = {"disponibles": False, "error": str(exc)}
+    try:
         prueba_busqueda = buscar("filtro", limite=1)
         busqueda_ok = True
         error_busqueda = None
@@ -333,6 +339,7 @@ def healthz():
         "busqueda_ok": busqueda_ok,
         "resultados_prueba": len(prueba_busqueda),
         "error_busqueda": error_busqueda,
+        "afip_certs": afip,
         "revision": os.getenv("RENDER_GIT_COMMIT", "local")[:8],
     }
 
