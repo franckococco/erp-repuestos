@@ -1,81 +1,72 @@
 ================================================================================
 HAFID POS — CONTINUAR EN OTRA PC (lee esto primero)
+Actualizado: 2026-09-18
 ================================================================================
 
 Repo: https://github.com/franckococco/erp-repuestos
+Branch: main (Render auto-deploy)
 Carpeta del POS: erp-repuestos\pos\
 
 --------------------------------------------------------------------------------
-1) ABRIR EN ESTA PC (3 pasos)
+1) ABRIR EN ESTA PC
 --------------------------------------------------------------------------------
-  a) Abrí una terminal en erp-repuestos y hacé:
-       git pull
+  a) git pull
 
-  b) Entrá a la carpeta pos y (solo la primera vez) instalá deps:
+  b) Solo primera vez / si faltan deps:
        cd pos
        pip install -r requirements.txt
 
-  c) Doble click en:
-       ABRIR_POS.bat
+  c) Doble click: ABRIR_POS.bat
+     URL local: http://127.0.0.1:8766
 
-  d) En el navegador abrí:
-       http://127.0.0.1:8766
-
---------------------------------------------------------------------------------
-2) FIREBASE (datos reales)
---------------------------------------------------------------------------------
-  En esta PC todavía puede faltar firebase_claves.json.
-
-  Copiá el archivo a:
-    erp-repuestos\firebase_claves.json
-  (junto a app.py — NO dentro de pos\ obligatoriamente)
-
-  Cómo conseguirlo:
-  - De Streamlit Cloud → Settings → Secrets → bloque [firebase_key]
-    (pasalo a formato JSON de cuenta de servicio), O
-  - Firebase Console → Project settings → Cuentas de servicio →
-    Generar nueva clave privada → renombrar a firebase_claves.json
-
-  Después en el POS tocá el botón "Conectar Firebase" (banner amarillo).
-
-  NUNCA subas firebase_claves.json a GitHub (tiene secretos).
+  d) Producción (sucursal): el servicio Render hafid-pos (URL del deploy)
 
 --------------------------------------------------------------------------------
-3) QUÉ YA ESTÁ HECHO (emulador / presupuestos)
+2) FIREBASE + SECRETOS (NO subir a GitHub)
 --------------------------------------------------------------------------------
-  - Pantalla rápida: búsqueda arriba, resultados abajo, carrito al costado
-  - Sin recargar toda la página (no es Streamlit)
-  - Tip: escribí 111*3 y Enter → agrega 3 unidades
-  - Atajos: F2 buscar · F3 cliente · F4 presupuesto · F6 en espera · Esc limpia
-  - Ctrl+Z deshacer · carritos "En espera"
-  - PDF presupuesto, historial (cargar / duplicar / actualizar / anular)
-  - Precio, cantidad y descripción editables · ítem manual · descuento
-  - Stock bajo marcado · varias marcas del mismo código
-  - Factura ARCA: DEJADA PARA EL FINAL (no usar todavía)
-
-  Streamlit del ERP sigue igual para administración. Este POS es el mostrador nuevo.
+  - firebase_claves.json → raíz erp-repuestos (junto a app.py)
+  - Certificados AFIP (solo si vas a probar CUIT/padrón en esa PC):
+      sergiocrt.crt + sergiokey.key en la raíz del repo
+      (o variables POS_AFIP_CERT / POS_AFIP_KEY)
+    Certificado alias HAFIDIA · CUIT 20265010505
+    Falta adherir servicio: ws_sr_constancia_inscripcion (con clave fiscal)
 
 --------------------------------------------------------------------------------
-4) QUÉ FALTA (orden)
+3) QUÉ YA ESTÁ HECHO
 --------------------------------------------------------------------------------
-  1. Conectar Firebase en cada PC (claves locales)
-  2. Probar presupuestos con inventario/clientes reales
-  3. Factura ARCA + ticket + descontar stock (al final)
-  4. Cuando esté estable, enlazar / reemplazar el mostrador Streamlit
+  Mostrador
+  - Login admin/vendedor, puntos, alta usuarios (admin)
+  - Búsqueda, carrito, espera, presupuestos PDF, historial
+  - Factura ARCA + ticket; comprobante interno (sin CAE / sin leyenda fiscal)
+  - Tarjeta presets 1·5% / 3·17% / 6·30% / 9·43% / 12·55%
+  - Venta sin stock (checkbox)
+  - Ítem manual → lateral admin “Ítems manuales”
+  - Alta inventario desde POS (formato depósito) → lateral “Altas desde caja”
+  - Laterales admin: sin stock + altas (izq.) · manuales (der.)
+    Monitor chico: apilados arriba · pantalla ancha: a los costados
+
+  Objetivo de negocio: ver altas / sin stock / manuales a tiempo para pedir
+  mercadería y evitar quiebre.
 
 --------------------------------------------------------------------------------
-5) PARA QUE CURSOR SIGA EL HILO EN LA OTRA PC
+4) QUÉ FALTA / RETOMAR
 --------------------------------------------------------------------------------
-  Abrí Cursor en erp-repuestos, chat nuevo, y pegá el contenido de:
+  1. CUIT autofill con AFIP: adherir ws_sr_constancia_inscripcion a HAFIDIA
+     (código listo en modulos/afip_constancia.py — estaba notAuthorized)
+  2. Probar en local → si OK, git push main para Render
+  3. No meter formularios enormes; botones compactos
+
+--------------------------------------------------------------------------------
+5) PARA QUE CURSOR SIGA EL HILO
+--------------------------------------------------------------------------------
+  Abrí Cursor en erp-repuestos, chat nuevo, pegá:
     pos\PEGAR_EN_CURSOR.txt
-
-  Ahí está el resumen del hilo para que el agente continúe sin perder contexto.
 
 --------------------------------------------------------------------------------
 6) SI ALGO FALLA
 --------------------------------------------------------------------------------
-  - Puerto 8766 ocupado: cerrá la ventana negra del POS anterior
-  - pip / python: instalá Python 3.11+ y volvé a pip install -r requirements.txt
-  - Sigue en emulador: falta firebase_claves.json o no tocaste "Conectar Firebase"
+  - Puerto 8766 ocupado: cerrá la ventana del POS anterior
+  - Emulador sin datos: falta firebase_claves.json o “Conectar Firebase”
+  - Ctrl+F5 tras deploy Render (cache de static)
 
 ================================================================================

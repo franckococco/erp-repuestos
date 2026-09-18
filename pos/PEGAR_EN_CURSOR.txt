@@ -1,29 +1,35 @@
 Pegá este bloque entero en un chat nuevo de Cursor (en la carpeta erp-repuestos):
 
 ---
-Seguí el trabajo del Mostrador POS en `pos/` (FastAPI + HTML/JS). Contexto:
+Seguí el trabajo del Mostrador POS en `pos/` (FastAPI + HTML/JS). Repo: franckococco/erp-repuestos · branch main.
 
-OBJETIVO: caja/mostrador rápida para presupuestos. Streamlit queda para admin. ARCA/factura al final.
+OBJETIVO: caja rápida para ventas/presupuestos. Streamlit = admin/depósito. Misma Firebase.
 
-YA HECHO:
-- Emulador local en http://127.0.0.1:8766 (`pos/ABRIR_POS.bat`)
-- Búsqueda rápida (misma lógica `util_busqueda`), carrito sin full reload
-- Tip `codigo*cantidad` + Enter; atajos F2/F3/F4/F6/Esc; Ctrl+Z deshacer
-- Carritos en espera; precio/cant/desc editables; ítem manual; clientes muestra
-- PDF presupuesto; historial local (cargar/duplicar/actualizar mismo nº/anular/filtro)
-- Banner "Conectar Firebase" + `POST /api/inventario/recargar`
-- Si existe `firebase_claves.json` en raíz del repo → inventario/clientes/presupuestos reales
-- Factura ARCA deshabilitada a propósito (501)
+YA HECHO (deployed main, último commit relevante ~15f8bd3 y anteriores):
+- Hosting Render: servicio hafid-pos (auto-deploy en commit a main). Local: http://127.0.0.1:8766 (`pos/ABRIR_POS.bat`)
+- Login/roles (admin / vendedor), puntos vendedores, alta usuarios (admin)
+- Presupuestos PDF + historial; factura ARCA real + ticket HTML; comprobante INTERNO (mismo ticket, SIN CAE, sin leyendas “interno/sin validez fiscal”)
+- Cuotas tarjeta presets: 1/5%, 3/17%, 6/30%, 9/43%, 12/55%
+- Checkbox “Permitir venta sin stock”
+- Laterales ADMIN: izq. vendidos sin stock + altas desde caja; der. ítems manuales. En monitor chico se apilan arriba; ≥1400px a los costados
+- Ítem manual (venta sin código → alerta admin)
+- Alta formal producto desde POS: mismo formato depósito (`alta_manual_producto` vía `pos/productos_alta.py`), agrega al carrito y alerta “Altas desde caja” para que stock pida a tiempo
+- CUIT: valida dígito + busca Firebase; si no está, WS `ws_sr_constancia_inscripcion` (modulos/afip_constancia.py). EN PAUSA hasta adherir el servicio al certificado HAFIDIA (CUIT 20265010505) con clave fiscal — retomar a la tarde/noche
+- Certificados locales en esta PC: `sergiocrt.crt` + `sergiokey.key` (raíz repo). NO subir a git (.gitignore). En casa: copiar esos archivos o POS_AFIP_CERT/POS_AFIP_KEY
 
 ARCHIVOS CLAVE:
-- pos/server.py, inventory.py, presupuestos.py, clientes.py, ventas.py
+- pos/server.py, inventory.py, productos_alta.py, presupuestos.py, clientes.py, ventas.py, auth_pos.py
 - pos/static/{index.html,app.js,styles.css}
-- pos/LEEME.txt (instrucciones humanas)
+- modulos/afip_constancia.py, factura_arca_client.py, factura_arca_ticket_html.py, db_firebase.py (alta_manual_producto)
+- pos/LEEME.txt · pos/PEGAR_EN_CURSOR.txt (este archivo)
 
-SIGUIENTE PASO NATURAL:
-1) Verificar/conectar Firebase en esta PC (firebase_claves.json junto a app.py)
-2) Probar presupuestos con datos reales
-3) Recién después ARCA + stock + ticket
+PENDIENTE / SIGUIENTE:
+1) Adherir en ARCA al computador HAFIDIA el servicio ws_sr_constancia_inscripcion → probar CUIT autofill nombre
+2) (Opcional) Cloud Function /consultar_cuit si se quiere padrón también en Render sin certs en el server
+3) Pulir UI laterales si hace falta; no reintroducir formulario enorme de alta
+4) No commits con secretos (firebase_claves.json, *.crt, *.key)
 
-Leé `pos/LEEME.txt` y el código actual antes de cambiar nada. Continuá desde Firebase real si las claves están; si no, ayudame a conectarlas. No inventes features Magnum aparte. No commits con secretos.
+IDEA DE NEGOCIO (no perderla): altas + sin stock + manuales = control para que depósito pida y no haya quiebre.
+
+Leé pos/LEEME.txt y el código actual antes de cambiar. Continuá desde el pendiente de CUIT/ARCA o lo que pida el usuario. Probá primero en local (:8766) antes de pushear a main/Render.
 ---
