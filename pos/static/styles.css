@@ -526,6 +526,28 @@ h2 {
   grid-template-columns: 1fr 110px 64px auto;
   gap: 8px;
 }
+.alta-prod {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.alta-prod h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.alta-prod-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 100px 100px 70px 64px auto;
+  gap: 8px;
+  align-items: center;
+}
+.cuit-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+.cuit-hint.ok { color: var(--ok); }
+.cuit-hint.err { color: var(--danger); }
+.cuit-hint[hidden] { display: none; }
 .acciones {
   display: flex;
   gap: 8px;
@@ -740,4 +762,5 @@ kbd {
   .tipo { flex: 1; }
   .presu-row { grid-template-columns: 1fr; }
   .manual-row, .totales-full { grid-template-columns: 1fr 1fr; }
+  .alta-prod-row { grid-template-columns: 1fr 1fr; }
 }

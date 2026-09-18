@@ -101,6 +101,62 @@ def obtener_historial(cuit, clave):
         return {"success": False, "error": str(e)}
 
 
+def consultar_cuit(cuit_facturador, clave, cuit_consultar):
+    """Consulta padrón AFIP/ARCA vía Cloud Function (nombre + condición IVA)."""
+    dig = "".join(c for c in str(cuit_consultar or "") if c.isdigit())
+    url = f"{BASE_URL}/consultar_cuit"
+    payload = {
+        "cuit_facturador": cuit_facturador,
+        "clave_secreta": clave,
+        "cuit": dig,
+        "cuit_consultar": dig,
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=45)
+        if r.status_code == 404:
+            return {
+                "success": False,
+                "error": (
+                    "CUIT válido, pero el padrón AFIP aún no está habilitado en el servidor. "
+                    "Escribí el nombre a mano o guardá el cliente una vez."
+                ),
+            }
+        body = r.json() if r.content else {}
+        if r.status_code >= 400:
+            err = f"HTTP {r.status_code}"
+            if isinstance(body, dict):
+                err = body.get("error") or body.get("message") or err
+            elif r.text:
+                err = r.text[:300]
+            return {"success": False, "error": err}
+        if isinstance(body, dict) and body.get("success") is False:
+            return {
+                "success": False,
+                "error": body.get("error") or body.get("message") or str(body),
+            }
+        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        if not isinstance(data, dict):
+            return {"success": False, "error": "Respuesta inválida del padrón"}
+        nombre = (
+            data.get("nombre")
+            or data.get("razon_social")
+            or data.get("denominacion")
+            or data.get("nombre_completo")
+            or ""
+        )
+        if not str(nombre).strip():
+            return {"success": False, "error": "AFIP no devolvió el nombre"}
+        return {"success": True, "data": data}
+    except Exception as e:
+        err = str(e)
+        try:
+            if hasattr(e, "response") and e.response is not None:
+                err = e.response.text or err
+        except Exception:
+            pass
+        return {"success": False, "error": err}
+
+
 def cargar_datos_nube(cuit, clave):
     url = f"{BASE_URL}/obtenerConfiguracion"
     payload = {"cuit_facturador": cuit, "clave_secreta": clave}

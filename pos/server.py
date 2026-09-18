@@ -22,7 +22,14 @@ if str(ROOT) not in sys.path:
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from inventory import cargar_inventario, buscar, producto_por_id, forzar_recarga, estado_conexion  # noqa: E402
+from inventory import (  # noqa: E402
+    cargar_inventario,
+    buscar,
+    producto_por_id,
+    forzar_recarga,
+    estado_conexion,
+    crear_producto_pos,
+)
 from presupuestos import (  # noqa: E402
     anular as anular_presupuesto,
     cargar_en_carrito,
@@ -31,7 +38,7 @@ from presupuestos import (  # noqa: E402
     listar as listar_presupuestos,
     regenerar_pdf,
 )
-from clientes import buscar as buscar_clientes  # noqa: E402
+from clientes import buscar as buscar_clientes, resolver_cuit  # noqa: E402
 from auth_pos import (  # noqa: E402
     cambiar_clave,
     crear_token,
@@ -205,6 +212,16 @@ class ManualItem(BaseModel):
     cantidad: int = Field(1, ge=1)
     codigo: str = ""
     marca: str = "MANUAL"
+
+
+class ProductoAltaIn(BaseModel):
+    codigo: str
+    descripcion: str
+    precio_venta: float = Field(..., gt=0)
+    marca: str = "GENERICO"
+    stock: int = Field(0, ge=0)
+    cantidad: int = Field(1, ge=1)
+    agregar_carrito: bool = True
 
 
 class QtyUpdate(BaseModel):
@@ -479,6 +496,76 @@ def buscar_productos(q: str = Query("", min_length=0), limite: int = 25):
 @app.get("/api/clientes")
 def api_clientes(q: str = Query("", min_length=0)):
     return {"resultados": buscar_clientes(q)}
+
+
+@app.get("/api/clientes/cuit/{cuit}")
+def api_resolver_cuit(cuit: str):
+    try:
+        return resolver_cuit(cuit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/productos")
+def api_alta_producto(body: ProductoAltaIn, request: Request):
+    creado_por = ""
+    usuario = getattr(request.state, "usuario", None) or {}
+    if isinstance(usuario, dict):
+        creado_por = str(usuario.get("usuario") or usuario.get("nombre") or "")
+    try:
+        prod = crear_producto_pos(
+            codigo=body.codigo,
+            descripcion=body.descripcion,
+            precio_venta=body.precio_venta,
+            marca=body.marca,
+            stock=body.stock,
+            creado_por=creado_por,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    if body.agregar_carrito:
+        _guardar_undo()
+        cant = max(1, int(body.cantidad or 1))
+        precio = float(prod["precio_venta"])
+        stock = int(prod.get("stock") or 0)
+        for item in _CARRITO:
+            if item["id"] == prod["id"]:
+                item["cantidad"] += cant
+                item["subtotal"] = round(item["cantidad"] * item["precio_unitario"], 2)
+                item["stock"] = stock
+                break
+        else:
+            _CARRITO.append(
+                {
+                    "id": prod["id"],
+                    "id_maestro": prod.get("id_maestro") or prod.get("codigo"),
+                    "codigo": prod["codigo"],
+                    "descripcion": prod["descripcion"],
+                    "marca": prod["marca"],
+                    "precio_unitario": precio,
+                    "cantidad": cant,
+                    "subtotal": round(precio * cant, 2),
+                    "stock": stock,
+                }
+            )
+        return {
+            "ok": True,
+            "mensaje": f"Producto {prod['codigo']} cargado y agregado al carrito",
+            "producto": prod,
+            "items": _CARRITO,
+            "totales": _totales(),
+        }
+
+    return {
+        "ok": True,
+        "mensaje": f"Producto {prod['codigo']} cargado",
+        "producto": prod,
+    }
 
 
 @app.get("/api/carrito")

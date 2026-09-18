@@ -298,7 +298,9 @@ function clienteFormPayload() {
     cuit: $("cliCuit").value || "",
     tipo_comprobante: $("cliTipo").value || "6",
     descuento: parseFloat($("cliDesc").value || "0") || 0,
-    condicion_iva: $("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "",
+    condicion_iva:
+      ($("cliTipo").dataset.condicionIva || "").trim()
+      || ($("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "CONSUMIDOR FINAL"),
   };
 }
 
@@ -321,12 +323,52 @@ async function syncVendedor() {
   });
 }
 
+function setCuitHint(text, ok) {
+  const el = $("cuitHint");
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.className = "cuit-hint " + (ok === true ? "ok" : ok === false ? "err" : "");
+}
+
+async function resolverCuitCampo() {
+  const raw = ($("cliCuit").value || "").replace(/\D/g, "");
+  if (raw.length !== 11) {
+    if (raw.length > 0 && raw.length !== 11) {
+      setCuitHint("CUIT: 11 dígitos para validar", false);
+    }
+    return;
+  }
+  setCuitHint("Consultando…", null);
+  try {
+    const r = await api(`/api/clientes/cuit/${raw}`);
+    const cli = r.cliente || {};
+    aplicarClienteEnForm(cli);
+    if (cli.condicion_iva) {
+      $("cliTipo").dataset.condicionIva = cli.condicion_iva;
+    }
+    await syncCliente();
+    await refreshCarrito();
+    setCuitHint(r.mensaje || "Cliente cargado", true);
+  } catch (err) {
+    setCuitHint(err.message || "No se pudo validar", false);
+  }
+}
+
 function aplicarClienteEnForm(cli) {
   if (!cli) return;
   $("cliNombre").value = cli.nombre || "CONSUMIDOR FINAL";
   $("cliCuit").value = cli.cuit && cli.cuit !== "00000000000" ? cli.cuit : "";
   $("cliDesc").value = String(cli.descuento || 0);
   $("cliTipo").value = String(cli.tipo_comprobante || cli.cbte_tipo || "6");
+  if (cli.condicion_iva) {
+    $("cliTipo").dataset.condicionIva = cli.condicion_iva;
+  }
 }
 
 function renderCliHits(lista) {
@@ -813,6 +855,51 @@ function bind() {
     } catch (err) {
       showMsg(err.message, true);
     }
+  });
+
+  $("btnAltaProd").addEventListener("click", async () => {
+    try {
+      $("btnAltaProd").disabled = true;
+      const r = await api("/api/productos", {
+        method: "POST",
+        body: JSON.stringify({
+          codigo: $("altaCod").value,
+          descripcion: $("altaDesc").value,
+          precio_venta: parseFloat($("altaPrecio").value || "0") || 0,
+          marca: $("altaMarca").value || "GENERICO",
+          stock: Math.max(0, parseInt($("altaStock").value || "0", 10)),
+          cantidad: Math.max(1, parseInt($("altaCant").value || "1", 10)),
+          agregar_carrito: true,
+        }),
+      });
+      $("altaCod").value = "";
+      $("altaDesc").value = "";
+      $("altaPrecio").value = "";
+      $("altaMarca").value = "GENERICO";
+      $("altaStock").value = "0";
+      $("altaCant").value = "1";
+      if (r.items) {
+        renderCarrito(r);
+      } else {
+        await refreshCarrito();
+      }
+      showMsg(r.mensaje || "Producto cargado");
+      $("q").focus();
+    } catch (err) {
+      showMsg(err.message, true);
+    } finally {
+      $("btnAltaProd").disabled = false;
+    }
+  });
+
+  $("cliCuit").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      resolverCuitCampo();
+    }
+  });
+  $("cliCuit").addEventListener("blur", () => {
+    resolverCuitCampo();
   });
 
   $("btnVaciar").addEventListener("click", async () => {

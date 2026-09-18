@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HAFID · Ventas POS</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260918-1" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260918-2" />
 </head>
 <body>
   <aside id="railSinStock" class="admin-rail left" hidden>
@@ -81,7 +81,8 @@
         </label>
         <label>
           CUIT/DNI
-          <input id="cliCuit" type="text" inputmode="numeric" placeholder="opcional" />
+          <input id="cliCuit" type="text" inputmode="numeric" placeholder="11 dígitos → Enter" />
+          <small id="cuitHint" class="cuit-hint" hidden></small>
         </label>
         <label>
           Comprobante
@@ -126,6 +127,20 @@
             <input id="manCant" type="number" min="1" value="1" title="Cantidad" />
             <button type="button" class="ghost" id="btnManual">Agregar</button>
           </div>
+        </div>
+
+        <div class="alta-prod">
+          <h3>Cargar producto (formal)</h3>
+          <div class="alta-prod-row">
+            <input id="altaCod" type="text" placeholder="Código *" autocomplete="off" />
+            <input id="altaDesc" type="text" placeholder="Descripción *" />
+            <input id="altaPrecio" type="number" min="0.01" step="0.01" placeholder="Precio *" />
+            <input id="altaMarca" type="text" placeholder="Marca" value="GENERICO" />
+            <input id="altaStock" type="number" min="0" value="0" title="Stock inicial" />
+            <input id="altaCant" type="number" min="1" value="1" title="Cant. a vender" />
+            <button type="button" class="primary" id="btnAltaProd">Cargar y agregar</button>
+          </div>
+          <div class="hint">Queda en el inventario (Firebase) y se agrega al carrito. Si el código ya existe, usá el buscador.</div>
         </div>
       </section>
 
@@ -270,6 +285,6 @@
       <kbd>Enter</kbd> agrega · tip: <code>111*3</code> · <kbd>Ctrl</kbd>+<kbd>Z</kbd> deshacer
     </footer>
   </div>
-  <script src="/static/app.js?v=20260918-1"></script>
+  <script src="/static/app.js?v=20260918-2"></script>
 </body>
 </html>

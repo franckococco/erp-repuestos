@@ -213,3 +213,117 @@ def descontar_stock_local(items: List[Dict[str, Any]]) -> None:
             producto["stock"] = max(
                 0, int(producto.get("stock") or 0) - descuentos[item_id]
             )
+
+
+def _sanitizar_marca(marca: str) -> str:
+    import re
+
+    m = str(marca or "GENERICO").strip().upper()
+    m = re.sub(r"[.\/\[\]\*]", "_", m)
+    m = re.sub(r"_+", "_", m).strip("_")
+    if not m or m.startswith("__"):
+        m = "GENERICO"
+    return m[:60]
+
+
+def crear_producto_pos(
+    *,
+    codigo: str,
+    descripcion: str,
+    precio_venta: float,
+    marca: str = "GENERICO",
+    stock: int = 0,
+    creado_por: str = "",
+) -> Dict[str, Any]:
+    """Alta formal en Firebase desde el POS. Rechaza código duplicado."""
+    global _INVENTARIO, _CARGADO, _MODO
+
+    codigo_base = str(codigo or "").strip().upper().replace("/", "-")
+    desc = str(descripcion or "").strip().upper()
+    marca_limpia = _sanitizar_marca(marca)
+    precio = max(0.0, float(precio_venta or 0))
+    stock_n = max(0, int(stock or 0))
+
+    if not codigo_base or len(codigo_base) < 2:
+        raise ValueError("Código inválido (mínimo 2 caracteres)")
+    if not desc:
+        raise ValueError("Descripción obligatoria")
+    if precio <= 0:
+        raise ValueError("El precio de venta debe ser mayor a cero")
+
+    ruta = _cred_path()
+    if ruta is None:
+        raise RuntimeError("Sin Firebase: no se puede dar de alta el producto")
+
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+    from datetime import datetime, timezone
+
+    if not firebase_admin._apps:  # type: ignore[attr-defined]
+        firebase_admin.initialize_app(credentials.Certificate(str(ruta)))
+    db = firestore.client()
+
+    ref = db.collection("productos").document(codigo_base)
+    if ref.get().exists:
+        raise ValueError(
+            f"El código {codigo_base} ya existe. Buscalo en el buscador."
+        )
+    existentes = (
+        db.collection("productos").where("codigo", "==", codigo_base).limit(1).get()
+    )
+    if existentes:
+        raise ValueError(
+            f"El código {codigo_base} ya existe. Buscalo en el buscador."
+        )
+
+    ahora = datetime.now(timezone.utc)
+    payload = {
+        "codigo": codigo_base,
+        "descripcion": desc,
+        "vehiculos": [],
+        "vehiculo": "",
+        "ubicacion": {
+            "pasillo": 0,
+            "piso": 0,
+            "modulo": 0,
+            "fila": 0,
+            "fondo": 0,
+        },
+        "origen": "pos_caja",
+        "creado_por": str(creado_por or "").strip() or "POS",
+        "ultima_actualizacion": ahora,
+        "variantes": {
+            marca_limpia: {
+                "stock": stock_n,
+                "stock_critico": STOCK_CRITICO_DEFAULT,
+                "ultimo_costo_base": 0.0,
+                "precio_interno": precio,
+                "precio_venta": precio,
+                "proveedor": "POS",
+                "cuit_proveedor": "0",
+            }
+        },
+    }
+    ref.set(payload)
+
+    item = {
+        "id": f"{codigo_base}_{marca_limpia}",
+        "id_maestro": codigo_base,
+        "codigo": codigo_base,
+        "descripcion": desc,
+        "vehiculos": [],
+        "vehiculo": "",
+        "vehiculos_busqueda": "",
+        "marca": marca_limpia,
+        "stock": stock_n,
+        "stock_critico": STOCK_CRITICO_DEFAULT,
+        "precio_venta": precio,
+        "ubicacion": payload["ubicacion"],
+    }
+    # Actualizar caché local sin recargar todo
+    _INVENTARIO = [p for p in _INVENTARIO if p.get("id") != item["id"]]
+    _INVENTARIO.append(item)
+    _CARGADO = True
+    _MODO = "firebase"
+    return item
+
