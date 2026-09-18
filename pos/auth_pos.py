@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone
@@ -152,6 +153,74 @@ def cambiar_clave(usuario: str, actual: str, nueva: str) -> Tuple[bool, str]:
         }
     )
     return True, "Clave actualizada"
+
+
+def crear_usuario(
+    usuario: str,
+    nombre: str,
+    rol: str = "vendedor",
+    clave: str = CLAVE_INICIAL,
+) -> Tuple[bool, str]:
+    uid = str(usuario or "").strip().lower()[:40]
+    nom = str(nombre or "").strip()[:80] or uid.title()
+    rol_n = str(rol or "vendedor").strip().lower()
+    if rol_n not in ("admin", "vendedor"):
+        return False, "Rol inválido"
+    if not uid or not re.match(r"^[a-z0-9._-]{3,40}$", uid):
+        return False, "Usuario inválido (3-40, letras/números/._-)"
+    if len(str(clave or "")) < 4:
+        return False, "La clave debe tener al menos 4 caracteres"
+    ref = _db().collection("usuarios_app").document(uid)
+    if ref.get().exists:
+        return False, "Ese usuario ya existe"
+    salt, clave_hash = _hash(clave)
+    ahora = datetime.now(timezone.utc)
+    vendedor_id = uid if rol_n == "vendedor" else None
+    ref.set(
+        {
+            "usuario": uid,
+            "nombre": nom,
+            "rol": rol_n,
+            "vendedor_id": vendedor_id,
+            "clave_salt": salt,
+            "clave_hash": clave_hash,
+            "activo": True,
+            "creado": ahora,
+            "actualizado": ahora,
+        }
+    )
+    if rol_n == "vendedor":
+        _db().collection("vendedores").document(uid).set(
+            {
+                "nombre": nom,
+                "rol": "vendedor",
+                "puntos": 0,
+                "ventas_acumuladas": 0.0,
+                "activo": True,
+                "creado": ahora,
+            },
+            merge=True,
+        )
+    return True, f"Usuario {uid} creado"
+
+
+def listar_usuarios_admin() -> list[Dict[str, Any]]:
+    docs = _db().collection("usuarios_app").stream()
+    out = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if not data.get("activo", True):
+            continue
+        out.append(
+            {
+                "usuario": doc.id,
+                "nombre": data.get("nombre") or doc.id,
+                "rol": data.get("rol") or "vendedor",
+                "vendedor_id": data.get("vendedor_id"),
+            }
+        )
+    out.sort(key=lambda x: str(x["usuario"]))
+    return out
 
 
 def resumen_puntos_admin() -> list[Dict[str, Any]]:

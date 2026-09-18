@@ -376,6 +376,14 @@ def crear_ticket_html(
         if qr_uri
         else ""
     )
+    cae_nro = str(cae.get("numero") or "").strip()
+    bloque_cae = (
+        f'<div class="cae">CAE: {esc(cae.get("numero"))}</div>'
+        f'<div class="cae">Vto CAE: {esc(cae.get("vencimiento"))}</div>'
+        f"{qr_html}"
+        if cae_nro
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -724,9 +732,7 @@ def crear_ticket_html(
   {bloque_obs}
 
   <div class="bloque-qr">
-    <div class="cae">CAE: {esc(cae.get("numero"))}</div>
-    <div class="cae">Vto CAE: {esc(cae.get("vencimiento"))}</div>
-    {qr_html}
+    {bloque_cae}
     <div class="pie">{leyenda}</div>
   </div>
 </div>

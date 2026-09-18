@@ -57,11 +57,19 @@ function aplicarSesion(usuario) {
   $("usuarioBox").hidden = false;
   $("usuarioNombre").textContent = `${usuario.nombre} · ${usuario.rol}`;
   const esVendedor = usuario.rol === "vendedor";
+  const esAdmin = usuario.rol === "admin";
   $("vendedor").readOnly = esVendedor;
   if (esVendedor) {
     $("vendedor").value = String(usuario.vendedor_id || usuario.usuario).toUpperCase();
   }
-  $("panelAdminPuntos").hidden = usuario.rol !== "admin";
+  $("panelAdminPuntos").hidden = !esAdmin;
+  $("panelAdminUsuarios").hidden = !esAdmin;
+  $("railSinStock").hidden = !esAdmin;
+  $("railManuales").hidden = !esAdmin;
+  document.body.classList.toggle("admin-mode", esAdmin);
+  if (esAdmin) {
+    cargarAlertasAdmin().catch(() => {});
+  }
 }
 
 async function cargarPuntosAdmin() {
@@ -82,6 +90,64 @@ async function cargarPuntosAdmin() {
     .join("") || '<div class="empty">No hay vendedores registrados.</div>';
 }
 
+async function cargarUsuariosAdmin() {
+  if (!usuarioSesion || usuarioSesion.rol !== "admin") return;
+  const data = await api("/api/admin/usuarios");
+  $("listaUsuarios").innerHTML = (data.resultados || [])
+    .map(
+      (u) => `
+      <div class="presu-row">
+        <div>
+          <div class="cod">${u.usuario}</div>
+          <div class="meta">${u.nombre} · ${u.rol}</div>
+        </div>
+      </div>`
+    )
+    .join("") || '<div class="empty">No hay usuarios.</div>';
+}
+
+function renderRail(boxId, items) {
+  const box = $(boxId);
+  box.innerHTML = (items || [])
+    .map((a) => {
+      const it = a.item || {};
+      const titulo = it.codigo || it.descripcion || "Ítem";
+      const stockTxt = it.stock == null ? "s/d" : it.stock;
+      return `
+      <div class="rail-item">
+        <div class="cod">${titulo}</div>
+        <div class="meta">${it.descripcion || ""} · x${it.cantidad || 1}</div>
+        <div class="meta">${a.vendedor || ""} · stock ${stockTxt}</div>
+        <button type="button" class="ghost" data-alerta="${a.id}">Visto</button>
+      </div>`;
+    })
+    .join("") || '<div class="empty">Sin pendientes</div>';
+}
+
+async function cargarAlertasAdmin() {
+  if (!usuarioSesion || usuarioSesion.rol !== "admin") return;
+  const data = await api("/api/admin/alertas");
+  const rows = data.resultados || [];
+  renderRail(
+    "listaSinStock",
+    rows.filter((r) => r.tipo === "sin_stock")
+  );
+  renderRail(
+    "listaManuales",
+    rows.filter((r) => r.tipo === "manual")
+  );
+}
+
+function marcarPresetActivo() {
+  const cuotas = parseInt($("tarjetaCuotas").value || "1", 10);
+  const interes = parseFloat($("tarjetaInteres").value || "0");
+  document.querySelectorAll("#tarjetaPresets button").forEach((btn) => {
+    const c = parseInt(btn.dataset.cuotas || "0", 10);
+    const i = parseFloat(btn.dataset.interes || "0");
+    btn.classList.toggle("active", c === cuotas && i === interes);
+  });
+}
+
 function actualizarFinanciacion() {
   const esTarjeta = $("formaPago").value === "Tarjeta";
   $("tarjetaOpts").hidden = !esTarjeta;
@@ -94,6 +160,27 @@ function actualizarFinanciacion() {
   const total = ultimoTotal * (1 + interes / 100);
   $("totalFinanciado").textContent = money(total);
   $("valorCuota").textContent = `${cuotas} cuota(s) de ${money(total / cuotas)}`;
+  marcarPresetActivo();
+}
+
+function payloadVenta() {
+  const pago = $("formaPago").value || "Contado";
+  const cuotas = pago === "Tarjeta"
+    ? Math.max(1, parseInt($("tarjetaCuotas").value || "1", 10))
+    : 1;
+  const interes = pago === "Tarjeta"
+    ? Math.max(0, parseFloat($("tarjetaInteres").value || "0"))
+    : 0;
+  return {
+    forma_pago: pago,
+    observacion: $("nota").value || "",
+    cuotas,
+    interes_pct: interes,
+    cliente: clienteFormPayload(),
+    vendedor: $("vendedor").value || "CAJA",
+    confirmar: true,
+    permitir_sin_stock: Boolean($("chkSinStock").checked),
+  };
 }
 
 function showMsg(text, err = false) {
@@ -765,12 +852,60 @@ function bind() {
 
   $("btnPresu").addEventListener("click", emitirPresupuesto);
   $("btnFactura").addEventListener("click", emitirFactura);
+  $("btnInterno").addEventListener("click", emitirInterno);
   $("formaPago").addEventListener("change", actualizarFinanciacion);
   $("tarjetaCuotas").addEventListener("input", actualizarFinanciacion);
   $("tarjetaInteres").addEventListener("input", actualizarFinanciacion);
+  $("tarjetaPresets").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-cuotas]");
+    if (!btn) return;
+    $("tarjetaCuotas").value = btn.dataset.cuotas;
+    $("tarjetaInteres").value = btn.dataset.interes;
+    actualizarFinanciacion();
+  });
   $("panelAdminPuntos").addEventListener("toggle", () => {
     if ($("panelAdminPuntos").open) {
       cargarPuntosAdmin().catch((err) => showMsg(err.message, true));
+    }
+  });
+  $("panelAdminUsuarios").addEventListener("toggle", () => {
+    if ($("panelAdminUsuarios").open) {
+      cargarUsuariosAdmin().catch((err) => showMsg(err.message, true));
+    }
+  });
+  $("formUsuario").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/admin/usuarios", {
+        method: "POST",
+        body: JSON.stringify({
+          usuario: $("usuNuevoUser").value,
+          nombre: $("usuNuevoNombre").value,
+          rol: $("usuNuevoRol").value,
+          clave: $("usuNuevoClave").value || "111",
+        }),
+      });
+      showMsg(r.mensaje);
+      $("usuNuevoUser").value = "";
+      $("usuNuevoNombre").value = "";
+      await cargarUsuariosAdmin();
+    } catch (err) {
+      showMsg(err.message, true);
+    }
+  });
+  document.querySelectorAll(".rail-refresh").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      cargarAlertasAdmin().catch((err) => showMsg(err.message, true));
+    });
+  });
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-alerta]");
+    if (!btn) return;
+    try {
+      await api(`/api/admin/alertas/${btn.dataset.alerta}/resolver`, { method: "POST" });
+      await cargarAlertasAdmin();
+    } catch (err) {
+      showMsg(err.message, true);
     }
   });
   $("btnLogout").addEventListener("click", async () => {
@@ -932,19 +1067,17 @@ async function emitirFactura() {
   const letra = $("cliTipo").value === "1" ? "A" : "B";
   const cliente = $("cliNombre").value || "CONSUMIDOR FINAL";
   const cuit = $("cliCuit").value || "sin DNI/CUIT";
-  const pago = $("formaPago").value || "Contado";
-  const cuotas = pago === "Tarjeta"
-    ? Math.max(1, parseInt($("tarjetaCuotas").value || "1", 10))
-    : 1;
-  const interes = pago === "Tarjeta"
-    ? Math.max(0, parseFloat($("tarjetaInteres").value || "0"))
-    : 0;
+  const payload = payloadVenta();
+  const pago = payload.forma_pago;
+  const cuotas = payload.cuotas;
+  const interes = payload.interes_pct;
   const totalFinal = ultimoTotal * (1 + interes / 100);
   const detalleTarjeta = pago === "Tarjeta"
     ? `\nCuotas: ${cuotas}\nInterés: ${interes}%\nValor por cuota: ${money(totalFinal / cuotas)}`
     : "";
+  const sinStock = payload.permitir_sin_stock ? "\n⚠ Permitir sin stock: SÍ" : "";
   const ok = confirm(
-    `FACTURA REAL ARCA\n\nFactura ${letra}\nCliente: ${cliente}\nDNI/CUIT: ${cuit}\nPago: ${pago}${detalleTarjeta}\nTotal: ${money(totalFinal)}\n\n¿Emitir y solicitar CAE?`
+    `FACTURA REAL ARCA\n\nFactura ${letra}\nCliente: ${cliente}\nDNI/CUIT: ${cuit}\nPago: ${pago}${detalleTarjeta}${sinStock}\nTotal: ${money(totalFinal)}\n\n¿Emitir y solicitar CAE?`
   );
   if (!ok) return;
 
@@ -954,30 +1087,68 @@ async function emitirFactura() {
     $("btnFactura").textContent = "Consultando ARCA…";
     const r = await api("/api/venta/factura", {
       method: "POST",
-      body: JSON.stringify({
-        forma_pago: pago,
-        observacion: $("nota").value || "",
-        cuotas,
-        interes_pct: interes,
-        cliente: clienteFormPayload(),
-        vendedor: $("vendedor").value || "CAJA",
-        confirmar: true,
-      }),
+      body: JSON.stringify(payload),
     });
     abrirTicketHtml(r.ticket_html, ventana);
     showMsg(`${r.mensaje} · ${r.total_txt} · ${r.stock_msg || ""}`);
     $("nota").value = "";
     $("cliBusca").value = "";
+    $("chkSinStock").checked = false;
     presupuestoCargadoId = null;
     presupuestoCargadoNro = null;
     limpiarBorrador();
     await refreshCarrito();
+    if (usuarioSesion && usuarioSesion.rol === "admin") {
+      cargarAlertasAdmin().catch(() => {});
+    }
   } catch (err) {
     if (ventana) ventana.close();
     showMsg(`No se emitió la factura: ${err.message}`, true);
   } finally {
     $("btnFactura").disabled = false;
     $("btnFactura").textContent = "Facturar ARCA";
+  }
+}
+
+async function emitirInterno() {
+  const letra = $("cliTipo").value === "1" ? "A" : "B";
+  const cliente = $("cliNombre").value || "CONSUMIDOR FINAL";
+  const payload = payloadVenta();
+  const pago = payload.forma_pago;
+  const interes = payload.interes_pct;
+  const totalFinal = ultimoTotal * (1 + interes / 100);
+  const sinStock = payload.permitir_sin_stock ? "\n⚠ Permitir sin stock: SÍ" : "";
+  const ok = confirm(
+    `COMPROBANTE INTERNO\n\nTipo ${letra}\nCliente: ${cliente}\nPago: ${pago}${sinStock}\nTotal: ${money(totalFinal)}\n\n¿Emitir ticket sin CAE?`
+  );
+  if (!ok) return;
+
+  const ventana = ventanaEspera("Generando comprobante…");
+  try {
+    $("btnInterno").disabled = true;
+    $("btnInterno").textContent = "Emitiendo…";
+    const r = await api("/api/venta/comprobante-interno", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    abrirTicketHtml(r.ticket_html, ventana);
+    showMsg(`${r.mensaje} · ${r.total_txt} · ${r.stock_msg || ""}`);
+    $("nota").value = "";
+    $("cliBusca").value = "";
+    $("chkSinStock").checked = false;
+    presupuestoCargadoId = null;
+    presupuestoCargadoNro = null;
+    limpiarBorrador();
+    await refreshCarrito();
+    if (usuarioSesion && usuarioSesion.rol === "admin") {
+      cargarAlertasAdmin().catch(() => {});
+    }
+  } catch (err) {
+    if (ventana) ventana.close();
+    showMsg(`No se emitió el comprobante: ${err.message}`, true);
+  } finally {
+    $("btnInterno").disabled = false;
+    $("btnInterno").textContent = "Comprobante interno";
   }
 }
 

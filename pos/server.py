@@ -35,16 +35,21 @@ from clientes import buscar as buscar_clientes  # noqa: E402
 from auth_pos import (  # noqa: E402
     cambiar_clave,
     crear_token,
+    crear_usuario,
     inicializar_usuarios,
     leer_token,
+    listar_usuarios_admin,
     resumen_puntos_admin,
     validar_credenciales,
 )
 from ventas import (  # noqa: E402
+    emitir_comprobante_interno,
     emitir_factura,
+    listar_alertas_admin,
     listar_facturas,
     registrar_puntos_factura,
     regenerar_ticket_factura,
+    resolver_alerta_admin,
 )
 
 app = FastAPI(title="HAFID POS", version="0.4.0")
@@ -231,6 +236,14 @@ class FacturaIn(BaseModel):
     cliente: ClienteIn | None = None
     vendedor: str = ""
     confirmar: bool = False
+    permitir_sin_stock: bool = False
+
+
+class UsuarioNuevoIn(BaseModel):
+    usuario: str
+    nombre: str = ""
+    rol: str = "vendedor"
+    clave: str = "111"
 
 
 class VendedorIn(BaseModel):
@@ -369,6 +382,42 @@ def api_puntos_admin(request: Request):
     if request.state.usuario.get("rol") != "admin":
         raise HTTPException(403, "Solo el administrador puede ver los puntos")
     return {"resultados": resumen_puntos_admin()}
+
+
+@app.get("/api/admin/usuarios")
+def api_usuarios_admin(request: Request):
+    if request.state.usuario.get("rol") != "admin":
+        raise HTTPException(403, "Solo el administrador puede ver usuarios")
+    try:
+        return {"resultados": listar_usuarios_admin()}
+    except Exception as exc:
+        raise HTTPException(502, f"No se pudieron listar usuarios: {exc}") from exc
+
+
+@app.post("/api/admin/usuarios")
+def api_crear_usuario(body: UsuarioNuevoIn, request: Request):
+    if request.state.usuario.get("rol") != "admin":
+        raise HTTPException(403, "Solo el administrador puede crear usuarios")
+    ok, mensaje = crear_usuario(body.usuario, body.nombre, body.rol, body.clave)
+    if not ok:
+        raise HTTPException(400, mensaje)
+    return {"ok": True, "mensaje": mensaje}
+
+
+@app.get("/api/admin/alertas")
+def api_alertas_admin(request: Request):
+    if request.state.usuario.get("rol") != "admin":
+        raise HTTPException(403, "Solo el administrador puede ver alertas")
+    return {"resultados": listar_alertas_admin()}
+
+
+@app.post("/api/admin/alertas/{alerta_id}/resolver")
+def api_resolver_alerta(alerta_id: str, request: Request):
+    if request.state.usuario.get("rol") != "admin":
+        raise HTTPException(403, "Solo el administrador puede resolver alertas")
+    if not resolver_alerta_admin(alerta_id):
+        raise HTTPException(404, "Alerta no encontrada")
+    return {"ok": True, "mensaje": "Alerta marcada como vista"}
 
 
 @app.get("/api/health")
@@ -882,12 +931,67 @@ def api_emitir_factura(
             presupuesto_id=_PRESUPUESTO_CARGADO,
             cuotas=body.cuotas,
             interes_pct=body.interes_pct,
+            permitir_sin_stock=bool(body.permitir_sin_stock),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
     if resultado.get("id"):
+        background_tasks.add_task(
+            registrar_puntos_factura,
+            _VENDEDOR,
+            float(resultado.get("total") or 0),
+            str(resultado["id"]),
+        )
+    _CARRITO = []
+    _CLIENTE = {
+        "nombre": "CONSUMIDOR FINAL",
+        "cuit": "",
+        "tipo_comprobante": "6",
+        "descuento": 0.0,
+        "telefono": "",
+        "condicion_iva": "",
+    }
+    _PRESUPUESTO_CARGADO = None
+    return resultado
+
+
+@app.post("/api/venta/comprobante-interno")
+def api_emitir_interno(
+    body: FacturaIn, request: Request, background_tasks: BackgroundTasks
+):
+    global _CARRITO, _CLIENTE, _PRESUPUESTO_CARGADO, _VENDEDOR
+    if not body.confirmar:
+        raise HTTPException(400, "Confirmá que querés emitir el comprobante")
+    if not _CARRITO:
+        raise HTTPException(400, "Carrito vacío")
+    if body.cliente:
+        _CLIENTE.update(body.cliente.model_dump())
+        _CLIENTE["descuento"] = max(
+            0.0, min(100.0, float(_CLIENTE.get("descuento") or 0))
+        )
+        if str(_CLIENTE.get("tipo_comprobante")) not in ("1", "6"):
+            _CLIENTE["tipo_comprobante"] = "6"
+    if request.state.usuario.get("rol") == "admin" and body.vendedor:
+        _VENDEDOR = body.vendedor.strip().upper() or _VENDEDOR
+    try:
+        resultado = emitir_comprobante_interno(
+            [dict(i) for i in _CARRITO],
+            dict(_CLIENTE),
+            forma_pago=body.forma_pago,
+            vendedor=_VENDEDOR,
+            observacion=body.observacion,
+            presupuesto_id=_PRESUPUESTO_CARGADO,
+            cuotas=body.cuotas,
+            interes_pct=body.interes_pct,
+            permitir_sin_stock=bool(body.permitir_sin_stock),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if resultado.get("id") and not resultado.get("simulado"):
         background_tasks.add_task(
             registrar_puntos_factura,
             _VENDEDOR,
