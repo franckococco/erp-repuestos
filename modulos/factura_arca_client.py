@@ -102,8 +102,22 @@ def obtener_historial(cuit, clave):
 
 
 def consultar_cuit(cuit_facturador, clave, cuit_consultar):
-    """Consulta padrón AFIP/ARCA vía Cloud Function (nombre + condición IVA)."""
+    """Consulta padrón: primero WS local constancia_inscripcion, luego Cloud Function."""
     dig = "".join(c for c in str(cuit_consultar or "") if c.isdigit())
+
+    # 1) Web Service oficial en esta PC (certificados AFIP)
+    try:
+        from modulos.afip_constancia import certificados_disponibles, consultar_persona
+
+        if certificados_disponibles():
+            data = consultar_persona(dig)
+            return {"success": True, "data": data}
+    except Exception as exc:
+        local_err = str(exc)
+    else:
+        local_err = ""
+
+    # 2) Cloud Function (si ya tiene /consultar_cuit)
     url = f"{BASE_URL}/consultar_cuit"
     payload = {
         "cuit_facturador": cuit_facturador,
@@ -114,13 +128,13 @@ def consultar_cuit(cuit_facturador, clave, cuit_consultar):
     try:
         r = requests.post(url, json=payload, timeout=45)
         if r.status_code == 404:
-            return {
-                "success": False,
-                "error": (
-                    "CUIT válido, pero el padrón AFIP aún no está habilitado en el servidor. "
-                    "Escribí el nombre a mano o guardá el cliente una vez."
-                ),
-            }
+            msg = (
+                local_err
+                or "Faltan certificados AFIP en esta PC "
+                "(POS_AFIP_CERT / POS_AFIP_KEY o carpeta certificados/) "
+                "y el Cloud Function aún no expone /consultar_cuit."
+            )
+            return {"success": False, "error": msg}
         body = r.json() if r.content else {}
         if r.status_code >= 400:
             err = f"HTTP {r.status_code}"
@@ -128,15 +142,22 @@ def consultar_cuit(cuit_facturador, clave, cuit_consultar):
                 err = body.get("error") or body.get("message") or err
             elif r.text:
                 err = r.text[:300]
-            return {"success": False, "error": err}
+            return {"success": False, "error": local_err or err}
         if isinstance(body, dict) and body.get("success") is False:
             return {
                 "success": False,
-                "error": body.get("error") or body.get("message") or str(body),
+                "error": local_err
+                or body.get("error")
+                or body.get("message")
+                or str(body),
             }
-        data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        data = (
+            body.get("data")
+            if isinstance(body, dict) and isinstance(body.get("data"), dict)
+            else body
+        )
         if not isinstance(data, dict):
-            return {"success": False, "error": "Respuesta inválida del padrón"}
+            return {"success": False, "error": local_err or "Respuesta inválida del padrón"}
         nombre = (
             data.get("nombre")
             or data.get("razon_social")
@@ -145,7 +166,7 @@ def consultar_cuit(cuit_facturador, clave, cuit_consultar):
             or ""
         )
         if not str(nombre).strip():
-            return {"success": False, "error": "AFIP no devolvió el nombre"}
+            return {"success": False, "error": local_err or "AFIP no devolvió el nombre"}
         return {"success": True, "data": data}
     except Exception as e:
         err = str(e)
@@ -154,7 +175,7 @@ def consultar_cuit(cuit_facturador, clave, cuit_consultar):
                 err = e.response.text or err
         except Exception:
             pass
-        return {"success": False, "error": err}
+        return {"success": False, "error": local_err or err}
 
 
 def cargar_datos_nube(cuit, clave):

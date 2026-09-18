@@ -3,6 +3,17 @@
 *.json
 !pos/data/sample_*.json
 
+# Certificados AFIP/ARCA (nunca subir)
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+certificados/*
+!certificados/README.txt
+sergiocrt.crt
+sergiokey.key
+
 # Streamlit: permitir config.toml, ignorar secretos locales
 .streamlit/*
 !.streamlit/config.toml

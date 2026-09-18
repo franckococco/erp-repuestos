@@ -108,15 +108,20 @@ async function cargarUsuariosAdmin() {
 
 function renderRail(boxId, items) {
   const box = $(boxId);
+  if (!box) return;
   box.innerHTML = (items || [])
     .map((a) => {
       const it = a.item || {};
       const titulo = it.codigo || it.descripcion || "Ítem";
       const stockTxt = it.stock == null ? "s/d" : it.stock;
+      const precioTxt = it.precio_unitario
+        ? ` · ${money(it.precio_unitario)}`
+        : "";
+      const marcaTxt = it.marca ? ` · ${it.marca}` : "";
       return `
       <div class="rail-item">
         <div class="cod">${titulo}</div>
-        <div class="meta">${it.descripcion || ""} · x${it.cantidad || 1}</div>
+        <div class="meta">${it.descripcion || ""}${marcaTxt}${precioTxt}</div>
         <div class="meta">${a.vendedor || ""} · stock ${stockTxt}</div>
         <button type="button" class="ghost" data-alerta="${a.id}">Visto</button>
       </div>`;
@@ -135,6 +140,10 @@ async function cargarAlertasAdmin() {
   renderRail(
     "listaManuales",
     rows.filter((r) => r.tipo === "manual")
+  );
+  renderRail(
+    "listaAltas",
+    rows.filter((r) => r.tipo === "alta_pos")
   );
 }
 
@@ -765,9 +774,11 @@ function bind() {
       !lastResultados.length
     ) {
       e.preventDefault();
-      $("manDesc").value = $("q").value.trim();
-      $("manDesc").focus();
-      $("manDesc").select();
+      if ($("manDesc")) {
+        $("manDesc").value = $("q").value.trim();
+        $("manDesc").focus();
+        $("manDesc").select();
+      }
       return;
     }
     if (e.key !== "Enter") return;
@@ -868,7 +879,7 @@ function bind() {
           precio_venta: parseFloat($("altaPrecio").value || "0") || 0,
           marca: $("altaMarca").value || "GENERICO",
           stock: Math.max(0, parseInt($("altaStock").value || "0", 10)),
-          cantidad: Math.max(1, parseInt($("altaCant").value || "1", 10)),
+          cantidad: 1,
           agregar_carrito: true,
         }),
       });
@@ -877,13 +888,12 @@ function bind() {
       $("altaPrecio").value = "";
       $("altaMarca").value = "GENERICO";
       $("altaStock").value = "0";
-      $("altaCant").value = "1";
-      if (r.items) {
-        renderCarrito(r);
-      } else {
-        await refreshCarrito();
-      }
+      if (r.items) renderCarrito(r);
+      else await refreshCarrito();
       showMsg(r.mensaje || "Producto cargado");
+      if (usuarioSesion && usuarioSesion.rol === "admin") {
+        cargarAlertasAdmin().catch(() => {});
+      }
       $("q").focus();
     } catch (err) {
       showMsg(err.message, true);

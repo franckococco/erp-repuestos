@@ -54,6 +54,14 @@ body {
 }
 body.admin-mode .app {
   max-width: 1180px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+@media (min-width: 1400px) {
+  body.admin-mode .app {
+    margin-left: 230px;
+    margin-right: 230px;
+  }
 }
 .admin-rail {
   position: fixed;
@@ -102,9 +110,6 @@ body.admin-mode .app {
   width: 100%;
   padding: 6px 8px;
   font-size: 0.78rem;
-}
-@media (max-width: 1400px) {
-  .admin-rail { display: none !important; }
 }
 .top {
   display: flex;
@@ -521,22 +526,63 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.manual-row {
-  display: grid;
-  grid-template-columns: 1fr 110px 64px auto;
-  gap: 8px;
-}
-.alta-prod {
-  margin-top: 14px;
-  padding-top: 12px;
+.manual {
+  margin-top: 12px;
+  padding-top: 10px;
   border-top: 1px dashed var(--line);
 }
-.alta-prod h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.manual h3 {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+}
+.manual-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 56px auto;
+  gap: 6px;
+  align-items: center;
+}
+.manual-row input,
+.manual-row button {
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+.manual-row button {
+  white-space: nowrap;
+}
+@media (max-width: 1400px) {
+  .admin-rail {
+    position: static;
+    width: auto;
+    max-height: 180px;
+    margin: 8px 0;
+  }
+  body.admin-mode .admin-rail[hidden] { display: none; }
+  body.admin-mode .admin-rail:not([hidden]) { display: flex; }
+}
+.alta-prod {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.alta-prod h3 {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+}
 .alta-prod-row {
   display: grid;
-  grid-template-columns: 110px 1fr 100px 100px 70px 64px auto;
-  gap: 8px;
+  grid-template-columns: 90px 1fr 80px 80px 52px auto;
+  gap: 6px;
   align-items: center;
+}
+.alta-prod-row input,
+.alta-prod-row button {
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+.rail-head-sub {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
 }
 .cuit-hint {
   display: block;
@@ -553,9 +599,13 @@ h2 {
   gap: 8px;
   margin-top: 12px;
 }
+.acciones .primary {
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
 .factura-box {
   display: grid;
-  grid-template-columns: minmax(150px, 0.4fr) 1fr 1fr;
+  grid-template-columns: minmax(140px, 0.4fr) auto auto;
   gap: 8px;
   align-items: end;
   margin-top: 8px;
@@ -563,15 +613,17 @@ h2 {
 .facturar {
   background: linear-gradient(180deg, #16a34a, #166534);
   color: #fff;
-  padding: 14px;
-  font-size: 1.05rem;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 .facturar:disabled { opacity: 0.55; cursor: wait; }
 .interno {
   background: linear-gradient(180deg, #2563eb, #1e3a8a);
   color: #fff;
-  padding: 14px;
-  font-size: 1.05rem;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 .interno:disabled { opacity: 0.55; cursor: wait; }
 .sin-stock-chk {
@@ -762,5 +814,4 @@ kbd {
   .tipo { flex: 1; }
   .presu-row { grid-template-columns: 1fr; }
   .manual-row, .totales-full { grid-template-columns: 1fr 1fr; }
-  .alta-prod-row { grid-template-columns: 1fr 1fr; }
 }

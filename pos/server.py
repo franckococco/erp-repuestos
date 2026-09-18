@@ -28,8 +28,8 @@ from inventory import (  # noqa: E402
     producto_por_id,
     forzar_recarga,
     estado_conexion,
-    crear_producto_pos,
 )
+from productos_alta import crear_producto_pos  # noqa: E402
 from presupuestos import (  # noqa: E402
     anular as anular_presupuesto,
     cargar_en_carrito,

@@ -436,6 +436,47 @@ def _clasificar_alertas_admin(carrito: List[Dict[str, Any]]) -> Tuple[List[Dict]
     return sin_stock, manuales
 
 
+def registrar_alerta_alta_producto(
+    *,
+    codigo: str,
+    descripcion: str,
+    marca: str,
+    precio: float,
+    stock: int,
+    vendedor: str,
+) -> None:
+    """Avisa al admin que se dio de alta un producto desde caja (para pedido/stock)."""
+    global _ALERTAS_ADMIN_LOCAL
+    ahora = datetime.now(timezone.utc)
+    fila = {
+        "tipo": "alta_pos",
+        "item": {
+            "codigo": str(codigo or "").strip(),
+            "descripcion": str(descripcion or "").strip(),
+            "marca": str(marca or "").strip(),
+            "cantidad": max(0, int(stock or 0)),
+            "precio_unitario": float(precio or 0),
+            "stock": max(0, int(stock or 0)),
+            "manual": False,
+        },
+        "vendedor": str(vendedor or VENDEDOR_POS),
+        "ref_id": str(codigo or "").strip(),
+        "origen": "alta_pos",
+        "fecha": ahora,
+        "resuelto": False,
+    }
+    if firebase_disponible():
+        try:
+            ref = _db().collection("pos_admin_alertas").document()
+            ref.set(fila)
+            return
+        except Exception as exc:
+            print(f"[POS] alerta alta_pos Firebase: {exc}", flush=True)
+    fila["id"] = f"local-alta-{len(_ALERTAS_ADMIN_LOCAL) + 1}"
+    fila["fecha"] = ahora.isoformat()
+    _ALERTAS_ADMIN_LOCAL.insert(0, fila)
+
+
 def _guardar_alertas_admin(
     *,
     sin_stock: List[Dict[str, Any]],
