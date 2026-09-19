@@ -39,11 +39,13 @@ def _db():
 
 
 def _cliente_activo(cliente: Dict[str, Any]) -> Dict[str, Any]:
+    from modulos.comprobante_contexto import condicion_iva_cliente
+
     cuit = re.sub(r"\D", "", str(cliente.get("cuit") or "")) or "00000000000"
     cbte = str(cliente.get("tipo_comprobante") or "6")
     if cbte not in ("1", "6"):
         cbte = "6"
-    return {
+    base = {
         "nombre": str(cliente.get("nombre") or "CONSUMIDOR FINAL").upper(),
         "cuit": cuit,
         "descuento": float(cliente.get("descuento") or 0),
@@ -52,7 +54,10 @@ def _cliente_activo(cliente: Dict[str, Any]) -> Dict[str, Any]:
         "tipo_cliente": str(cliente.get("tipo_cliente") or "ocasional"),
         "telefono": str(cliente.get("telefono") or ""),
         "condicion_iva": str(cliente.get("condicion_iva") or ""),
+        "cbte_tipo": cbte,
     }
+    base["condicion_iva"] = condicion_iva_cliente(base)
+    return base
 
 
 def _totales(carrito: List[Dict[str, Any]], cliente: Dict[str, Any]) -> Tuple[float, float, float]:

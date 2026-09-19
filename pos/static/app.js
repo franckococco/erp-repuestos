@@ -390,14 +390,29 @@ function limpiarBorrador() {
 }
 
 function clienteFormPayload() {
+  const tipo = $("cliTipo").value || "6";
+  let cond = ($("cliTipo").dataset.condicionIva || "").trim();
+  if (tipo === "1") {
+    cond = "IVA Responsable Inscripto";
+  } else if (!cond || /inscripto/i.test(cond)) {
+    const nom = ($("cliNombre").value || "").trim().toUpperCase();
+    const cuit = ($("cliCuit").value || "").replace(/\D/g, "");
+    const esCf =
+      !cuit ||
+      /^0+$/.test(cuit) ||
+      !nom ||
+      nom === "CONSUMIDOR FINAL" ||
+      nom === "CF";
+    if (esCf || /inscripto/i.test(cond)) {
+      cond = "Consumidor Final";
+    }
+  }
   return {
     nombre: $("cliNombre").value || "CONSUMIDOR FINAL",
     cuit: $("cliCuit").value || "",
-    tipo_comprobante: $("cliTipo").value || "6",
+    tipo_comprobante: tipo,
     descuento: parseFloat($("cliDesc").value || "0") || 0,
-    condicion_iva:
-      ($("cliTipo").dataset.condicionIva || "").trim()
-      || ($("cliTipo").value === "1" ? "RESPONSABLE INSCRIPTO" : "CONSUMIDOR FINAL"),
+    condicion_iva: cond,
   };
 }
 
@@ -465,6 +480,29 @@ function aplicarClienteEnForm(cli) {
   $("cliTipo").value = String(cli.tipo_comprobante || cli.cbte_tipo || "6");
   if (cli.condicion_iva) {
     $("cliTipo").dataset.condicionIva = cli.condicion_iva;
+  } else {
+    delete $("cliTipo").dataset.condicionIva;
+  }
+  sincronizarCondicionIvaConTipo();
+}
+
+function sincronizarCondicionIvaConTipo() {
+  const tipo = $("cliTipo").value || "6";
+  if (tipo === "1") {
+    $("cliTipo").dataset.condicionIva = "IVA Responsable Inscripto";
+    return;
+  }
+  const cur = ($("cliTipo").dataset.condicionIva || "").trim();
+  const nom = ($("cliNombre").value || "").trim().toUpperCase();
+  const cuit = ($("cliCuit").value || "").replace(/\D/g, "");
+  const esCf =
+    !cuit ||
+    /^0+$/.test(cuit) ||
+    !nom ||
+    nom === "CONSUMIDOR FINAL" ||
+    nom === "CF";
+  if (esCf || !cur || /inscripto/i.test(cur)) {
+    $("cliTipo").dataset.condicionIva = "Consumidor Final";
   }
 }
 
@@ -928,7 +966,10 @@ function bind() {
     await syncCliente();
     await refreshCarrito();
   });
-  $("cliTipo").addEventListener("change", syncCliente);
+  $("cliTipo").addEventListener("change", () => {
+    sincronizarCondicionIvaConTipo();
+    syncCliente();
+  });
 
   $("btnGuardarCli").addEventListener("click", async () => {
     await syncCliente();

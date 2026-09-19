@@ -251,39 +251,41 @@ def _find_text(root: ET.Element, names: Tuple[str, ...]) -> str:
 
 
 def _map_condicion_iva(root: ET.Element) -> str:
-    """Deriva condición IVA a partir de impuestos/domicilio/constancia."""
-    blobs = []
+    """Deriva condición IVA a partir de impuestos AFIP (prioriza idImpuesto)."""
+    # Catálogo frecuente AFIP: 30=IVA, 11=IVA Exento, 20/32 monotributo/autónomos
+    impuestos: list[tuple[str, str]] = []
+    cur_id = ""
+    cur_desc = ""
     for el in root.iter():
         tag = (el.tag.split("}")[-1] if "}" in el.tag else el.tag).lower()
         txt = (el.text or "").strip()
-        if txt and tag in (
-            "descripcionimpuesto",
-            "descimpuesto",
-            "condicion",
-            "descripcion",
-            "estado",
-            "nombreimpuesto",
-        ):
-            blobs.append(txt.upper())
-    joined = " | ".join(blobs)
-    if "IVA" in joined and (
-        "ACTIVO" in joined or "RESPONSABLE INSCRIPTO" in joined or "RI" in joined
-    ):
-        # Heurística: impuesto IVA activo → RI
-        if "EXENTO" in joined and "IVA" in joined:
-            return "IVA EXENTO"
-        if "MONOTRIBUTO" in joined:
+        if not txt:
+            continue
+        if tag == "idimpuesto":
+            if cur_id or cur_desc:
+                impuestos.append((cur_id, cur_desc))
+            cur_id, cur_desc = txt, ""
+        elif tag in ("descripcionimpuesto", "descimpuesto", "nombreimpuesto"):
+            cur_desc = txt.upper()
+    if cur_id or cur_desc:
+        impuestos.append((cur_id, cur_desc))
+
+    ids = {i for i, _ in impuestos if i}
+    descs = " | ".join(d for _, d in impuestos if d)
+
+    if "30" in ids or "RESPONSABLE INSCRIPTO" in descs:
+        # Si figura IVA (30), no pisar con un "EXENTO" de otro impuesto.
+        if "MONOTRIBUTO" in descs and "30" not in ids:
             return "MONOTRIBUTO"
-        if "NO RESPONSABLE" in joined:
-            return "IVA NO RESPONSABLE"
-        if "CONSUMIDOR FINAL" in joined:
-            return "CONSUMIDOR FINAL"
         return "IVA RESPONSABLE INSCRIPTO"
-    if "MONOTRIBUTO" in joined:
+    if "20" in ids or "MONOTRIBUTO" in descs:
         return "MONOTRIBUTO"
-    if "EXENTO" in joined:
+    if "11" in ids or re.search(r"\bIVA\s+EXENTO\b", descs):
         return "IVA EXENTO"
-    # datosGenerales no siempre trae IVA; dejar vacío si no se deduce
+    if "NO RESPONSABLE" in descs:
+        return "IVA NO RESPONSABLE"
+    if "CONSUMIDOR FINAL" in descs:
+        return "CONSUMIDOR FINAL"
     return ""
 
 

@@ -12,12 +12,44 @@ def _s(d: Dict[str, Any], k: str, default: str = "") -> str:
 
 
 def condicion_iva_cliente(datos_cliente: Dict[str, Any]) -> str:
-    explicita = _s(datos_cliente, "condicion_iva", "")
-    if explicita:
-        return explicita
-    cbte = _s(datos_cliente, "cbte_tipo", "6")
+    """
+    Condición IVA del receptor coherente con el tipo de comprobante.
+
+    Factura A → siempre IVA Responsable Inscripto.
+    Factura B → Consumidor Final / Monotributo / IVA Exento según corresponda;
+    no deja colgado un 'IVA EXENTO' de otra consulta si el cliente es CF.
+    """
+    cli = datos_cliente or {}
+    cbte = _s(cli, "cbte_tipo", "") or _s(cli, "tipo_comprobante", "6")
+    if cbte not in ("1", "6"):
+        cbte = "6"
+    explicita = _s(cli, "condicion_iva", "").strip()
+    expl_u = explicita.upper()
+    nombre = _s(cli, "nombre", "").strip().upper()
+    cuit = "".join(c for c in _s(cli, "cuit", "") if c.isdigit())
+    es_cf = (
+        not cuit
+        or set(cuit) <= {"0"}
+        or nombre in ("", "CONSUMIDOR FINAL", "CF", "C.F.", "C.F")
+    )
+
     if cbte == "1":
         return "IVA Responsable Inscripto"
+
+    if es_cf:
+        return "Consumidor Final"
+
+    if "MONOTRIBUTO" in expl_u:
+        return "Monotributo"
+    if "EXENTO" in expl_u:
+        return "IVA Exento"
+    if "NO RESPONSABLE" in expl_u:
+        return "IVA No Responsable"
+    if "INSCRIPTO" in expl_u or expl_u in ("RI", "IVA RI"):
+        # RI debería ir por Factura A; si igual emiten B, no inventar Exento.
+        return "IVA Responsable Inscripto"
+    if explicita:
+        return explicita
     return "Consumidor Final"
 
 
@@ -37,13 +69,17 @@ def armar_contexto_comprobante(
         or _s(cfg, "direccion")
         or _s(datos_respuesta, "direccion_empresa", "")
     )
+    cond_emisor = _s(cfg, "condicion_iva", "IVA Responsable Inscripto").strip()
+    if not cond_emisor or "EXENTO" in cond_emisor.upper():
+        # HAFID factura con IVA: nunca mostrar el emisor como exento por config errónea.
+        cond_emisor = "IVA Responsable Inscripto"
 
     return {
         "emisor": {
             "nombre_fantasia": nombre_fantasia,
             "razon_social": razon_social,
             "domicilio_comercial": domicilio_comercial,
-            "condicion_iva": _s(cfg, "condicion_iva", "IVA Responsable Inscripto"),
+            "condicion_iva": cond_emisor,
             "cuit": _s(cfg, "cuit_emisor", ""),
             "iibb": _s(cfg, "iibb", ""),
             "inicio_actividades": _s(cfg, "inicio_actividades") or _s(cfg, "inicio_act", ""),
