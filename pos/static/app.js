@@ -1095,7 +1095,17 @@ function bind() {
     }
   });
   $("btnLogout").addEventListener("click", async () => {
-    await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+    const ok = confirm(
+      "¿Cerrar sesión?\n\nEl próximo vendedor va a tener que ingresar con su usuario.\nSe limpia el carrito de esta PC."
+    );
+    if (!ok) return;
+    try {
+      limpiarBorrador();
+      await api("/api/auth/logout", { method: "POST" });
+    } catch (_) {
+      /* igual recargamos para forzar login */
+    }
+    usuarioSesion = null;
     location.reload();
   });
   $("btnClave").addEventListener("click", async () => {

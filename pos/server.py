@@ -130,7 +130,7 @@ def _cargar_estado(estado: Dict[str, Any] | None) -> None:
 
 @app.middleware("http")
 async def proteger_y_separar_cajas(request: Request, call_next):
-    publicas = {"/", "/healthz", "/api/auth/login"}
+    publicas = {"/", "/healthz", "/api/auth/login", "/api/auth/logout"}
     es_publica = request.url.path in publicas or request.url.path.startswith("/static/")
     usuario = leer_token(request.cookies.get("pos_auth", ""))
     request.state.usuario = usuario
@@ -391,9 +391,14 @@ def auth_me(request: Request):
 
 
 @app.post("/api/auth/logout")
-def auth_logout():
-    response = JSONResponse({"ok": True})
+def auth_logout(request: Request):
+    """Cierra sesión y limpia el carrito de esta PC para el próximo vendedor."""
+    session_id = request.cookies.get("pos_session") or ""
+    if session_id and session_id in _SESSION_STATES:
+        _SESSION_STATES.pop(session_id, None)
+    response = JSONResponse({"ok": True, "mensaje": "Sesión cerrada"})
     response.delete_cookie("pos_auth")
+    response.delete_cookie("pos_session")
     return response
 
 
