@@ -553,11 +553,30 @@ h2 {
   .admin-rail {
     position: static;
     width: auto;
-    max-height: 180px;
+    max-height: 220px;
     margin: 8px 0;
   }
   body.admin-mode .admin-rail[hidden] { display: none; }
   body.admin-mode .admin-rail:not([hidden]) { display: flex; }
+  body.shared-rails .admin-rail.shared-rail:not([hidden]) { display: flex; }
+}
+.rail-hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0 10px 6px;
+  font-weight: 600;
+}
+.alta-inline {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+.alta-inline[hidden] { display: none !important; }
+.alta-inline input,
+.alta-inline button {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 0.8rem;
 }
 .alta-prod {
   margin-top: 10px;

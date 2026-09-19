@@ -65,11 +65,14 @@ function aplicarSesion(usuario) {
   $("panelAdminPuntos").hidden = !esAdmin;
   $("panelAdminUsuarios").hidden = !esAdmin;
   $("railSinStock").hidden = !esAdmin;
-  $("railManuales").hidden = !esAdmin;
+  const railPend = $("railPendientes");
+  if (railPend) railPend.hidden = false;
   document.body.classList.toggle("admin-mode", esAdmin);
+  document.body.classList.toggle("shared-rails", true);
   if (esAdmin) {
     cargarAlertasAdmin().catch(() => {});
   }
+  cargarPendientesAlta().catch(() => {});
 }
 
 async function cargarPuntosAdmin() {
@@ -129,6 +132,93 @@ function renderRail(boxId, items) {
     .join("") || '<div class="empty">Sin pendientes</div>';
 }
 
+function escAttr(v) {
+  return String(v || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function renderPendientesAlta(items) {
+  const box = $("listaPendientes");
+  if (!box) return;
+  box.innerHTML = (items || [])
+    .map((p) => {
+      const fc = p.nro_factura ? `FC ${p.nro_factura}` : "Sin facturar aún";
+      return `
+      <div class="rail-item pendiente-item" data-pid="${escAttr(p.id)}">
+        <div class="cod">${escAttr(p.descripcion) || "Ítem manual"}</div>
+        <div class="meta">${money(p.precio_unitario)} · x${p.cantidad || 1}${
+          p.marca ? ` · ${escAttr(p.marca)}` : ""
+        }</div>
+        <div class="meta">${escAttr(p.vendedor)} · ${fc}</div>
+        <button type="button" class="ghost btn-toggle-cargar" data-pid="${escAttr(p.id)}">
+          Cargar definitivo
+        </button>
+        <div class="alta-inline" hidden data-form="${escAttr(p.id)}">
+          <input class="pend-cod" type="text" placeholder="Código *" autocomplete="off" />
+          <input class="pend-marca" type="text" placeholder="Marca" value="${escAttr(p.marca || "GENERICO")}" />
+          <input class="pend-precio" type="number" min="0.01" step="0.01" placeholder="Precio"
+            value="${Number(p.precio_unitario || 0)}" />
+          <input class="pend-stock" type="number" min="0" value="0" placeholder="Stock" />
+          <button type="button" class="primary btn-confirmar-alta" data-pid="${escAttr(p.id)}"
+            data-desc="${escAttr(p.descripcion)}">
+            Guardar en inventario
+          </button>
+        </div>
+      </div>`;
+    })
+    .join("") || '<div class="empty">Sin pendientes de carga</div>';
+
+  box.querySelectorAll(".btn-toggle-cargar").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const form = box.querySelector(`[data-form="${btn.dataset.pid}"]`);
+      if (form) form.hidden = !form.hidden;
+    });
+  });
+  box.querySelectorAll(".btn-confirmar-alta").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const wrap = btn.closest(".pendiente-item");
+      if (!wrap) return;
+      const codigo = wrap.querySelector(".pend-cod")?.value?.trim() || "";
+      const marca = wrap.querySelector(".pend-marca")?.value?.trim() || "GENERICO";
+      const precio = parseFloat(wrap.querySelector(".pend-precio")?.value || "0") || 0;
+      const stock = Math.max(0, parseInt(wrap.querySelector(".pend-stock")?.value || "0", 10));
+      if (!codigo || codigo.length < 2) {
+        showMsg("Código obligatorio (mín. 2 caracteres)", true);
+        return;
+      }
+      if (precio <= 0) {
+        showMsg("Precio inválido", true);
+        return;
+      }
+      try {
+        btn.disabled = true;
+        const r = await api(`/api/pendientes-alta/${encodeURIComponent(btn.dataset.pid)}/cargar`, {
+          method: "POST",
+          body: JSON.stringify({
+            codigo,
+            descripcion: btn.dataset.desc || "",
+            precio_venta: precio,
+            marca,
+            stock,
+            agregar_carrito: false,
+          }),
+        });
+        showMsg(r.mensaje || "Producto cargado");
+        await cargarPendientesAlta();
+        if (usuarioSesion && usuarioSesion.rol === "admin") {
+          cargarAlertasAdmin().catch(() => {});
+        }
+      } catch (err) {
+        showMsg(err.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
 async function cargarAlertasAdmin() {
   if (!usuarioSesion || usuarioSesion.rol !== "admin") return;
   const data = await api("/api/admin/alertas");
@@ -138,13 +228,19 @@ async function cargarAlertasAdmin() {
     rows.filter((r) => r.tipo === "sin_stock")
   );
   renderRail(
-    "listaManuales",
-    rows.filter((r) => r.tipo === "manual")
-  );
-  renderRail(
     "listaAltas",
     rows.filter((r) => r.tipo === "alta_pos")
   );
+}
+
+async function cargarPendientesAlta() {
+  if (!usuarioSesion) return;
+  try {
+    const data = await api("/api/pendientes-alta");
+    renderPendientesAlta(data.resultados || []);
+  } catch (_) {
+    renderPendientesAlta([]);
+  }
 }
 
 function marcarPresetActivo() {
@@ -215,45 +311,32 @@ function abrirPdfBase64(b64, nombre, ventana) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const blob = new Blob([bytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
-  const w = ventana || ventanaEspera("Preparando impresión…");
+  const w = ventana || window.open("", "_blank");
   if (!w) {
     showMsg("El navegador bloqueó la impresión. Habilitá ventanas emergentes.", true);
     return;
   }
-  // Chrome PDF viewer no dispara afterprint dentro del iframe.
-  // Cerramos al volver el foco después de imprimir/cancelar.
-  w.document.open();
-  w.document.write(`<!DOCTYPE html><html><head>
-<title>${nombre || "Presupuesto"}</title>
-<style>
-  html,body{margin:0;height:100%;background:#111;color:#fff;font:700 16px Segoe UI,sans-serif}
-  embed{border:0;width:100%;height:100%}
-  .bar{position:fixed;top:8px;right:8px;z-index:2}
-  .bar button{padding:8px 12px;font-weight:700;cursor:pointer}
-  @media print{.bar{display:none}}
-</style></head><body>
-<div class="bar"><button type="button" id="btnCerrar">Cerrar</button></div>
-<embed id="pdf" src="${url}" type="application/pdf" />
-<script>
-(function(){
-  var cerrado=false, imprimio=false;
-  function cerrar(){
-    if(cerrado) return;
-    cerrado=true;
-    try{ window.close(); }catch(e){}
+  // Visor nativo del navegador + diálogo de impresora (sin descargar).
+  try {
+    w.location.replace(url);
+  } catch (_) {
+    w.location.href = url;
   }
-  document.getElementById("btnCerrar").onclick=cerrar;
-  window.addEventListener("afterprint", cerrar);
-  window.addEventListener("focus", function(){
-    if(imprimio) setTimeout(cerrar, 250);
-  });
-  setTimeout(function(){
-    imprimio=true;
-    try{ window.print(); }catch(e){}
-  }, 350);
-})();
-</script></body></html>`);
-  w.document.close();
+  let intentos = 0;
+  const intentarImprimir = () => {
+    intentos += 1;
+    try {
+      w.focus();
+      w.print();
+    } catch (_) {}
+    if (intentos < 3) setTimeout(intentarImprimir, 700);
+  };
+  setTimeout(intentarImprimir, 500);
+  setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }, 180000);
 }
 
 function abrirTicketHtml(html, ventana) {
@@ -447,11 +530,11 @@ function actualizarBannerPresu() {
   if (presupuestoCargadoId && presupuestoCargadoNro) {
     b.hidden = false;
     b.textContent = `Editando presupuesto Nº ${String(presupuestoCargadoNro).padStart(4, "0")} · F4 actualiza el mismo número`;
-    btn.textContent = `Actualizar presupuesto Nº ${String(presupuestoCargadoNro).padStart(4, "0")}`;
+    btn.textContent = `Actualizar e imprimir Nº ${String(presupuestoCargadoNro).padStart(4, "0")}`;
   } else {
     b.hidden = true;
     b.textContent = "";
-    btn.textContent = "Generar presupuesto PDF";
+    btn.textContent = "Imprimir presupuesto";
   }
 }
 
@@ -862,7 +945,8 @@ function bind() {
       $("manPrecio").value = "";
       $("manCant").value = "1";
       await refreshCarrito();
-      showMsg("Ítem manual agregado");
+      cargarPendientesAlta().catch(() => {});
+      showMsg("Ítem manual agregado · quedó en pendientes de carga");
     } catch (err) {
       showMsg(err.message, true);
     }
@@ -992,7 +1076,12 @@ function bind() {
   });
   document.querySelectorAll(".rail-refresh").forEach((btn) => {
     btn.addEventListener("click", () => {
-      cargarAlertasAdmin().catch((err) => showMsg(err.message, true));
+      const rail = btn.dataset.rail || "";
+      if (rail === "pendientes") {
+        cargarPendientesAlta().catch((err) => showMsg(err.message, true));
+      } else {
+        cargarAlertasAdmin().catch((err) => showMsg(err.message, true));
+      }
     });
   });
   document.addEventListener("click", async (e) => {
@@ -1195,6 +1284,7 @@ async function emitirFactura() {
     presupuestoCargadoNro = null;
     limpiarBorrador();
     await refreshCarrito();
+    cargarPendientesAlta().catch(() => {});
     if (usuarioSesion && usuarioSesion.rol === "admin") {
       cargarAlertasAdmin().catch(() => {});
     }
@@ -1237,6 +1327,7 @@ async function emitirInterno() {
     presupuestoCargadoNro = null;
     limpiarBorrador();
     await refreshCarrito();
+    cargarPendientesAlta().catch(() => {});
     if (usuarioSesion && usuarioSesion.rol === "admin") {
       cargarAlertasAdmin().catch(() => {});
     }

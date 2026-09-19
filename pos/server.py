@@ -30,6 +30,13 @@ from inventory import (  # noqa: E402
     estado_conexion,
 )
 from productos_alta import crear_producto_pos  # noqa: E402
+from pendientes_alta import (  # noqa: E402
+    asegurar_pendientes_carrito,
+    cargar_definitivo,
+    crear_pendiente_desde_item,
+    listar_pendientes,
+    vincular_pendientes_venta,
+)
 from presupuestos import (  # noqa: E402
     anular as anular_presupuesto,
     cargar_en_carrito,
@@ -222,6 +229,15 @@ class ProductoAltaIn(BaseModel):
     stock: int = Field(0, ge=0)
     cantidad: int = Field(1, ge=1)
     agregar_carrito: bool = True
+
+
+class PendienteCargarIn(BaseModel):
+    codigo: str
+    descripcion: str = ""
+    precio_venta: float = Field(0, ge=0)
+    marca: str = "GENERICO"
+    stock: int = Field(0, ge=0)
+    agregar_carrito: bool = False
 
 
 class QtyUpdate(BaseModel):
@@ -534,6 +550,11 @@ def api_alta_producto(body: ProductoAltaIn, request: Request):
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        print(f"[POS] Error alta producto: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(
+            500, f"No se pudo dar de alta el producto: {type(exc).__name__}: {exc}"
+        ) from exc
 
     if body.agregar_carrito:
         _guardar_undo()
@@ -633,14 +654,14 @@ def add_manual(body: ManualItem):
         raise HTTPException(400, "Descripción obligatoria")
     import time
 
-    _guardar_undo()
-    item_id = f"MANUAL_{int(time.time() * 1000)}"
-    precio = float(body.precio_unitario or 0)
-    cant = int(body.cantidad or 1)
-    _CARRITO.append(
-        {
+    try:
+        _guardar_undo()
+        item_id = f"MANUAL_{int(time.time() * 1000)}"
+        precio = max(0.0, float(body.precio_unitario or 0))
+        cant = max(1, int(body.cantidad or 1))
+        item = {
             "id": item_id,
-            "id_maestro": (body.codigo or item_id).strip().upper(),
+            "id_maestro": (body.codigo or item_id).strip().upper() or item_id,
             "codigo": (body.codigo or "").strip().upper(),
             "descripcion": desc,
             "marca": (body.marca or "MANUAL").strip().upper() or "MANUAL",
@@ -649,9 +670,81 @@ def add_manual(body: ManualItem):
             "subtotal": round(precio * cant, 2),
             "manual": True,
             "stock": None,
+            "pendiente_alta_id": "",
         }
-    )
-    return {"ok": True, "items": _CARRITO, "totales": _totales()}
+        crear_pendiente_desde_item(item, vendedor=_VENDEDOR)
+        _CARRITO.append(item)
+        return {"ok": True, "items": _CARRITO, "totales": _totales()}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"[POS] Error ítem manual: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(
+            500, f"No se pudo agregar el ítem manual: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+@app.get("/api/pendientes-alta")
+def api_listar_pendientes_alta():
+    """Cola compartida: todos los usuarios ven las cargas provisorias abiertas."""
+    return {"resultados": listar_pendientes(solo_abiertos=True, limite=80)}
+
+
+@app.post("/api/pendientes-alta/{pendiente_id}/cargar")
+def api_cargar_pendiente_alta(pendiente_id: str, body: PendienteCargarIn, request: Request):
+    quien = ""
+    usuario = getattr(request.state, "usuario", None) or {}
+    if isinstance(usuario, dict):
+        quien = str(usuario.get("usuario") or usuario.get("nombre") or "")
+    try:
+        r = cargar_definitivo(
+            pendiente_id,
+            codigo=body.codigo,
+            descripcion=body.descripcion,
+            precio_venta=body.precio_venta,
+            marca=body.marca,
+            stock=body.stock,
+            resuelto_por=quien or _VENDEDOR,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        print(f"[POS] Error cargar pendiente: {type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(
+            500, f"No se pudo cargar el producto: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    prod = r.get("producto") or {}
+    if body.agregar_carrito and prod.get("id"):
+        _guardar_undo()
+        cant = 1
+        precio = float(prod.get("precio_venta") or body.precio_venta or 0)
+        stock = int(prod.get("stock") or 0)
+        for item in _CARRITO:
+            if item["id"] == prod["id"]:
+                item["cantidad"] += cant
+                item["subtotal"] = round(item["cantidad"] * item["precio_unitario"], 2)
+                item["stock"] = stock
+                break
+        else:
+            _CARRITO.append(
+                {
+                    "id": prod["id"],
+                    "id_maestro": prod.get("id_maestro") or prod.get("codigo"),
+                    "codigo": prod.get("codigo") or "",
+                    "descripcion": prod.get("descripcion") or "",
+                    "marca": prod.get("marca") or "",
+                    "precio_unitario": precio,
+                    "cantidad": cant,
+                    "subtotal": round(precio * cant, 2),
+                    "stock": stock,
+                }
+            )
+        r["items"] = _CARRITO
+        r["totales"] = _totales()
+    return r
 
 
 @app.patch("/api/carrito/items/{item_id}")
@@ -1016,8 +1109,10 @@ def api_emitir_factura(
         global _VENDEDOR
         _VENDEDOR = body.vendedor.strip().upper() or _VENDEDOR
     try:
+        snap_carrito = [dict(i) for i in _CARRITO]
+        asegurar_pendientes_carrito(snap_carrito, vendedor=_VENDEDOR)
         resultado = emitir_factura(
-            [dict(i) for i in _CARRITO],
+            snap_carrito,
             dict(_CLIENTE),
             forma_pago=body.forma_pago,
             vendedor=_VENDEDOR,
@@ -1027,6 +1122,12 @@ def api_emitir_factura(
             interes_pct=body.interes_pct,
             permitir_sin_stock=bool(body.permitir_sin_stock),
         )
+        if resultado.get("id"):
+            vincular_pendientes_venta(
+                snap_carrito,
+                comprobante_id=str(resultado["id"]),
+                nro=str(resultado.get("nro") or ""),
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
@@ -1070,8 +1171,10 @@ def api_emitir_interno(
     if request.state.usuario.get("rol") == "admin" and body.vendedor:
         _VENDEDOR = body.vendedor.strip().upper() or _VENDEDOR
     try:
+        snap_carrito = [dict(i) for i in _CARRITO]
+        asegurar_pendientes_carrito(snap_carrito, vendedor=_VENDEDOR)
         resultado = emitir_comprobante_interno(
-            [dict(i) for i in _CARRITO],
+            snap_carrito,
             dict(_CLIENTE),
             forma_pago=body.forma_pago,
             vendedor=_VENDEDOR,
@@ -1081,6 +1184,12 @@ def api_emitir_interno(
             interes_pct=body.interes_pct,
             permitir_sin_stock=bool(body.permitir_sin_stock),
         )
+        if resultado.get("id"):
+            vincular_pendientes_venta(
+                snap_carrito,
+                comprobante_id=str(resultado["id"]),
+                nro=str(resultado.get("nro") or ""),
+            )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

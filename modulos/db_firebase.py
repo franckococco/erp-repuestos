@@ -59,13 +59,26 @@ def ubicacion_default():
 
 def inicializar_firebase():
     if not firebase_admin._apps: # type: ignore
-        if "firebase_key" in st.secrets:
+        tiene_key_secrets = False
+        try:
+            tiene_key_secrets = "firebase_key" in st.secrets
+        except Exception:
+            tiene_key_secrets = False
+        if tiene_key_secrets:
             f_key = st.secrets["firebase_key"]
             creds_dict = dict(f_key)
             creds_dict["private_key"] = str(creds_dict["private_key"]).replace("\\n", "\n")
             cred = credentials.Certificate(creds_dict)
         else:
             ruta_json = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase_claves.json")
+            if not os.path.isfile(ruta_json):
+                # Fallback: misma búsqueda que el POS (raíz del repo).
+                alt = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "firebase_claves.json",
+                )
+                if os.path.isfile(alt):
+                    ruta_json = alt
             if not os.path.isfile(ruta_json):
                 raise RuntimeError(
                     "Firebase no configurado. En Streamlit Cloud agregá `firebase_key` en "
