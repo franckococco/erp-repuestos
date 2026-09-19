@@ -29,6 +29,11 @@ function money(n) {
   });
 }
 
+/** Códigos sin espacios para pantalla (026 121013 2 → 0261210132). */
+function codigoVista(c) {
+  return String(c || "").replace(/\s+/g, "");
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
@@ -115,7 +120,7 @@ function renderRail(boxId, items) {
   box.innerHTML = (items || [])
     .map((a) => {
       const it = a.item || {};
-      const titulo = it.codigo || it.descripcion || "Ítem";
+      const titulo = codigoVista(it.codigo) || it.descripcion || "Ítem";
       const stockTxt = it.stock == null ? "s/d" : it.stock;
       const precioTxt = it.precio_unitario
         ? ` · ${money(it.precio_unitario)}`
@@ -511,7 +516,7 @@ function renderResultados(lista) {
       return `
     <button type="button" class="res${stockBajo ? " stock-bajo" : ""}" data-id="${p.id}">
       <div>
-        <div class="cod">${p.codigo} · ${p.marca}${badge}</div>
+        <div class="cod">${codigoVista(p.codigo)} · ${p.marca}${badge}</div>
         <div class="desc">${p.descripcion}</div>
         <div class="meta">${p.vehiculo || ""} · stock ${p.stock}${stockBajo ? " · bajo" : ""}</div>
       </div>
@@ -561,7 +566,7 @@ function renderCarrito(data) {
         return `
       <div class="item${sinStock ? " warn" : ""}">
         <div>
-          <div class="cod">${i.codigo || "MANUAL"} · ${i.marca}</div>
+          <div class="cod">${codigoVista(i.codigo) || "MANUAL"} · ${i.marca}</div>
           <input class="desc-edit" type="text" value="${String(i.descripcion || "").replace(/"/g, "&quot;")}"
             data-id="${i.id}" title="Descripción" />
           ${stockTxt}

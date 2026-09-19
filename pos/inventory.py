@@ -22,6 +22,13 @@ _CARGADO = False
 _ERROR_FIREBASE: str | None = None
 
 
+def _codigo_sin_espacios(codigo: Any) -> str:
+    """Muestra/busca códigos sin espacios internos (026 121013 2 → 0261210132)."""
+    import re
+
+    return re.sub(r"\s+", "", str(codigo or "").strip())
+
+
 def _cred_path() -> Path | None:
     env = os.getenv("FIREBASE_CREDENTIALS_PATH", "").strip()
     candidatos = []
@@ -52,11 +59,12 @@ def _flatten_docs(docs) -> List[Dict[str, Any]]:
 
         if "variantes" not in master:
             marca_ant = master.get("marca", master.get("condicion", "GENERICO"))
+            codigo_raw = master.get("codigo", master_id)
             inventario.append(
                 {
                     "id": f"{master_id}_{marca_ant}",
                     "id_maestro": master_id,
-                    "codigo": master.get("codigo", master_id),
+                    "codigo": _codigo_sin_espacios(codigo_raw) or str(codigo_raw or ""),
                     "descripcion": master.get("descripcion", ""),
                     "vehiculos": vehs_master,
                     "vehiculo": veh_texto,
@@ -71,11 +79,12 @@ def _flatten_docs(docs) -> List[Dict[str, Any]]:
             continue
 
         for marca, v_data in (master.get("variantes") or {}).items():
+            codigo_raw = master.get("codigo", master_id)
             inventario.append(
                 {
                     "id": f"{master_id}_{marca}",
                     "id_maestro": master_id,
-                    "codigo": master.get("codigo", master_id),
+                    "codigo": _codigo_sin_espacios(codigo_raw) or str(codigo_raw or ""),
                     "descripcion": master.get("descripcion", ""),
                     "vehiculos": vehs_master,
                     "vehiculo": veh_texto,
@@ -105,6 +114,7 @@ def _cargar_sample() -> List[Dict[str, Any]]:
     data = json.loads(SAMPLE.read_text(encoding="utf-8"))
     for p in data:
         p.setdefault("id_maestro", str(p.get("codigo", "")))
+        p["codigo"] = _codigo_sin_espacios(p.get("codigo")) or str(p.get("codigo") or "")
         p.setdefault("vehiculos", [p.get("vehiculo")] if p.get("vehiculo") else [])
         p.setdefault("vehiculos_busqueda", " ".join(p.get("vehiculos") or []).upper())
     return data
