@@ -54,13 +54,18 @@ def texto_item_inventario(item):
 
 
 def _normalizar_codigo_busqueda(codigo):
-    return str(codigo or "").strip().upper().replace("/", "-")
+    """
+    Comparación de códigos sin importar espacios internos.
+    Ej: "026 121013 2" ↔ "0261210132"
+    """
+    t = str(codigo or "").strip().upper().replace("/", "-")
+    return re.sub(r"\s+", "", t)
 
 
 def parece_codigo_producto(termino):
     """True si el término parece un código de repuesto (no búsqueda por palabras)."""
     t = _normalizar_codigo_busqueda(termino)
-    if not t or " " in t:
+    if not t:
         return False
     from modulos.voz_repuestos import es_palabra_repuesto
 
@@ -68,7 +73,8 @@ def parece_codigo_producto(termino):
         return False
     if re.fullmatch(r"[A-Z]+", t):
         return False
-    return bool(re.match(r"^[\dA-Z]+(?:[-/][\dA-Z]+)*$", t)) and len(t) <= 24
+    # Permite guiones finales típicos de códigos (ej. ...2--)
+    return bool(re.match(r"^[\dA-Z]+(?:[-/][\dA-Z]+)*-*$", t)) and len(t) <= 32
 
 
 def buscar_codigo_exacto_inventario(items, codigo):
